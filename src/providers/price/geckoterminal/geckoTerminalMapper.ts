@@ -13,8 +13,9 @@ export interface GeckoResolution {
 }
 
 interface Candidate extends GeckoResolution {
-  readonly liquidity: number;
-  readonly volume: number;
+  /** Provider metrics are used only for deterministic pool selection. */
+  readonly liquidity: string;
+  readonly volume: string;
   readonly rank: 1 | 2 | 3;
 }
 
@@ -46,8 +47,8 @@ export function resolveGeckoPool(
         symbol: symbol ?? request.baseSymbol,
         name: name === undefined || name === "" ? null : name,
         tokenSide: side,
-        liquidity: finiteMetric(pool.attributes.reserve_in_usd),
-        volume: finiteMetric(pool.attributes.volume_usd?.h24),
+        liquidity: decimalMetric(pool.attributes.reserve_in_usd),
+        volume: decimalMetric(pool.attributes.volume_usd?.h24),
         rank,
       });
     }
@@ -57,7 +58,7 @@ export function resolveGeckoPool(
   const best = candidates.filter((candidate) => candidate.rank === bestRank);
   const tokenKeys = new Set(best.map((candidate) => candidate.network + ":" + candidate.tokenAddress));
   if (tokenKeys.size !== 1) throw new Error("TOKEN_AMBIGUOUS");
-  best.sort((left, right) => right.liquidity - left.liquidity || right.volume - left.volume || left.poolAddress.localeCompare(right.poolAddress));
+  best.sort((left, right) => compareDecimal(right.liquidity, left.liquidity) || compareDecimal(right.volume, left.volume) || left.poolAddress.localeCompare(right.poolAddress));
   const selected = best[0];
   if (selected === undefined) throw new Error("TOKEN_NOT_FOUND");
   return Object.freeze({ network: selected.network, tokenAddress: selected.tokenAddress, poolAddress: selected.poolAddress, symbol: selected.symbol, name: selected.name, tokenSide: selected.tokenSide });
@@ -106,9 +107,26 @@ function matchRank(input: string, symbol: string | undefined, name: string | und
   return null;
 }
 
-function finiteMetric(value: string | number | undefined): number {
-  const result = typeof value === "number" ? value : value === undefined ? 0 : Number(value);
-  return Number.isFinite(result) && result >= 0 ? result : 0;
+function decimalMetric(value: string | number | undefined): string {
+  return decimalText(value) ?? "0";
+}
+
+function compareDecimal(left: string, right: string): number {
+  const [leftInteger, leftFraction = ""] = left.split(".");
+  const [rightInteger, rightFraction = ""] = right.split(".");
+  const normalizedLeftInteger = (leftInteger ?? "0").replace(/^0+(?=\d)/, "");
+  const normalizedRightInteger = (rightInteger ?? "0").replace(/^0+(?=\d)/, "");
+  if (normalizedLeftInteger.length !== normalizedRightInteger.length) {
+    return normalizedLeftInteger.length > normalizedRightInteger.length ? 1 : -1;
+  }
+  if (normalizedLeftInteger !== normalizedRightInteger) {
+    return normalizedLeftInteger > normalizedRightInteger ? 1 : -1;
+  }
+  const fractionLength = Math.max(leftFraction.length, rightFraction.length);
+  const normalizedLeftFraction = leftFraction.padEnd(fractionLength, "0");
+  const normalizedRightFraction = rightFraction.padEnd(fractionLength, "0");
+  if (normalizedLeftFraction === normalizedRightFraction) return 0;
+  return normalizedLeftFraction > normalizedRightFraction ? 1 : -1;
 }
 
 function addressFromIdentifier(value: string): string | null {

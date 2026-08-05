@@ -1,8 +1,8 @@
 # Architecture Decisions
 
-Version: 0.1.0 planning baseline
+Version: 0.2.0
 
-The owner approved the architecture baseline in the 2026-08-05 implementation request. Decisions below are accepted for v0.1 unless a later decision supersedes one.
+The owner approved the architecture baseline in the 2026-08-05 implementation request. Decisions below are accepted for v0.1; ADR-018 through ADR-020 govern the implemented v0.2 price upgrade.
 
 ## ADR-001: Node.js-first v0.1 runtime
 
@@ -241,6 +241,48 @@ The owner approved the architecture baseline in the 2026-08-05 implementation re
 **Alternatives considered:** Always allow direct fallback; infer policy from whether the proxy list is empty; read `HTTP_PROXY`/`HTTPS_PROXY` from the environment.
 
 **Trade-offs:** A required-proxy configuration can fail when every configured proxy is unavailable. This preserves the caller's network boundary and avoids accidental credential egress.
+
+## ADR-018: Price aggregation is a parallel unauthenticated execution path
+
+**Status:** Accepted
+
+**Date:** 2026-08-05
+
+**Decision:** Token price history uses `TokenPriceAggregator`, `PriceProviderRouter`, `PriceRequestExecutor`, and `TokenPriceProviderAdapter`, independently of blockchain `DataProviderAdapter`, `CredentialPool`, and the credential-based `RequestExecutor`.
+
+**Reason:** Public market-data endpoints have distinct identity, quote, partial-success, and no-key semantics. Forcing them through credential rotation would obscure that contract and couple unrelated fallback behavior.
+
+**Alternatives considered:** Add price methods to blockchain adapters; extend the credential executor with nullable credentials; query providers serially.
+
+**Trade-offs:** A small bounded execution path is separate, while transport, proxy pooling, clock, abort, retry-wait, telemetry, and redaction are reused.
+
+## ADR-019: Preserve provider quote and identity
+
+**Status:** Accepted
+
+**Date:** 2026-08-05
+
+**Decision:** Return one result per successful source in configured order. Binance and OKX remain USDT Spot markets; Coinbase and GeckoTerminal remain USD sources. GeckoTerminal returns resolved network, token contract, pool, and token-side context. No quote conversion, median, filling, cache, or cross-provider substitution occurs.
+
+**Reason:** Exchange symbols and on-chain contracts are not globally equivalent identities. Quote conversion or gap filling would create values that no provider supplied.
+
+**Alternatives considered:** Normalize every source to USD; select the first healthy source; return zero or prior close for gaps; dynamically rank sources.
+
+**Trade-offs:** Consumers make quote-normalization and consensus decisions explicitly. Partial results are more verbose but retain provenance and failure visibility.
+
+## ADR-020: UTC daily bars are a public contract
+
+**Status:** Accepted
+
+**Date:** 2026-08-05
+
+**Decision:** Price input/output uses UTC `YYYY-MM-DD`, ascending dates, close as canonical price, and a non-final current UTC bucket. OKX requests `1Dutc`; GeckoTerminal requests USD OHLCV for the resolved base or quote token side.
+
+**Reason:** Exchange-local daily buckets or an implicit pool base-token lookup can mislabel a UTC calendar date or requested asset.
+
+**Alternatives considered:** Provider-local day boundaries; timestamp conversion after retrieval; always query a pool base token.
+
+**Trade-offs:** Provider-specific request parameters remain explicit and require boundary fixtures.
 
 ## Open Decisions Requiring Owner Input
 

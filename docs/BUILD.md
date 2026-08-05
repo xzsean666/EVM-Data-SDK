@@ -1,6 +1,6 @@
 # Build and Release Guide
 
-Version: 0.1.0 planning baseline
+Version: 0.2.0
 
 Status: Work Packages 1 through 9 complete; Step 5 review and opt-in live smoke are complete.
 
@@ -177,4 +177,4 @@ Do not publish manually until package ownership, npm package name, access level,
 
 ## 10. Current Build State
 
-Work Packages 1 through 9 provide the public `EvmDataClient`, address/token services, capability-aware Etherscan V2, Moralis, and scoped Alchemy adapters, bounded execution, proxy-only and mixed-route scheduling, package smoke checks, and fixture-backed tests. `pnpm check` remains the release gate. Live tests are opt-in and must read application-owned secrets outside the SDK.
+Work Packages 1 through 9 provide the public `EvmDataClient`, address/token services, capability-aware Etherscan V2, Moralis, and scoped Alchemy adapters, bounded execution, proxy-only and mixed-route scheduling, package smoke checks, and fixture-backed tests. The v0.2 price upgrade adds fixture-backed Binance Spot, OKX Spot UTC daily candles, Coinbase Exchange, and GeckoTerminal adapters plus a separate no-key aggregation path. `pnpm check` remains the release gate. Live tests are opt-in and must read application-owned secrets outside the SDK; the deterministic price suite does not require price credentials or network access.

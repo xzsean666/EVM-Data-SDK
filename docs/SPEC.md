@@ -2,7 +2,7 @@
 
 Version: 0.2.0
 
-Status: Accepted for v0.1 implementation
+Status: v0.1 accepted; v0.2 token price aggregation implemented
 
 Last verified: 2026-08-05
 
@@ -12,7 +12,7 @@ EVM Data SDK is a lightweight, Node.js-first TypeScript library that provides st
 
 The SDK does not promise that every provider can satisfy every operation. It selects and falls back only among providers that can satisfy the same semantic contract for the requested chain and options.
 
-## 2. v0.1 Scope
+## 2. Scope
 
 ### 2.1 Public operations
 

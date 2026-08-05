@@ -2,7 +2,7 @@
 
 Version: 0.2.0
 
-Status: Accepted for v0.1 implementation
+Status: v0.1 accepted; v0.2 price integrations verified
 
 Last verified against official sources: 2026-08-05
 

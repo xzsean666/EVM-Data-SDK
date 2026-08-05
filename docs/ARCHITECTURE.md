@@ -2,7 +2,7 @@
 
 Version: 0.2.0
 
-Status: Accepted for v0.1 implementation
+Status: v0.1 accepted; v0.2 token price aggregation implemented
 
 Last verified: 2026-08-05
 

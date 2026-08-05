@@ -2,7 +2,7 @@
 
 Last updated: 2026-08-05
 
-Workflow state: Step 5 review complete for Work Packages 1 through 9; release decisions and Git identity remain outside implementation scope.
+Workflow state: Step 5 review complete for Work Packages 1 through 9 and Price-0 through Price-5; release decisions and Git identity remain outside implementation scope.
 
 ## Completed
 
@@ -50,12 +50,18 @@ Workflow state: Step 5 review complete for Work Packages 1 through 9; release de
 
 ## Current State
 
+- Token Price Aggregation Price-0 through Price-5 is implemented in the working tree. `client.token.getPriceHistory()` supports latest, one UTC date, and inclusive UTC ranges through default Binance, OKX, Coinbase, and GeckoTerminal adapters.
+- The price path is independent of credential-based blockchain execution. It uses no API key or environment key, has direct and proxy-only routes, bounded retries, caller abort handling, partial result failures, and aggregate `PRICE_DATA_UNAVAILABLE` behavior.
+- Provider-local schema, mapper, error classifier, and deterministic fixtures exist for every price provider. Fixtures cover market selection, UTC ordering/deduplication, range chunking, missing dates, Gecko ambiguity and quote-side resolution, direct/proxy-only, retry, timeout, abort, partial/all failures, and sensitive failure redaction.
+- Official API semantics were rechecked. The implementation and `TOKEN_PRICE_UPGRADE.md` record the only material correction: OKX uses `bar=1Dutc` rather than `1D` to honor the SDK UTC-day contract. GeckoTerminal requests `currency=usd` and the resolved `token=base|quote` side.
+- Focused commits remain pending because Git user.name and user.email are unset; no identity will be fabricated and no push will be made.
+
 - Architecture status: Accepted for v0.1 implementation.
 - Source status: Work Packages 1 through 9 are complete, including Moralis, scoped Alchemy, public client composition, proxy-only/mixed routing, and package smoke coverage.
 - Live smoke status: Alchemy balance and directional ERC-20 pagination, Alchemy capability rejection, and Moralis balance and transaction pagination succeeded. Proxy-only and mixed routes were exercised for Etherscan, Alchemy, and Moralis; the latest run classified the supplied proxy's Etherscan connection failure as `PROXY_ERROR`, while Alchemy and Moralis proxy-only and mixed balance calls succeeded. Moralis ERC-20 also observed retryable `PROVIDER_UNAVAILABLE` from a live HTTP 425. Etherscan direct operations returned normalized `REQUEST_TIMEOUT`. No secrets or cursors were printed.
 - Documentation status: Domain, transport, redaction, provider contract, cursor, capability routing, pools, retry, executor, all three provider adapters, public composition, live config, and package behavior are recorded.
 - Git status: The repository still has no configured Git `user.name` or `user.email`; no author identity was fabricated and no push was made.
-- Current workflow gate: Step 5 implementation review is complete. `pnpm check` passes with 111 tests and package smoke validation. Do not add v0.2 behavior before release decisions are resolved.
+- Current workflow gate: Step 5 implementation review is complete. `pnpm check` passes with 125 tests and package smoke validation. Do not add further scope before release decisions are resolved.
 
 ## Pending Tasks
 
