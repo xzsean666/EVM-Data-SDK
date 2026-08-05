@@ -1,0 +1,50 @@
+{
+  "name": "evm-data-sdk",
+  "version": "0.1.0",
+  "description": "Node.js-first TypeScript SDK for indexed EVM data providers.",
+  "type": "module",
+  "private": true,
+  "sideEffects": false,
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@11.20.0",
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --no-warn-ignored",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:live": "vitest run tests/live --passWithNoTests",
+    "build": "tsup && tsc --project tsconfig.build.json",
+    "prepack": "pnpm build",
+    "test:package": "node tests/package/smoke.mjs",
+    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm build && pnpm test:package",
+    "changeset": "changeset",
+    "clean": "node -e \"for (const path of ['dist','coverage']) { require('node:fs').rmSync(path, { recursive: true, force: true }); }\""
+  },
+  "dependencies": {
+    "axios": "1.19.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@changesets/cli": "2.31.1",
+    "@types/node": "24.0.0",
+    "eslint": "10.8.0",
+    "tsup": "8.5.1",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10"
+  }
+}

@@ -1,14 +1,14 @@
 # EVM Data SDK Specification
 
-Version: 0.1.0
+Version: 0.2.0
 
-Status: Proposed, awaiting architecture approval
+Status: Accepted for v0.1 implementation
 
 Last verified: 2026-08-05
 
 ## 1. Purpose
 
-EVM Data SDK is a lightweight, Node.js-first TypeScript library that provides stable read-only access to common indexed EVM data across Etherscan, Alchemy, and Moralis. It gives applications one public model and one failure contract while preserving provider capability differences explicitly.
+EVM Data SDK is a lightweight, Node.js-first TypeScript library that provides stable read-only access to indexed EVM data across Etherscan, Alchemy, and Moralis, plus token price history aggregated from public market-data providers. It gives applications one public model and one failure contract while preserving provider capability differences explicitly.
 
 The SDK does not promise that every provider can satisfy every operation. It selects and falls back only among providers that can satisfy the same semantic contract for the requested chain and options.
 
@@ -39,6 +39,11 @@ const transfers = await client.token.getErc20Transfers({
   direction: "both",
   pageSize: 50,
   signal,
+});
+
+const prices = await client.token.getPriceHistory({
+  token: "Ethereum",
+  range: { kind: "latest", days: 30 },
 });
 ```
 
@@ -81,6 +86,18 @@ The router must evaluate request features, not only method names. For example, A
 `getNativeBalance` returns the balance at the provider's latest block. Historical block selection is out of scope for v0.1 because providers have materially different archive limitations.
 
 `getErc20Transfers` returns mined ERC-20 `Transfer` events indexed for the wallet, optionally filtered to one token contract and one direction. It does not return current token balances, approvals, NFTs, or internal native transfers.
+
+`getPriceHistory` returns independently sourced daily OHLCV histories for a token name or symbol. The four default sources are Binance Spot, OKX Spot, Coinbase Exchange Spot, and GeckoTerminal. It is an aggregation rather than a merged consensus price: each successful source remains a separate result with its actual market and quote asset.
+
+### 2.5 Request normalization
+
+- List requests default to `pageSize: 50` and `order: "desc"`. Accepted page sizes are integers from 1 through 100.
+- ERC-20 transfer requests default to `direction: "both"` and may specify one structurally valid `tokenAddress`.
+- Optional `startBlock` and `endBlock` filters are decimal strings. They are normalized without leading zeroes, and `startBlock` must not exceed `endBlock`.
+- Addresses are structurally validated as 20-byte `0x` hexadecimal strings and normalized to lowercase. No checksum validation is performed in v0.1.
+- Input aliases are trimmed and normalized to lowercase before chain resolution. An opaque continuation cursor is retained byte-for-byte for the cursor codec to validate in Work Package 4.
+- Price-token input is trimmed and normalized for matching while the original input is preserved in output. Built-in aliases resolve `ETH`/`Ethereum` and `BTC`/`Bitcoin`; `price.tokenAliases` may add application-specific aliases.
+- Price ranges use UTC `YYYY-MM-DD` only. `latest` is inclusive and accepts 1 through 365 days; `date` selects one UTC day; `between` is inclusive, must be ordered, and may contain at most 366 days. Future dates and dates more than ten years in the past fail before network work.
 
 ## 3. Public Data Contracts
 
@@ -171,6 +188,60 @@ interface Erc20Transfer {
 
 `amount` is the raw event integer. Transfer identity is `(chainId, transactionHash, logIndex)` when `logIndex` is available. The mapper must not invent a log index.
 
+### 3.6 Token price history
+
+```ts
+type TokenPriceRange =
+  | { kind: "latest"; days: number }
+  | { kind: "date"; date: string }
+  | { kind: "between"; startDate: string; endDate: string };
+
+interface TokenPricePoint {
+  date: string;                 // UTC YYYY-MM-DD
+  timestamp: string;            // UTC ISO timestamp for the daily bucket
+  open: string;
+  high: string;
+  low: string;
+  close: string;
+  price: string;                // always equal to close
+  volume: string | null;
+  isFinal: boolean | null;
+}
+
+interface TokenPriceProviderResult {
+  provider: "binance" | "okx" | "coinbase" | "geckoterminal";
+  status: "success";
+  token: { input: string; normalized: string; symbol: string; name: string | null };
+  market: {
+    product: string;
+    quoteAsset: "USD" | "USDT";
+    sourceKind: "exchange" | "onchain";
+    network: string | null;
+    tokenAddress: string | null;
+    poolAddress: string | null;
+  };
+  interval: "1d";
+  timezone: "UTC";
+  requestedRange: { kind: TokenPriceRange["kind"]; startDate: string; endDate: string };
+  points: readonly TokenPricePoint[];
+  missingDates: readonly string[];
+}
+
+interface TokenPriceAggregationResult {
+  query: {
+    tokenInput: string; normalizedToken: string; interval: "1d"; timezone: "UTC";
+    range: TokenPriceRange; resolvedStartDate: string; resolvedEndDate: string;
+  };
+  results: readonly TokenPriceProviderResult[];
+  failures: readonly { provider: string; code: string; retryable: boolean; message: string }[];
+  summary: { requestedProviders: number; succeededProviders: number; failedProviders: number; partial: boolean };
+}
+```
+
+All public prices and volumes are decimal strings; JavaScript `number` is never used for a returned price or volume. Results are sorted by UTC date ascending. `missingDates` lists every requested date absent from an otherwise successful provider response, and the SDK never fabricates a zero, previous close, or other replacement value. The current UTC bucket is not final.
+
+Exchange adapters independently select only the specified active Spot market: Binance `BASEUSDT`, OKX `BASE-USDT`, and Coinbase `BASE-USD`. USDT is never silently converted to USD. GeckoTerminal resolves an on-chain network, token contract, pool, and token side before requesting the selected token's USD OHLCV; equal-strength identities that cannot be safely distinguished fail with `TOKEN_AMBIGUOUS`. An exchange symbol and an on-chain contract sharing a symbol are not asserted to be the same asset.
+
 ## 4. Functional Requirements
 
 ### FR-001 Configuration validation
@@ -229,6 +300,16 @@ The client must not start background timers. If a transport later requires dispo
 
 The provider contract is exported for advanced users. A custom adapter must declare a unique name, evaluate capabilities for a resolved chain and request, perform one upstream attempt, validate/map its result, and return normalized errors. Custom adapters use the same central execution policy.
 
+### FR-015 Price aggregation
+
+Price adapters are independent of blockchain `DataProviderAdapter`, credentials, and credential rotation. Every enabled adapter receives one bounded attempt, and enabled adapters execute concurrently up to the configured maximum of four. The successful results and failures retain configured order. Four successes return four results; any nonzero success count returns a result with every failure listed and `summary.partial: true` where applicable; zero successes reject with `PRICE_DATA_UNAVAILABLE`.
+
+Price retry is bounded to three attempts per provider and applies only to classified network, timeout, 429, selected 5xx/provider-busy, and proxy failures. Invalid input, ambiguity, unavailable markets, malformed payloads, and absent proxy-only routes are not retried. No price API key, `CredentialPool`, environment key, cache, websocket, background health probe, or direct fallback from `proxy-only` is used.
+
+### FR-016 Price routing
+
+`price.routeMode` is independent of `requestPolicy.allowDirect`. `direct` is the default and explicitly supplies Axios `proxy: false`, so environment proxy variables do not alter price routing. `proxy-only` leases only an explicitly configured HTTP(S) proxy and returns `PROXY_ERROR` if none is available; it never falls back to a local route. The existing transport, timeout, abort, retry-wait, redaction, and telemetry boundaries are reused.
+
 ## 5. Error Contract
 
 Public methods reject with `EvmDataError`.
@@ -248,13 +329,19 @@ type ErrorCode =
   | "NETWORK_ERROR"
   | "PROXY_ERROR"
   | "INVALID_PROVIDER_RESPONSE"
-  | "PROVIDER_UNAVAILABLE";
+  | "PROVIDER_UNAVAILABLE"
+  | "TOKEN_NOT_FOUND"
+  | "TOKEN_AMBIGUOUS"
+  | "MARKET_NOT_FOUND"
+  | "HISTORY_NOT_AVAILABLE"
+  | "PRICE_DATA_UNAVAILABLE";
 
 interface EvmDataError extends Error {
   readonly code: ErrorCode;
   readonly retryable: boolean;
   readonly provider: string | null;
   readonly chainId: number | null;
+  readonly retryAfterMs: number | null;
   readonly cause?: unknown;
 }
 ```
@@ -285,6 +372,7 @@ const client = new EvmDataClient({
     attemptTimeoutMs: 10_000,
     totalTimeoutMs: 30_000,
     maxTotalAttempts: 6,
+    allowDirect: false,
   },
   proxies: [
     { url: "http://127.0.0.1:7890" },
@@ -295,6 +383,27 @@ const client = new EvmDataClient({
 Environment access in this example belongs to the application. The SDK receives strings and does not load `.env` files.
 
 Provider base URL overrides are allowed for tests and compatible gateways. Production defaults use HTTPS. Insecure HTTP provider URLs require an explicit `allowInsecureHttp` opt-in; loopback test URLs are permitted.
+
+Provider URL overrides and proxy URLs are validated during client construction. Proxy URLs may contain HTTP(S) userinfo but no path, query, or fragment; invalid proxy syntax fails as `INVALID_CONFIGURATION` before network work.
+
+`requestPolicy.allowDirect` defaults to `true`. Set it to `false` when every attempt must use one of the explicitly configured HTTP(S) proxies; the executor never silently bypasses that policy.
+
+When `allowDirect` is `true` and proxies are configured, the SDK fairly rotates each request through configured proxies and the local direct route. When no proxies are configured, the local direct route is the only route. This routing is transport scheduling, not a quota-bypass promise.
+
+Price configuration is separate and API-key-free:
+
+```ts
+const client = new EvmDataClient({
+  price: {
+    routeMode: "direct",
+    // Omit providers for Binance, OKX, Coinbase, GeckoTerminal in that order.
+    maxProviderConcurrency: 4,
+    tokenAliases: { ether: "ETH" },
+  },
+});
+```
+
+`price.providers` may declare an ordered enabled subset and test-only base URL overrides. A price-only client is valid; a blockchain-only client retains the default four price providers unless it explicitly supplies `price.providers`. `price.geckoNetworks` defaults to Ethereum, BNB Smart Chain, Polygon, Arbitrum, Base, and Optimism GeckoTerminal identifiers.
 
 ## 7. Non-Functional Requirements
 
@@ -337,7 +446,8 @@ A caller aborts while the executor is in backoff. The wait terminates immediatel
 - Transaction signing, broadcasting, wallet custody, or nonce management
 - Pending transaction subscriptions or WebSockets
 - Internal transaction/call traces as a unified v0.1 operation
-- NFT transfers, contract events, token balances, prices, decoded activity, or ABI services
+- NFT transfers, contract events, token balances, decoded activity, or ABI services
+- Price quote conversion, consensus/median prices, contract-address input, caching, websocket streams, or background market-health checks
 - Persistent cache, database storage, metrics exporters, automatic provider ranking, or background health checks
 - Browser proxy support
 - Automatic discovery of every chain exposed by upstream providers
@@ -353,3 +463,10 @@ A caller aborts while the executor is in backoff. The wait terminates immediatel
 - No live credentials are needed for the default test suite; opt-in live tests are documented separately.
 - Type checking, linting, unit tests, build, and package validation pass.
 - All required documentation reflects the implementation and `docs/NEXT_SESSION.md` has no unresolved release blockers.
+
+## 11. Acceptance Criteria for v0.2 Price Aggregation
+
+- `client.token.getPriceHistory()` supports `latest`, `date`, and inclusive `between` UTC selectors with documented boundary validation.
+- Binance Spot, OKX Spot UTC day candles, Coinbase Exchange Spot, and GeckoTerminal USD pool OHLCV use provider-local schemas, mappers, error classifiers, and fixtures.
+- Results contain decimal-string OHLCV, `price === close`, ascending UTC points, explicit `missingDates`, source market/quote metadata, and GeckoTerminal network/contract/pool identity.
+- Four-success, partial-success, all-failure, direct, proxy-only, 429, selected 5xx, timeout, caller abort, redaction, chunk/deduplication, and ambiguity cases are deterministic tests.

@@ -1,12 +1,61 @@
 # External Integrations
 
-Version: 0.1.0 planning baseline
+Version: 0.2.0
 
-Status: Proposed
+Status: Accepted for v0.1 implementation
 
 Last verified against official sources: 2026-08-05
 
 External APIs and package behavior change independently of this SDK. Before changing an adapter or upgrading a major dependency, recheck the linked official documentation and update this file first.
+
+## 0. Public token price providers
+
+The v0.2 price operation uses unauthenticated public endpoints only. The SDK does not read API keys or environment values for these adapters, does not run a background probe, and does not use WebSockets or a cache. All adapters request daily OHLCV, preserve the provider quote asset, and return decimal strings. A direct price request explicitly disables Axios environment-proxy discovery; proxy-only accepts only caller-configured HTTP(S) proxies.
+
+### Binance Spot API
+
+Official documentation:
+
+- Exchange information: https://developers.binance.com/docs/binance-spot-api-docs/rest-api/general-endpoints#exchange-information
+- Kline/candlestick data: https://developers.binance.com/docs/binance-spot-api-docs/rest-api/market-data-endpoints#klinecandlestick-data
+
+SDK endpoints: https://api.binance.com/api/v3/exchangeInfo and /api/v3/klines.
+
+Important notes: The adapter resolves only an active Spot BASEUSDT market and requests interval=1d. Binance accepts up to 1,000 klines per request, so the adapter chunks larger internal ranges at 1,000 calendar days (the public v0.2 maximum is 366). It maps open time, open, high, low, close, and volume; price is close. HTTP 418/429 is rate-limited and retryable within the bounded price attempt policy.
+
+### OKX Market API
+
+Official documentation:
+
+- Instruments: https://www.okx.com/docs-v5/en/#rest-api-public-data-get-instruments
+- History candles: https://www.okx.com/docs-v5/en/#rest-api-market-data-get-history-candlesticks
+
+SDK endpoints: https://www.okx.com/api/v5/public/instruments and /api/v5/market/history-candles.
+
+Important notes: The adapter selects only a live instType=SPOT BASE-USDT instrument. It requests bar=1Dutc, not generic 1D, because the public SDK contract has UTC calendar boundaries. OKX rows are newest-first and include a completion flag; the mapper deduplicates and returns ascending UTC dates. The adapter uses bounded 100-day chunks so the source limit cannot silently truncate a public range.
+
+### Coinbase Exchange API
+
+Official documentation:
+
+- Products: https://docs.cdp.coinbase.com/exchange/reference/exchangerestapi_getallproducts
+- Product candles: https://docs.cdp.coinbase.com/exchange/reference/exchangerestapi_getproductcandles
+
+SDK endpoints: https://api.exchange.coinbase.com/products and /products/{BASE-USD}/candles.
+
+Important notes: Only an enabled BASE-USD product is selected. Candles use granularity=86400; Coinbase documents a maximum of 300 data points per request, so the adapter issues 300-day sequential UTC chunks and de-duplicates their inclusive boundary. Candle order is [time, low, high, open, close, volume]. Historical output can be incomplete when no ticks exist; missing calendar days are surfaced in missingDates.
+
+### GeckoTerminal API
+
+Official documentation:
+
+- API guide: https://apiguide.geckoterminal.com/
+- Search pools: https://apiguide.geckoterminal.com/docs/api-reference/pools/search-pools
+- Pool OHLCV: https://apiguide.geckoterminal.com/docs/api-reference/pools/ohlcv-chart
+
+SDK endpoint base: https://api.geckoterminal.com/api/v2.
+
+Important notes: Name-only input is resolved from search-pool relationships within configured networks. The resolver prefers exact symbol, then exact name, then a unique prefix; equal-rank different network/contract identities produce TOKEN_AMBIGUOUS. It picks a pool for one resolved token deterministically by liquidity, 24-hour volume, then address, but exposes network, token contract, pool, and selected token side instead of asserting exchange/on-chain asset equivalence. The OHLCV request explicitly uses currency=usd and token=base|quote, so a matched quote-side token does not accidentally return the base token's price.
 
 ## 1. Etherscan
 
@@ -42,6 +91,10 @@ External APIs and package behavior change independently of this SDK. Before chan
 - Some chains have shared community quotas. Rotating caller keys or proxies does not reliably or appropriately bypass an account/chain quota.
 - Etherscan can return HTTP 200 with logical errors in `status`, `message`, and `result`. Endpoint-specific no-result responses must be separated from failures.
 - Etherscan recommends page/offset and bounded block ranges. Large ranges may return query timeouts.
+- The SDK adapter sends `page`, `offset`, `sort`, and optional `startblock`/`endblock` on every list attempt; continuation state contains only the next page number.
+- ERC-20 direction filtering is applied after the provider page is mapped. Provider page fullness, rather than filtered item count, determines whether another page is requested.
+- Successful payloads are validated with provider-local schemas. Missing optional fields map to `null`; decimal quantities are canonicalized and timestamps are converted from Unix seconds to ISO UTC.
+- Logical errors are classified without including the authenticated request URL: invalid keys, plan restrictions, unsupported chains, rate limits, and provider busy/timeout responses remain distinct.
 - The supported-chain page announced Moonbeam, Moonriver, and Moonbase API deprecation effective 2026-07-31. They are not v0.1 built-ins. Gnosis free access was announced to move to paid plans on 2026-09-01.
 - Redact `apikey` and the full authenticated URL from every observable error and event.
 
@@ -79,6 +132,7 @@ External APIs and package behavior change independently of this SDK. Before chan
 - HTTP 429 and JSON-RPC error envelopes must both be classified. Honor `Retry-After` when present and use bounded exponential backoff with jitter.
 - Alchemy recommends HTTPS for request/response methods and batches below 50. v0.1 does not batch provider calls.
 - Authorization headers and any legacy URL key form must be redacted.
+- The adapter sends JSON-RPC requests to the registry's network-specific `/v2` endpoint with `Authorization: Bearer`; API keys never enter endpoint URLs. It maps `eth_getBalance` hexadecimal wei values and directional `alchemy_getAssetTransfers` ERC-20 pages with `pageKey` continuation.
 
 ## 3. Moralis
 
@@ -110,9 +164,10 @@ External APIs and package behavior change independently of this SDK. Before chan
 - Native balance is `GET /{address}/balance`; ERC-20 wallet transfers are `GET /{address}/erc20/transfers`.
 - Moralis list endpoints use cursor pagination. Documentation states that limit is set on the initial request and cannot change mid-pagination, and that cursors represent a stable snapshot where supported.
 - At verification time, rate limits used a rolling four-second window. Published request throughput was 40 requests/s for Free and Starter, 80 for Pro, 200 for Business, and custom for Enterprise. Plans and endpoint compute costs may change and are not hardcoded defaults.
-- HTTP 400, 401, 404, 429, and 500 have conventional meanings, but 404 must be interpreted per endpoint rather than globally converted to an empty result.
+- HTTP 400, 401, 404, 425, 429, and 500 have conventional meanings, but 404 must be interpreted per endpoint rather than globally converted to an empty result. Moralis 425 responses are treated as transient provider unavailability and remain retryable.
 - Prefer raw integer fields over formatted decimal fields when mapping public amounts.
 - Redact `X-API-Key` and provider cursor values from observations.
+- The adapter uses the raw transaction endpoint, native balance endpoint, and ERC-20 transfer endpoint with provider-local schemas. Its cursor is wrapped in the SDK cursor and is never exposed directly.
 
 ## 4. Axios
 
@@ -170,7 +225,7 @@ External APIs and package behavior change independently of this SDK. Before chan
 
 **Purpose in the SDK:** ESM, CommonJS, declaration, and source map builds.
 
-**Important notes:** Verify compatibility with TypeScript 7 before implementation. Package smoke tests, not configuration assumptions, determine whether both module formats work.
+**Important notes:** The ESM/CJS bundling path in `tsup@8.5.1` works with TypeScript 7. Its declaration path is not compatible: the bundled `rollup-plugin-dts@6.1.1` crashes against TypeScript 7's compiler API. Work Package 1 disables tsup declaration bundling and invokes TypeScript 7 with `emitDeclarationOnly` after the JavaScript build. Recheck this workaround before upgrading either tool.
 
 ## 8. Vitest
 
@@ -194,7 +249,7 @@ External APIs and package behavior change independently of this SDK. Before chan
 
 **Purpose in the SDK:** static analysis with flat configuration.
 
-**Important notes:** Select TypeScript ESLint packages compatible with TypeScript 7 and ESLint 10 before bootstrap, then record their exact versions here. This compatibility is an open pre-implementation check.
+**Important notes:** The checked `@typescript-eslint/parser` and `@typescript-eslint/eslint-plugin` 8.66.0 peer ranges are `typescript >=4.8.4 <6.1.0`; with TypeScript 7.0.2 they fail at startup with `typescript-eslint does not support TS 7.0`. Work Package 1 therefore uses ESLint 10 flat config for JavaScript package tooling and smoke tests, while strict `tsc` validates TypeScript source. Do not add a TypeScript ESLint parser until it supports the selected TypeScript major.
 
 ## 10. Changesets
 
@@ -218,7 +273,7 @@ External APIs and package behavior change independently of this SDK. Before chan
 
 **Purpose in the SDK:** deterministic dependency management and scripts.
 
-**Important notes:** Record the version in `packageManager` and commit `pnpm-lock.yaml`. CI uses `--frozen-lockfile`.
+**Important notes:** Record the version in `packageManager` and commit `pnpm-lock.yaml`. CI uses `--frozen-lockfile`. pnpm 11.20.0 moved lifecycle approval to `pnpm-workspace.yaml`; this repository allows only `esbuild`, which tsup requires.
 
 ## 12. Node.js
 
@@ -231,3 +286,15 @@ External APIs and package behavior change independently of this SDK. Before chan
 **Purpose in the SDK:** runtime, test runtime, and package build environment.
 
 **Important notes:** HTTP(S) proxies are a Node-only SDK feature. Do not claim browser support in v0.1. Test any additional active LTS line before listing it in `engines`.
+
+## 13. Node Type Definitions
+
+**External project:** DefinitelyTyped Node.js declarations
+
+**Selected version:** `@types/node` 24.0.0
+
+**Official documentation:** https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/node
+
+**Purpose in the SDK:** Type declarations for Node.js APIs used by build configuration, package smoke tests, and later transport code.
+
+**Important notes:** Keep this aligned with the Node.js 24 development baseline. It is a development-only dependency and is excluded from the package tarball.

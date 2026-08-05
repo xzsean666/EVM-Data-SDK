@@ -2,11 +2,11 @@
 
 Version: 0.1.0 planning baseline
 
-All decisions below are `Proposed` until the owner approves the architecture. On approval, change their status to `Accepted` without changing their original date. Later reversals require a new decision that supersedes the old one.
+The owner approved the architecture baseline in the 2026-08-05 implementation request. Decisions below are accepted for v0.1 unless a later decision supersedes one.
 
 ## ADR-001: Node.js-first v0.1 runtime
 
-**Status:** Proposed
+**Status:** Accepted
 
 **Date:** 2026-08-05
 
@@ -20,7 +20,7 @@ All decisions below are `Proposed` until the owner approves the architecture. On
 
 ## ADR-002: Capability-aware provider routing
 
-**Status:** Proposed
+**Status:** Accepted
 
 **Date:** 2026-08-05
 
@@ -34,7 +34,7 @@ All decisions below are `Proposed` until the owner approves the architecture. On
 
 ## ADR-003: EIP-155 chain ID is canonical
 
-**Status:** Proposed
+**Status:** Accepted
 
 **Date:** 2026-08-05
 
@@ -48,7 +48,7 @@ All decisions below are `Proposed` until the owner approves the architecture. On
 
 ## ADR-004: Etherscan V2 unified endpoint only
 
-**Status:** Proposed
+**Status:** Accepted
 
 **Date:** 2026-08-05
 
@@ -62,7 +62,7 @@ All decisions below are `Proposed` until the owner approves the architecture. On
 
 ## ADR-005: Provider-local schemas and mappers
 
-**Status:** Proposed
+**Status:** Accepted
 
 **Date:** 2026-08-05
 
@@ -76,7 +76,7 @@ All decisions below are `Proposed` until the owner approves the architecture. On
 
 ## ADR-006: Decimal strings for on-chain integers
 
-**Status:** Proposed
+**Status:** Accepted
 
 **Date:** 2026-08-05
 
@@ -90,7 +90,7 @@ All decisions below are `Proposed` until the owner approves the architecture. On
 
 ## ADR-007: Provider-pinned SDK cursors
 
-**Status:** Proposed
+**Status:** Accepted
 
 **Date:** 2026-08-05
 
@@ -104,7 +104,7 @@ All decisions below are `Proposed` until the owner approves the architecture. On
 
 ## ADR-008: Central bounded execution policy
 
-**Status:** Proposed
+**Status:** Accepted
 
 **Date:** 2026-08-05
 
@@ -118,7 +118,7 @@ All decisions below are `Proposed` until the owner approves the architecture. On
 
 ## ADR-009: Credential rotation is scoped scheduling, not quota avoidance
 
-**Status:** Proposed
+**Status:** Accepted
 
 **Date:** 2026-08-05
 
@@ -132,7 +132,7 @@ All decisions below are `Proposed` until the owner approves the architecture. On
 
 ## ADR-010: Proxy pool is a transport feature
 
-**Status:** Proposed
+**Status:** Accepted
 
 **Date:** 2026-08-05
 
@@ -146,7 +146,7 @@ All decisions below are `Proposed` until the owner approves the architecture. On
 
 ## ADR-011: Passive health, deterministic priority
 
-**Status:** Proposed
+**Status:** Accepted
 
 **Date:** 2026-08-05
 
@@ -160,7 +160,7 @@ All decisions below are `Proposed` until the owner approves the architecture. On
 
 ## ADR-012: Alchemy has partial v0.1 capabilities
 
-**Status:** Proposed
+**Status:** Accepted
 
 **Date:** 2026-08-05
 
@@ -174,7 +174,7 @@ All decisions below are `Proposed` until the owner approves the architecture. On
 
 ## ADR-013: Axios transport with explicit proxy control
 
-**Status:** Proposed
+**Status:** Accepted
 
 **Date:** 2026-08-05
 
@@ -188,7 +188,7 @@ All decisions below are `Proposed` until the owner approves the architecture. On
 
 ## ADR-014: Zod validates all external boundaries
 
-**Status:** Proposed
+**Status:** Accepted
 
 **Date:** 2026-08-05
 
@@ -202,7 +202,7 @@ All decisions below are `Proposed` until the owner approves the architecture. On
 
 ## ADR-015: Typed exceptions are the public failure model
 
-**Status:** Proposed
+**Status:** Accepted
 
 **Date:** 2026-08-05
 
@@ -216,7 +216,7 @@ All decisions below are `Proposed` until the owner approves the architecture. On
 
 ## ADR-016: No cache in v0.1
 
-**Status:** Proposed
+**Status:** Accepted
 
 **Date:** 2026-08-05
 
@@ -227,6 +227,20 @@ All decisions below are `Proposed` until the owner approves the architecture. On
 **Alternatives considered:** Simple TTL cache around provider calls; mandatory Redis.
 
 **Trade-offs:** Repeated requests consume upstream quota. The initial correctness and extension boundaries remain clear.
+
+## ADR-017: Explicit direct-route policy
+
+**Status:** Accepted
+
+**Date:** 2026-08-05
+
+**Decision:** Add `requestPolicy.allowDirect`, defaulting to `true`; when set to `false`, the executor may use only explicitly configured HTTP(S) proxies and must not silently bypass them.
+
+**Reason:** Proxy routing is caller policy, not an implicit environment or failure fallback. A clear direct-route switch lets deployments require egress through an approved proxy without changing transport behavior.
+
+**Alternatives considered:** Always allow direct fallback; infer policy from whether the proxy list is empty; read `HTTP_PROXY`/`HTTPS_PROXY` from the environment.
+
+**Trade-offs:** A required-proxy configuration can fail when every configured proxy is unavailable. This preserves the caller's network boundary and avoids accidental credential egress.
 
 ## Open Decisions Requiring Owner Input
 

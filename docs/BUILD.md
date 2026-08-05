@@ -2,7 +2,7 @@
 
 Version: 0.1.0 planning baseline
 
-Status: Commands are specified but are not runnable until implementation starts after architecture approval.
+Status: Work Packages 1 through 9 complete; Step 5 review and opt-in live smoke are complete.
 
 Last verified: 2026-08-05
 
@@ -35,6 +35,8 @@ corepack prepare pnpm@11.20.0 --activate
 pnpm install --frozen-lockfile
 ```
 
+The repository's `pnpm-workspace.yaml` allowlist permits only the `esbuild` lifecycle script required by tsup. No other dependency build scripts are enabled.
+
 Use `pnpm install` without `--frozen-lockfile` only when intentionally updating dependencies. Commit the resulting lockfile in the same milestone.
 
 ## 3. Planned Package Scripts
@@ -47,7 +49,7 @@ The implementation must provide these scripts with these meanings:
 | `pnpm lint` | Run ESLint over source, tests, and configuration |
 | `pnpm test` | Run deterministic unit, contract, and execution integration tests once |
 | `pnpm test:watch` | Run local Vitest watch mode |
-| `pnpm test:live` | Run opt-in provider tests; skipped without explicit credentials |
+| `pnpm test:live` | Run opt-in provider tests; passes when no live tests or credentials are available |
 | `pnpm build` | Build ESM, CommonJS, declarations, and source maps into `dist/` |
 | `pnpm test:package` | Pack and consume the tarball from ESM, CJS, and TypeScript smoke projects |
 | `pnpm check` | Run typecheck, lint, test, build, and package tests in that order |
@@ -94,7 +96,7 @@ The target is modern Node.js (`ES2022` or newer as supported by the selected too
 The package build must:
 
 - produce ESM and CommonJS entry points;
-- produce declarations and source maps;
+- produce declarations and source maps; Work Package 1 uses TypeScript declaration emit because the selected tsup declaration plugin is not compatible with TypeScript 7;
 - mark only genuine runtime dependencies as external;
 - set `sideEffects: false` only after tests confirm there are no import-time side effects;
 - exclude tests, fixtures, local environment files, and provider credentials from the tarball;
@@ -123,9 +125,11 @@ MORALIS_API_KEY
 
 Live tests must use stable public addresses, small page sizes, and low request counts. They must skip unavailable provider/chain capabilities rather than weakening deterministic tests. Output must never print keys or raw authenticated URLs.
 
+The repository includes `scripts/live-config.mjs` and `scripts/live-smoke.mjs` for an owner-invoked smoke run. The config helper parses the grouped-key format in `.env.key` in memory and returns a normal `ClientConfiguration`; it never writes keys. The smoke runner uses the public Ethereum address in the script, caps list checks at two pages, and reports only provider/operation/status/count/error-code summaries. Set `EVM_SDK_LIVE_PROXY` to an HTTP(S) proxy URL to exercise proxy-only and mixed routing; the proxy value is never printed.
+
 ### Package suite
 
-`pnpm test:package` must run `pnpm pack`, install the produced tarball into temporary ESM/CJS/TypeScript consumers, and validate public imports. Temporary paths must be narrow and safely removed. The suite must inspect tarball contents for accidental fixtures, `.env` files, and source credentials.
+`pnpm test:package` must run `pnpm pack`, consume the produced tarball from temporary ESM/CJS/TypeScript consumers, and validate public imports. Temporary paths must be narrow and safely removed. The suite must inspect tarball contents for accidental fixtures, `.env` files, and source credentials.
 
 ## 7. Local Usage During Development
 
@@ -173,4 +177,4 @@ Do not publish manually until package ownership, npm package name, access level,
 
 ## 10. Current Build State
 
-There is intentionally no `package.json`, source tree, lockfile, or runnable command yet. Creating them is Step 4 implementation and is blocked pending explicit architecture approval. The first implementation work package in `NEXT_SESSION.md` creates only the toolchain and empty package surface needed to make the checks executable.
+Work Packages 1 through 9 provide the public `EvmDataClient`, address/token services, capability-aware Etherscan V2, Moralis, and scoped Alchemy adapters, bounded execution, proxy-only and mixed-route scheduling, package smoke checks, and fixture-backed tests. `pnpm check` remains the release gate. Live tests are opt-in and must read application-owned secrets outside the SDK.

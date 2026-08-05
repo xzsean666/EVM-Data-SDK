@@ -1,8 +1,8 @@
 # EVM Data SDK Architecture
 
-Version: 0.1.0
+Version: 0.2.0
 
-Status: Proposed, awaiting owner approval
+Status: Accepted for v0.1 implementation
 
 Last verified: 2026-08-05
 
@@ -12,7 +12,7 @@ The architecture must make provider differences explicit while keeping the appli
 
 The design optimizes for:
 
-- one stable public API for three precisely defined read operations;
+- stable public APIs for indexed EVM reads and provider-separated token price history;
 - provider modules that can be understood and tested independently;
 - deterministic routing by EIP-155 chain ID and operation capability;
 - no precision loss in public blockchain data;
@@ -31,21 +31,21 @@ EvmDataClient
       v
 AddressService / TokenService
       |
-      v
-RequestExecutor -----> ProviderRouter -----> ChainRegistry
-      |                      |
-      |                      +--------------> adapter capabilities
-      |
-      +-----> CredentialPool / ProxyPool / RetryPolicy
-      |
-      v
-DataProviderAdapter
-      |
-      v
-AxiosHttpTransport
-      |
-      v
-Etherscan V2 / Alchemy / Moralis Data API
+      +------------------------------+
+      |                              |
+      v                              v
+RequestExecutor                    TokenPriceAggregator
+      |                              |
+ProviderRouter / ChainRegistry    PriceProviderRouter
+      |                              |
+CredentialPool / ProxyPool         PriceRequestExecutor / ProxyPool
+      |                              |
+DataProviderAdapter                TokenPriceProviderAdapter
+      |                              |
+      +----------- AxiosHttpTransport +-----------+
+                     |
+                     v
+ Etherscan / Alchemy / Moralis    Binance / OKX / Coinbase / GeckoTerminal
 ```
 
 The SDK is stateless with respect to blockchain data. Its only in-memory state is operational: credential/proxy selection cursors, cooldowns, and passive provider failure state. No state is persisted between processes.
@@ -72,6 +72,12 @@ Owns one upstream provider's URLs, authentication placement, request encoding, r
 
 Owns HTTP mechanics and Node.js HTTP(S) proxy behavior. It returns a provider-neutral HTTP response or a normalized transport failure. It does not interpret provider business payloads or decide retries.
 
+### 3.6 Price execution layer
+
+The price path deliberately does not reuse `DataProviderAdapter` or the credential-based `RequestExecutor`. `TokenService.getPriceHistory()` normalizes a token name/symbol and UTC range, then `TokenPriceAggregator` routes enabled price adapters and delegates bounded, independent attempts to `PriceRequestExecutor`. It reuses the existing `ProxyPool`, clock, wait, telemetry, abort, and `HttpTransport` seams, while owning price-only direct/proxy-only policy and at most three retries per provider.
+
+Every price adapter owns exact market or on-chain identity resolution, request encoding, provider-local schemas, error classification, bounded internal range chunking, UTC sorting/deduplication, and `missingDates`. The aggregator never converts, averages, fills, or substitutes values between providers. It returns ordered successful provider results plus sanitized failures, and throws `PRICE_DATA_UNAVAILABLE` only when no provider succeeds.
+
 ## 4. Proposed Package Structure
 
 ```text
@@ -88,6 +94,8 @@ src/
 │   ├── errors.ts
 │   ├── models.ts
 │   ├── operations.ts
+│   ├── priceModels.ts
+│   ├── priceOperations.ts
 │   └── pagination.ts
 ├── chains/
 │   ├── builtinChains.ts
@@ -116,6 +124,16 @@ src/
 │       ├── moralisErrors.ts
 │       ├── moralisMapper.ts
 │       └── moralisSchemas.ts
+├── price/
+│   ├── TokenPriceProviderAdapter.ts
+│   ├── PriceProviderRouter.ts
+│   ├── PriceRequestExecutor.ts
+│   └── TokenPriceAggregator.ts
+├── providers/price/
+│   ├── binance/{BinanceAdapter,binanceErrors,binanceMapper,binanceSchemas}.ts
+│   ├── okx/{OkxAdapter,okxErrors,okxMapper,okxSchemas}.ts
+│   ├── coinbase/{CoinbaseAdapter,coinbaseErrors,coinbaseMapper,coinbaseSchemas}.ts
+│   └── geckoterminal/{GeckoTerminalAdapter,geckoTerminalErrors,geckoTerminalMapper,geckoTerminalSchemas}.ts
 └── transport/
     ├── HttpTransport.ts
     └── AxiosHttpTransport.ts
@@ -137,6 +155,10 @@ There is intentionally no shared `utils`, `normalizer`, `base`, or `manager` dir
 | `EvmDataClient` | Construct and expose the SDK | validated client configuration | `address`, `token` services | services, registry, executor composition | provider request logic |
 | `AddressService` | Public address operations | public address request | transaction page or native balance | request validation, executor | retries or provider selection |
 | `TokenService` | Public token operations | public transfer request | ERC-20 transfer page | request validation, executor | provider payload mapping |
+| `TokenPriceAggregator` | Aggregate independent price attempts | normalized token/range request | ordered results/failures | price router, price executor | credentials or cross-provider price merging |
+| `PriceProviderRouter` | Preserve configured price candidates | normalized price request | ordered price adapters | price adapter capabilities | chain routing or retries |
+| `PriceRequestExecutor` | Execute bounded price attempts | adapters and normalized request | aggregation result or typed error | proxy pool, clock, wait, telemetry | credential selection, cache, health probes |
+| `TokenPriceProviderAdapter` | One unauthenticated market-data attempt | price request plus route/time context | normalized price-provider result | local schema/mapper/errors, transport | retries, other providers, keys |
 | `domain/*` | Stable provider-neutral contracts | none or domain values | types and pure validation helpers | Zod where runtime validation is needed | transport/provider knowledge |
 | `ChainRegistry` | Resolve aliases/IDs and routing metadata | `ChainReference`, custom definitions | immutable `ResolvedChain` | built-in chain definitions | remote discovery or API calls |
 | `ProviderRouter` | Filter and order eligible adapters | operation, resolved chain, request features, cursor pin | ordered adapter candidates | adapter capabilities | retry loops or HTTP |
@@ -166,6 +188,8 @@ Construction order is explicit:
 6. Construct service namespaces with the executor.
 
 No constructor makes a network request or starts a timer.
+
+The proxy pool has three explicit configurations: no proxies with direct allowed uses the local route; proxies with direct disallowed is proxy-only; proxies with direct allowed fairly rotates proxy leases and the local direct route. Direct attempts explicitly disable Axios environment proxy discovery.
 
 ## 7. Provider Contract
 
@@ -327,7 +351,7 @@ Pools are instance-local and concurrency-safe. A lease has an internal stable ID
 
 Credential state is scoped to a provider configuration because rate limits may be account-wide, app-wide, key-specific, endpoint-weighted, or chain/community-wide. Rotation is not assumed to increase legal quota.
 
-Proxy state is changed only by transport evidence. A provider 401, logical `NOTOK`, invalid parameter, or account-level 429 does not imply a bad proxy. Direct connection is used only if the caller configures it as an allowed route; the SDK must not silently bypass a required proxy.
+Proxy state is changed only by transport evidence. A provider 401, logical `NOTOK`, invalid parameter, or account-level 429 does not imply a bad proxy. Direct connection follows `requestPolicy.allowDirect` and is never silently used when that policy is false.
 
 ## 13. Provider Designs
 
@@ -410,6 +434,8 @@ Provider timestamps are normalized to ISO UTC. Impossible timestamps produce `IN
 - Error causes may be retained internally, but public serialization and inspection must be redaction-safe.
 - Tests include malicious URLs, encoded credentials, Axios error objects, and provider payload echoes.
 - Provider URL overrides are validated and disabled by default for insecure non-loopback HTTP.
+- Explicit `allowInsecureHttp` is passed from normalized configuration into every built-in adapter so compatible non-loopback test gateways work only when opted in.
+- Public `EvmDataError.cause` values are reduced to safe type/error metadata; raw upstream causes are never exposed through error inspection or JSON serialization.
 - The SDK performs read-only operations and never accepts private keys or signed transactions.
 
 ## 17. Testing Architecture

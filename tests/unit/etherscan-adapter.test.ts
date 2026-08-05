@@ -1,0 +1,186 @@
+import { describe, expect, it } from "vitest";
+
+import { ChainRegistry } from "../../src/chains/ChainRegistry";
+import { parseErc20TransfersRequest, parseNativeBalanceRequest, parseTransactionsRequest } from "../../src/domain/operations";
+import type { ProviderAttemptContext } from "../../src/providers/DataProviderAdapter";
+import { EtherscanAdapter } from "../../src/providers/etherscan/EtherscanAdapter";
+import type { HttpRequest, HttpResponse, HttpTransport } from "../../src/transport/HttpTransport";
+import {
+  etherscanBalanceSuccess,
+  etherscanInvalidKey,
+  etherscanPlanRestricted,
+  etherscanRateLimited,
+  etherscanTokenTransfersSuccess,
+  etherscanTransactionsEmpty,
+  etherscanTransactionsSuccess,
+  etherscanTransactionsVariants,
+  etherscanUnsupportedChain,
+} from "../fixtures/etherscan";
+
+class FixtureTransport implements HttpTransport {
+  readonly requests: HttpRequest[] = [];
+  constructor(private readonly body: unknown, private readonly status = 200, private readonly headers: Record<string, string> = {}) {}
+  async request(request: HttpRequest): Promise<HttpResponse> {
+    this.requests.push(request);
+    return { status: this.status, headers: this.headers, body: this.body };
+  }
+}
+
+function context(overrides: Partial<ProviderAttemptContext> = {}): ProviderAttemptContext {
+  return {
+    chain: new ChainRegistry().resolve("ethereum"),
+    credential: { id: "key-1", value: "secret-key" },
+    proxy: null,
+    timeoutMs: 1_000,
+    correlationId: "test",
+    ...overrides,
+  };
+}
+
+describe("EtherscanAdapter", () => {
+  it("maps transactions, canonicalizes quantities, and preserves fixed page filters", async () => {
+    const transport = new FixtureTransport(etherscanTransactionsSuccess);
+    const adapter = new EtherscanAdapter({ transport });
+    const request = parseTransactionsRequest({
+      chain: "ethereum",
+      address: "0x1111111111111111111111111111111111111111",
+      pageSize: 1,
+      order: "asc",
+      startBlock: "0001",
+      endBlock: "999",
+    });
+
+    const result = await adapter.getTransactions(request, context());
+    expect(result.items[0]).toMatchObject({
+      blockNumber: "123",
+      value: "1000",
+      timestamp: "2023-11-14T22:13:20.000Z",
+      status: "success",
+      to: "0x2222222222222222222222222222222222222222",
+    });
+    expect(result.nextPageState).toEqual({ page: 2 });
+    expect(transport.requests[0]?.params).toMatchObject({
+      module: "account",
+      action: "txlist",
+      chainid: "1",
+      page: 1,
+      offset: 1,
+      sort: "asc",
+      startblock: "1",
+      endblock: "999",
+      apikey: "secret-key",
+    });
+    expect(transport.requests[0]?.url).toBe("https://api.etherscan.io/v2/api");
+  });
+
+  it("treats documented empty transaction responses as successful terminal pages", async () => {
+    const result = await new EtherscanAdapter({ transport: new FixtureTransport(etherscanTransactionsEmpty) })
+      .getTransactions(parseTransactionsRequest({ chain: 1, address: "0x1111111111111111111111111111111111111111" }), context());
+    expect(result.items).toEqual([]);
+    expect(result.nextPageState).toBeNull();
+  });
+
+  it("maps contract creation, reverted status, unknown status, and missing optional fields", async () => {
+    const result = await new EtherscanAdapter({ transport: new FixtureTransport(etherscanTransactionsVariants) })
+      .getTransactions(parseTransactionsRequest({ chain: 1, address: "0x1111111111111111111111111111111111111111", pageSize: 2 }), context());
+    expect(result.items).toHaveLength(2);
+    expect(result.items[0]).toMatchObject({ to: null, status: "reverted", timestamp: null, gasLimit: null });
+    expect(result.items[1]).toMatchObject({ to: null, status: "unknown", timestamp: null });
+    expect(result.nextPageState).toEqual({ page: 2 });
+  });
+
+  it("maps latest native balance using chain metadata", async () => {
+    const result = await new EtherscanAdapter({ transport: new FixtureTransport(etherscanBalanceSuccess) })
+      .getNativeBalance(parseNativeBalanceRequest({ chain: "ethereum", address: "0x1111111111111111111111111111111111111111" }), context());
+    expect(result).toMatchObject({ address: "0x1111111111111111111111111111111111111111", amount: "123", decimals: 18, symbol: "ETH", blockNumber: null });
+  });
+
+  it("filters ERC-20 transfers by direction after mapping", async () => {
+    const transport = new FixtureTransport(etherscanTokenTransfersSuccess);
+    const request = parseErc20TransfersRequest({
+      chain: 1,
+      address: "0x4444444444444444444444444444444444444444",
+      direction: "incoming",
+      pageSize: 1,
+    });
+    const result = await new EtherscanAdapter({ transport }).getErc20Transfers(request, context());
+    expect(result.items[0]).toMatchObject({ amount: "99", tokenDecimals: 18, logIndex: "3" });
+    expect(result.nextPageState).toEqual({ page: 2 });
+    expect(transport.requests[0]?.params).toMatchObject({ action: "tokentx", page: 1, offset: 1, sort: "desc" });
+  });
+
+  it("maps an empty provider token-decimal field to null", async () => {
+    const body = {
+      status: "1",
+      message: "OK",
+      result: [{
+        blockNumber: "1",
+        timeStamp: "",
+        hash: "0xAAA",
+        transactionHash: "0xBBB",
+        logIndex: "0",
+        from: "0x1111111111111111111111111111111111111111",
+        to: "0x2222222222222222222222222222222222222222",
+        contractAddress: "0x5555555555555555555555555555555555555555",
+        value: "1",
+        tokenName: "Token",
+        tokenSymbol: "TOK",
+        tokenDecimal: "",
+      }],
+    };
+    const result = await new EtherscanAdapter({ transport: new FixtureTransport(body) }).getErc20Transfers(
+      parseErc20TransfersRequest({ chain: 1, address: "0x1111111111111111111111111111111111111111" }),
+      context(),
+    );
+    expect(result.items[0]?.tokenDecimals).toBeNull();
+  });
+
+  it.each([
+    [etherscanInvalidKey, "AUTHENTICATION_FAILED"],
+    [etherscanPlanRestricted, "PLAN_RESTRICTED"],
+    [etherscanRateLimited, "RATE_LIMITED"],
+    [etherscanUnsupportedChain, "UNSUPPORTED_CHAIN"],
+  ] as const)("classifies logical envelope %s", async (body, code) => {
+    const result = await new EtherscanAdapter({ transport: new FixtureTransport(body) })
+      .getTransactions(parseTransactionsRequest({ chain: 1, address: "0x1111111111111111111111111111111111111111" }), context())
+      .catch((error: unknown) => error);
+    expect(result).toMatchObject({ code, provider: "etherscan", chainId: 1 });
+  });
+
+  it("classifies selected HTTP failures and honors Retry-After", async () => {
+    const result = await new EtherscanAdapter({
+      transport: new FixtureTransport({ error: true }, 429, { "retry-after": "2" }),
+    })
+      .getTransactions(parseTransactionsRequest({ chain: 1, address: "0x1111111111111111111111111111111111111111" }), context())
+      .catch((error: unknown) => error);
+    expect(result).toMatchObject({ code: "RATE_LIMITED", retryAfterMs: 2_000 });
+  });
+
+  it("classifies HTTP parameter rejection as invalid request", async () => {
+    const result = await new EtherscanAdapter({ transport: new FixtureTransport({ error: "invalid address" }, 400) })
+      .getTransactions(parseTransactionsRequest({ chain: 1, address: "0x1111111111111111111111111111111111111111" }), context())
+      .catch((error: unknown) => error);
+    expect(result).toMatchObject({ code: "INVALID_REQUEST", provider: "etherscan" });
+  });
+
+  it("normalizes transport failures without exposing authenticated request details", async () => {
+    const transport: HttpTransport = {
+      async request() {
+        throw new Error("https://api.etherscan.io/v2/api?apikey=secret-key");
+      },
+    };
+    const result = await new EtherscanAdapter({ transport })
+      .getTransactions(parseTransactionsRequest({ chain: 1, address: "0x1111111111111111111111111111111111111111" }), context())
+      .catch((error: unknown) => error);
+    expect(result).toMatchObject({ code: "PROVIDER_UNAVAILABLE", provider: "etherscan" });
+    expect(JSON.stringify(result)).not.toContain("secret-key");
+  });
+
+  it("rejects malformed successful payloads without leaking credentials", async () => {
+    const result = await new EtherscanAdapter({ transport: new FixtureTransport({ status: "1", message: "OK", result: [{ nope: true, apikey: "secret-key" }] }) })
+      .getTransactions(parseTransactionsRequest({ chain: 1, address: "0x1111111111111111111111111111111111111111" }), context())
+      .catch((error: unknown) => error);
+    expect(result).toMatchObject({ code: "INVALID_PROVIDER_RESPONSE" });
+    expect(JSON.stringify(result)).not.toContain("secret-key");
+  });
+});

@@ -20,9 +20,9 @@ Do not rely on previous conversations or hidden context. The repository document
 
 ## Current Gate
 
-- Current workflow step: Step 3, context handoff.
-- Architecture status: Proposed, awaiting owner approval.
-- Implementation status: Not started.
+- Current workflow step: Step 5, review and refactoring.
+- Architecture status: Accepted by the owner in the current work request.
+- Implementation status: Work Packages 1 through 9 complete; Step 5 review is complete and opt-in live smoke has been run.
 - No production code may be added until the owner explicitly approves the architecture baseline.
 
 ## Mandatory Workflow
