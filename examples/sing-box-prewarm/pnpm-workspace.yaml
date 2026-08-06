@@ -1,0 +1,7 @@
+packages: []
+
+# A GitHub dependency is built from source during installation. pnpm 11 requires
+# the repository identity rather than only its package name for this permission.
+# No transitive package receives blanket approval.
+allowBuilds:
+  "evm-data-sdk@git+https://github.com/xzsean666/EVM-Data-SDK.git": true

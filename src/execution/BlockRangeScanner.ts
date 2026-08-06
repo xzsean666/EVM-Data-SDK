@@ -2,7 +2,7 @@ import type { Erc20BlockRangeResult, Erc20Transfer } from "../domain/models";
 import { EvmDataError, isEvmDataError } from "../domain/errors";
 import type { NormalizedErc20BlockRangeRequest } from "../domain/operations";
 import type { ProviderBlockRangeItem } from "../providers/DataProviderAdapter";
-import type { RequestExecutor } from "./RequestExecutor";
+import type { BlockRangeProviderPin, RequestExecutor } from "./RequestExecutor";
 
 export interface BlockRangeScannerOptions {
   readonly executor: RequestExecutor;
@@ -41,7 +41,7 @@ export class BlockRangeScanner {
     let chainId: number | null = null;
     let upstreamRequests = 0;
     let duplicateItemsRemoved = 0;
-    let providerOffset = 0;
+    let providerPin: BlockRangeProviderPin | undefined;
 
     while (pending.length > 0) {
       if (request.signal?.aborted === true) {
@@ -56,7 +56,7 @@ export class BlockRangeScanner {
 
       let execution;
       try {
-        execution = await this.executor.execute(windowRequest, providerOffset);
+        execution = await this.executor.execute(windowRequest, providerPin);
       } catch (error: unknown) {
         if (isEvmDataError(error) && (error.code === "REQUEST_ABORTED" || error.code === "BLOCK_RANGE_STALLED")) {
           throw error;
@@ -64,7 +64,15 @@ export class BlockRangeScanner {
         throw incomplete(window, completed.length, error);
       }
       upstreamRequests += execution.upstreamRequests;
-      providerOffset += 1;
+      if (providerPin === undefined) {
+        providerPin = execution.providerPin;
+      } else if (
+        execution.providerPin.configurationId !== providerPin.configurationId ||
+        execution.providerPin.provider !== providerPin.provider ||
+        execution.providerPin.chainId !== providerPin.chainId
+      ) {
+        throw stalled(completed.length, "The provider changed after the block-range scan had started.");
+      }
 
       if (!execution.result.complete) {
         if (window.startBlock === window.endBlock) {
@@ -78,6 +86,9 @@ export class BlockRangeScanner {
       }
 
       const provider = execution.result.pageInfo.provider;
+      if (provider !== providerPin.provider || execution.result.pageInfo.chainId !== providerPin.chainId) {
+        throw stalled(completed.length, "The provider returned a result outside the pinned scan provenance.");
+      }
       chainId = execution.result.pageInfo.chainId;
       if (!providers.includes(provider)) providers.push(provider);
       providerWindows[provider] = (providerWindows[provider] ?? 0) + 1;

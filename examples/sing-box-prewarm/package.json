@@ -1,0 +1,16 @@
+{
+  "name": "evm-data-sdk-sing-box-prewarm-example",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@11.20.0",
+  "scripts": {
+    "prewarm:sing-box": "node scripts/prewarm-sing-box.mjs",
+    "start": "node src/index.mjs"
+  },
+  "dependencies": {
+    "evm-data-sdk": "github:xzsean666/EVM-Data-SDK#main"
+  }
+}

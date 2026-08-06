@@ -36,6 +36,31 @@ export interface SingBoxBinaryManagerOptions {
   readonly cacheDir?: string;
 }
 
+/**
+ * Explicitly prepares the fixed, verified sing-box executable for CI, image
+ * builds, or deployment provisioning. It never runs during package install.
+ */
+export interface PrewarmSingBoxOptions {
+  readonly version?: string;
+  readonly binaryPath?: string;
+  readonly cacheDir?: string;
+  readonly signal?: AbortSignal;
+}
+
+/**
+ * Downloads (when needed), verifies, and returns the local path to the pinned
+ * sing-box binary. Set NODE_USE_ENV_PROXY=1 before Node starts when the release
+ * download must use HTTP(S)_PROXY.
+ */
+export async function prewarmSingBox(options: PrewarmSingBoxOptions = {}): Promise<string> {
+  return new SingBoxBinaryManager().resolve({
+    version: options.version ?? SUPPORTED_SING_BOX_VERSION,
+    ...(options.binaryPath === undefined ? {} : { binaryPath: options.binaryPath }),
+    ...(options.cacheDir === undefined ? {} : { cacheDir: options.cacheDir }),
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+  });
+}
+
 /** Resolves only the pinned, checksum-verified sing-box release for this host. */
 export class SingBoxBinaryManager {
   private readonly platform: NodeJS.Platform;

@@ -111,19 +111,19 @@ interface Erc20BlockRangeResult {
   readonly range: BlockRange;
   readonly direction: "incoming" | "outgoing" | "both";
   readonly items: readonly Erc20Transfer[];
-  /** 覆盖本次范围的 provider，按首次完成窗口的顺序去重。 */
+  /** 覆盖本次范围的唯一已锁定 provider。 */
   readonly providers: readonly ProviderName[];
   readonly stats: {
     readonly windows: number;
     readonly upstreamRequests: number;
     readonly duplicateItemsRemoved: number;
-    /** 每个 provider 实际完成的窗口数；不能把多源结果伪装成单一来源。 */
+    /** 已锁定 provider 实际完成的窗口数。 */
     readonly providerWindows: Readonly<Record<string, number>>;
   };
 }
 ```
 
-成功结果必须包含范围内所有满足过滤条件的记录，按 `blockNumber`、`transactionIndex`、`logIndex`、`transactionHash` 的稳定升序排列。公共请求和结果没有 `pageSize`、`nextCursor` 或 provider 原始 cursor；扫描器也不把 cursor/page state 跨窗口保存。若多个 provider 完成了不同窗口，结果必须通过 `providers`、`providerWindows` 和每个 `Erc20Transfer.provider` 明确显示来源。数量、区块号和索引仍然使用十进制字符串。
+成功结果必须包含范围内所有满足过滤条件的记录，按 `blockNumber`、`transactionIndex`、`logIndex`、`transactionHash` 的稳定升序排列。公共请求和结果没有 `pageSize`、`nextCursor` 或 provider 原始 cursor；扫描器也不把 cursor/page state 跨窗口保存。首次有效响应前可以按优先级 fallback；一旦 provider 返回有效窗口（即使该窗口需要拆分），其配置会锁定到扫描结束，后续窗口绝不混用其他 provider。若锁定 provider 中途失败，返回 `BLOCK_RANGE_INCOMPLETE`，而不是以另一 provider 的数据补齐。数量、区块号和索引仍然使用十进制字符串。
 
 为防止无界内存，配置可以提供 `maxRangeRecords`。到达限制时不能静默截断，必须抛出 `RANGE_RESULT_TOO_LARGE`，并报告安全的进度信息；需要真正无限量消费时应在后续里程碑增加 async iterator，而不是返回一个假装完整的数组。
 

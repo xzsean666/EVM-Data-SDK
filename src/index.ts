@@ -64,6 +64,8 @@ export type {
 } from "./domain/models";
 export { EvmDataClient } from "./client/EvmDataClient";
 export type { EvmDataClientOptions } from "./client/EvmDataClient";
+export { prewarmSingBox, SUPPORTED_SING_BOX_VERSION } from "./proxy/SingBoxBinaryManager";
+export type { PrewarmSingBoxOptions } from "./proxy/SingBoxBinaryManager";
 export type { DataProviderAdapter, ProviderAdapterFailure } from "./providers/DataProviderAdapter";
 export type {
   PriceProviderAttemptContext,

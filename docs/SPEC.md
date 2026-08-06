@@ -507,16 +507,19 @@ transfer in the range, sorted deterministically and de-duplicated by the
 provider-neutral transfer identity.
 
 Internally, each eligible provider uses its own bounded maximum page and
-ascending range filter. The scanner keeps a coverage ledger of disjoint closed
-block windows. A response that cannot prove a whole window is terminal causes
-that window to be split and re-requested from new block ranges; it never carries
-a provider cursor/page state into the next window. Windows may use Etherscan,
-Alchemy, or Moralis independently, with each item and aggregate metadata
-showing provenance. A successful result is returned only when the completed
-windows exactly cover the requested interval; otherwise it raises a typed
-incomplete/stalled error and never a falsely complete partial array. An explicit
-record safety limit fails with `RANGE_RESULT_TOO_LARGE` rather than truncating
-data.
+ascending range filter. The first fresh window follows the configured
+capability-aware priority and may use bounded fallback only until one provider
+returns a valid response. That exact provider configuration is then pinned for
+the whole scan: every split closed window is re-requested from that provider
+only, and no provider cursor/page state is carried into the next window. This
+prevents Alchemy page keys, Etherscan pages, and Moralis cursors (or different
+provider snapshots) from being combined into one supposedly complete result.
+If the pinned provider fails mid-scan, the operation raises
+`BLOCK_RANGE_INCOMPLETE` rather than switching sources or returning partial
+data. A successful result is returned only when the completed windows exactly
+cover the requested interval; otherwise it raises a typed incomplete/stalled
+error. An explicit record safety limit fails with `RANGE_RESULT_TOO_LARGE`
+rather than truncating data.
 
 The upgrade does not add global chain event scanning, normal transactions from
 Alchemy asset transfers, arbitrary sing-box configuration, TUN/system routing,

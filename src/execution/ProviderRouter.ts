@@ -95,6 +95,31 @@ export class ProviderRouter {
     }
     return toCandidate(entry, chain);
   }
+
+  /**
+   * Resolve one provider configuration for a block-range scan.  Range scans
+   * must use one provider snapshot for every split window; unlike a first-page
+   * request this method deliberately returns no fallback candidates.
+   */
+  routePinned(
+    request: NormalizedProviderRequest,
+    pin: { readonly configurationId: string; readonly provider: string },
+  ): ProviderCandidate {
+    const chain = this.registry.resolve(request.chain);
+    const entry = this.entries.find(
+      (candidate) => candidate.configurationId === pin.configurationId && candidate.adapter.name === pin.provider,
+    );
+    if (entry === undefined || !supportsRequest(entry.adapter, request, chain, false)) {
+      throw new EvmDataError({
+        code: "BLOCK_RANGE_UNSUPPORTED",
+        message: "The pinned block-range provider is no longer available for this request.",
+        retryable: false,
+        chainId: chain.chainId,
+        provider: pin.provider,
+      });
+    }
+    return toCandidate(entry, chain);
+  }
 }
 
 function supportsRequest(

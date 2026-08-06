@@ -48,6 +48,14 @@ type MappedProviderResult = ExecutorResult | ProviderBlockRangeWindowResult;
 export interface BlockRangeWindowExecution {
   readonly result: ProviderBlockRangeWindowResult;
   readonly upstreamRequests: number;
+  /** Exact provider configuration selected for the scan. */
+  readonly providerPin: BlockRangeProviderPin;
+}
+
+export interface BlockRangeProviderPin {
+  readonly configurationId: string;
+  readonly provider: string;
+  readonly chainId: number;
 }
 
 const PROVIDER_FAILURE_THRESHOLD = 2;
@@ -101,11 +109,11 @@ export class RequestExecutor {
   execute(request: import("../domain/operations").NormalizedErc20TransfersRequest): Promise<Page<Erc20Transfer>>;
   execute(
     request: import("../domain/operations").NormalizedErc20BlockRangeRequest,
-    providerOffset?: number,
+    providerPin?: BlockRangeProviderPin,
   ): Promise<BlockRangeWindowExecution>;
   async execute(
     request: NormalizedProviderRequest,
-    providerOffset = 0,
+    providerPin?: BlockRangeProviderPin,
   ): Promise<ExecutorResult | BlockRangeWindowExecution> {
     this.advancedProxyRoute?.assertReady();
     if (request.signal?.aborted === true) {
@@ -116,8 +124,8 @@ export class RequestExecutor {
     const routedCandidates = identity === null
       ? this.router.route(request)
       : [this.router.routeContinuation(request, identity)];
-    const candidates = request.operation === "getErc20TransfersByBlockRange"
-      ? rotateCandidates(routedCandidates, providerOffset)
+    const candidates = request.operation === "getErc20TransfersByBlockRange" && providerPin !== undefined
+      ? [this.router.routePinned(request, providerPin)]
       : routedCandidates;
     const deadline = this.clock.now() + this.requestPolicy.totalTimeoutMs;
     const executionId = ++this.nextExecutionId;
@@ -265,12 +273,15 @@ export class RequestExecutor {
               throw invalidProviderResponse(candidate);
             }
             const result = mapped;
-            if (!result.complete && candidateIndex + 1 < candidates.length && attempt < this.requestPolicy.maxTotalAttempts) {
-              candidateIndex += 1;
-              useNextCandidate = true;
-              break;
-            }
-            return { result, upstreamRequests: attempt };
+            return {
+              result,
+              upstreamRequests: attempt,
+              providerPin: {
+                configurationId: candidate.configurationId,
+                provider: candidate.adapter.name,
+                chainId: candidate.chain.chainId,
+              },
+            };
           }
           return mapped as ExecutorResult;
         } catch (error: unknown) {
@@ -807,16 +818,6 @@ function isProviderBlockRangeWindowResult(value: unknown): value is ProviderBloc
     "provider" in pageInfo &&
     typeof pageInfo.chainId === "number" &&
     typeof pageInfo.provider === "string";
-}
-
-function rotateCandidates(candidates: readonly ProviderCandidate[], offset: number): readonly ProviderCandidate[] {
-  if (candidates.length < 2) {
-    return candidates;
-  }
-  const normalizedOffset = ((Math.trunc(offset) % candidates.length) + candidates.length) % candidates.length;
-  return normalizedOffset === 0
-    ? candidates
-    : Object.freeze([...candidates.slice(normalizedOffset), ...candidates.slice(0, normalizedOffset)]);
 }
 
 function invalidProviderResponse(candidate: ProviderCandidate): EvmDataError {

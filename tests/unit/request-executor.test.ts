@@ -4,14 +4,14 @@ import { ChainRegistry } from "../../src/chains/ChainRegistry";
 import { EvmDataError } from "../../src/domain/errors";
 import type { NormalizedRequestPolicy } from "../../src/domain/configuration";
 import type { NativeBalance } from "../../src/domain/models";
-import { normalizeNativeBalanceRequest, normalizeTransactionsRequest } from "../../src/domain/operations";
+import { normalizeErc20BlockRangeRequest, normalizeNativeBalanceRequest, normalizeTransactionsRequest } from "../../src/domain/operations";
 import { ProviderRouter } from "../../src/execution/ProviderRouter";
 import { RequestExecutor } from "../../src/execution/RequestExecutor";
 import { CredentialPool } from "../../src/execution/CredentialPool";
 import { ProxyPool } from "../../src/execution/ProxyPool";
 import { queryFingerprint, encodeCursor } from "../../src/execution/cursorCodec";
 import type { Clock, RandomSource, WaitFunction } from "../../src/execution/clock";
-import type { DataProviderAdapter, ProviderAttemptContext } from "../../src/providers/DataProviderAdapter";
+import type { DataProviderAdapter, ProviderAttemptContext, ProviderBlockRangeWindowResult } from "../../src/providers/DataProviderAdapter";
 
 const address = "0x1234567890abcdef1234567890abcdef12345678";
 
@@ -189,6 +189,47 @@ describe("RequestExecutor", () => {
 
     await expect(executor(router, { requestPolicy: policy({ maxTotalAttempts: 1 }) }).execute(request))
       .rejects.toMatchObject({ code: "NETWORK_ERROR" });
+    expect(fallbackCalls).toBe(0);
+  });
+
+  it("pins a block-range scan to the first provider response, including an incomplete window", async () => {
+    let fallbackCalls = 0;
+    const incomplete: DataProviderAdapter = {
+      name: "alchemy",
+      supports: ({ operation }) => operation === "getErc20TransfersByBlockRange",
+      getErc20TransfersByBlockRangeWindow: async (): Promise<ProviderBlockRangeWindowResult> => ({
+        items: [],
+        complete: false,
+        pageInfo: { provider: "alchemy", chainId: 1 },
+      }),
+    };
+    const fallback: DataProviderAdapter = {
+      name: "etherscan",
+      supports: ({ operation }) => operation === "getErc20TransfersByBlockRange",
+      getErc20TransfersByBlockRangeWindow: async (): Promise<ProviderBlockRangeWindowResult> => {
+        fallbackCalls += 1;
+        return {
+          items: [],
+          complete: true,
+          pageInfo: { provider: "etherscan", chainId: 1 },
+        };
+      },
+    };
+    const router = new ProviderRouter(new ChainRegistry(), [
+      { configurationId: "alchemy-primary", adapter: incomplete },
+      { configurationId: "etherscan-fallback", adapter: fallback },
+    ]);
+
+    const result = await executor(router).execute(normalizeErc20BlockRangeRequest({
+      chain: 1,
+      address,
+      startBlock: "100",
+      endBlock: "200",
+    }));
+
+    expect(result.result.complete).toBe(false);
+    expect(result.result.pageInfo.provider).toBe("alchemy");
+    expect(result.providerPin).toEqual({ configurationId: "alchemy-primary", provider: "alchemy", chainId: 1 });
     expect(fallbackCalls).toBe(0);
   });
 

@@ -23,6 +23,7 @@
     }
   },
   "scripts": {
+    "prepare": "pnpm build",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --no-warn-ignored",
     "test": "vitest run",

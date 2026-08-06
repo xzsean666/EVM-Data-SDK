@@ -10,18 +10,18 @@ import type { ProviderBlockRangeWindowResult } from "../../src/providers/DataPro
 const address = "0x1111111111111111111111111111111111111111";
 
 describe("BlockRangeScanner", () => {
-  it("splits incomplete closed windows, rotates providers between windows, and sorts completed records", async () => {
-    const requests: { startBlock: string; endBlock: string; providerOffset: number }[] = [];
+  it("pins the first successful provider across split closed windows and sorts completed records", async () => {
+    const requests: { startBlock: string; endBlock: string; providerPin: string | null }[] = [];
     const executor = {
-      execute: async (request: { startBlock: string; endBlock: string }, providerOffset = 0) => {
-        requests.push({ startBlock: request.startBlock, endBlock: request.endBlock, providerOffset });
+      execute: async (request: { startBlock: string; endBlock: string }, providerPin?: { provider: string }) => {
+        requests.push({ startBlock: request.startBlock, endBlock: request.endBlock, providerPin: providerPin?.provider ?? null });
         if (request.startBlock === "10" && request.endBlock === "13") {
           return execution([], false, "alchemy");
         }
         if (request.startBlock === "10") {
-          return execution([item("11", "2", "4", "etherscan")], true, "etherscan");
+          return execution([item("11", "2", "4", "alchemy")], true, "alchemy");
         }
-        return execution([item("12", "1", "3", "moralis")], true, "moralis", 2);
+        return execution([item("12", "1", "3", "alchemy")], true, "alchemy", 2);
       },
     } as unknown as RequestExecutor;
     const scanner = new BlockRangeScanner({ executor, maxRangeRecords: 10, maxRangeWindows: 10 });
@@ -29,16 +29,16 @@ describe("BlockRangeScanner", () => {
     const result = await scanner.scan(request("10", "13"));
 
     expect(requests).toEqual([
-      { startBlock: "10", endBlock: "13", providerOffset: 0 },
-      { startBlock: "10", endBlock: "11", providerOffset: 1 },
-      { startBlock: "12", endBlock: "13", providerOffset: 2 },
+      { startBlock: "10", endBlock: "13", providerPin: null },
+      { startBlock: "10", endBlock: "11", providerPin: "alchemy" },
+      { startBlock: "12", endBlock: "13", providerPin: "alchemy" },
     ]);
-    expect(result.providers).toEqual(["etherscan", "moralis"]);
+    expect(result.providers).toEqual(["alchemy"]);
     expect(result.stats).toEqual({
       windows: 2,
       upstreamRequests: 4,
       duplicateItemsRemoved: 0,
-      providerWindows: { etherscan: 1, moralis: 1 },
+      providerWindows: { alchemy: 2 },
     });
     expect(result.items.map((value) => value.blockNumber)).toEqual(["11", "12"]);
   });
@@ -149,9 +149,10 @@ function execution(
   complete: boolean,
   provider: Erc20Transfer["provider"],
   upstreamRequests = 1,
-): { result: ProviderBlockRangeWindowResult; upstreamRequests: number } {
+): { result: ProviderBlockRangeWindowResult; upstreamRequests: number; providerPin: { configurationId: string; provider: Erc20Transfer["provider"]; chainId: number } } {
   return {
     result: { items, complete, pageInfo: { provider, chainId: 1 } },
     upstreamRequests,
+    providerPin: { configurationId: provider + "-config", provider, chainId: 1 },
   };
 }
