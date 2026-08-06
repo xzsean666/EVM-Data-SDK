@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { ChainRegistry } from "../../src/chains/ChainRegistry";
-import { normalizeErc20TransfersRequest, normalizeNativeBalanceRequest } from "../../src/domain/operations";
+import { normalizeErc20TransfersRequest, normalizeNativeBalanceRequest, normalizeTransactionsRequest } from "../../src/domain/operations";
 import type { CursorIdentity } from "../../src/domain/pagination";
 import type { DataProviderAdapter } from "../../src/providers/DataProviderAdapter";
+import { AlchemyAdapter } from "../../src/providers/alchemy/AlchemyAdapter";
+import { EtherscanAdapter } from "../../src/providers/etherscan/EtherscanAdapter";
+import { MoralisAdapter } from "../../src/providers/moralis/MoralisAdapter";
 import { ProviderRouter } from "../../src/execution/ProviderRouter";
 import { queryFingerprint } from "../../src/execution/cursorCodec";
 
@@ -74,6 +77,40 @@ describe("ProviderRouter", () => {
     expect(() => router.route(both)).toThrowError(
       expect.objectContaining({ code: "UNSUPPORTED_OPERATION" }),
     );
+  });
+
+  it("filters list providers by their page-size capacity and forces Etherscan in full-data mode", () => {
+    const router = new ProviderRouter(new ChainRegistry(), [
+      { configurationId: "moralis-main", adapter: new MoralisAdapter() },
+      { configurationId: "alchemy-main", adapter: new AlchemyAdapter() },
+      { configurationId: "etherscan-main", adapter: new EtherscanAdapter() },
+    ]);
+
+    const atOneThousand = normalizeErc20TransfersRequest({
+      chain: 1,
+      address,
+      direction: "incoming",
+      pageSize: 1_000,
+    });
+    const aboveAlchemy = normalizeErc20TransfersRequest({
+      chain: 1,
+      address,
+      direction: "incoming",
+      pageSize: 1_001,
+    });
+    const highTransactionPage = normalizeTransactionsRequest({ chain: 1, address, pageSize: 10_000 });
+    const fullData = normalizeErc20TransfersRequest({
+      chain: 1,
+      address,
+      direction: "incoming",
+      pageSize: 50,
+      fullData: true,
+    });
+
+    expect(router.route(atOneThousand).map((candidate) => candidate.adapter.name)).toEqual(["alchemy", "etherscan"]);
+    expect(router.route(aboveAlchemy).map((candidate) => candidate.adapter.name)).toEqual(["etherscan"]);
+    expect(router.route(highTransactionPage).map((candidate) => candidate.adapter.name)).toEqual(["etherscan"]);
+    expect(router.route(fullData).map((candidate) => candidate.adapter.name)).toEqual(["etherscan"]);
   });
 
   it("pins continuation to the original provider configuration", () => {

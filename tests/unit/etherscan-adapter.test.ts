@@ -38,6 +38,12 @@ function context(overrides: Partial<ProviderAttemptContext> = {}): ProviderAttem
 }
 
 describe("EtherscanAdapter", () => {
+  it("supports list pages through 10,000 records", () => {
+    const adapter = new EtherscanAdapter({ transport: new FixtureTransport(etherscanTransactionsSuccess) });
+    const chain = new ChainRegistry().resolve("ethereum");
+    expect(adapter.supports({ operation: "getTransactions", chain, request: parseTransactionsRequest({ chain: 1, address: "0x1111111111111111111111111111111111111111", pageSize: 10_000 }), continuation: false })).toBe(true);
+  });
+
   it("maps transactions, canonicalizes quantities, and preserves fixed page filters", async () => {
     const transport = new FixtureTransport(etherscanTransactionsSuccess);
     const adapter = new EtherscanAdapter({ transport });

@@ -22,6 +22,8 @@ for (const [kind, values] of available) {
   await exerciseProvider(kind, values);
 }
 
+await exercisePageCapacity();
+
 if (proxyUrl !== null) {
   for (const kind of ["etherscan", "alchemy", "moralis"]) {
     if (keys[kind]?.length > 0) await exerciseProxyModes(kind, keys[kind], proxyUrl);
@@ -76,7 +78,16 @@ async function exerciseProvider(kind, apiKeys) {
       endBlock: "99999999",
       ...(cursor === null ? {} : { cursor }),
     }));
-    await report(kind, "erc20TransfersBothCapability", () => client.token.getErc20Transfers({ chain: "ethereum", address, direction: "both" }));
+    await reportPaged(kind, "erc20TransfersBothBlockRange", (cursor) => client.token.getErc20Transfers({
+      chain: "ethereum",
+      address,
+      direction: "both",
+      pageSize: 5,
+      order: "desc",
+      startBlock: "0",
+      endBlock: "99999999",
+      ...(cursor === null ? {} : { cursor }),
+    }));
   }
 }
 
@@ -95,6 +106,35 @@ async function exerciseProxyModes(kind, apiKeys, proxy) {
   });
   await report(kind, "mixedRouteBalance1", () => mixed.address.getNativeBalance({ chain: "ethereum", address }));
   await report(kind, "mixedRouteBalance2", () => mixed.address.getNativeBalance({ chain: "ethereum", address }));
+}
+
+async function exercisePageCapacity() {
+  if (keys.alchemy.length > 0) {
+    const alchemy = new EvmDataClient({
+      providers: [{ kind: "alchemy", apiKeys: keys.alchemy }],
+      requestPolicy: { maxTotalAttempts: 1, attemptTimeoutMs: 45_000, totalTimeoutMs: 60_000 },
+    });
+    await report("alchemy", "pageSize1000IncomingTransfers", () => alchemy.token.getErc20Transfers({
+      chain: "ethereum",
+      address,
+      direction: "incoming",
+      pageSize: 1_000,
+      order: "desc",
+    }));
+  }
+
+  if (keys.etherscan.length > 0) {
+    const etherscan = new EvmDataClient({
+      providers: [{ kind: "etherscan", apiKeys: keys.etherscan }],
+      requestPolicy: { maxTotalAttempts: 1, attemptTimeoutMs: 45_000, totalTimeoutMs: 60_000 },
+    });
+    await report("etherscan", "fullDataTransactions", () => etherscan.address.getTransactions({
+      chain: "ethereum",
+      address,
+      fullData: true,
+      order: "desc",
+    }));
+  }
 }
 
 async function report(provider, operation, action) {

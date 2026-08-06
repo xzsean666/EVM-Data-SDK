@@ -4,7 +4,7 @@ Version: 0.2.0
 
 Status: v0.1 accepted; v0.2 token price aggregation implemented
 
-Last verified: 2026-08-05
+Last verified: 2026-08-06
 
 ## 1. Purpose
 
@@ -74,10 +74,10 @@ Custom chain definitions may be supplied in configuration. They must include a u
 | --- | --- | --- | --- |
 | Normal address transactions | yes: `account/txlist` | no: asset transfers are not complete transactions | yes: raw wallet transactions |
 | Latest native balance | yes: `account/balance` | yes: `eth_getBalance` | yes: native balance |
-| ERC-20 transfers, both directions | yes | no in v0.1 | yes |
+| ERC-20 transfers, both directions | yes | yes: bounded two-stream `alchemy_getAssetTransfers` merge | yes |
 | ERC-20 transfers, incoming or outgoing | yes, with SDK-side filtering | yes: `alchemy_getAssetTransfers` | yes, with SDK-side filtering |
 
-The router must evaluate request features, not only method names. For example, Alchemy is eligible for a directional ERC-20 transfer request but not for `direction: "both"` in v0.1. Implementing a correct two-stream Alchemy merge cursor is deferred rather than exposing unstable pagination.
+The router must evaluate request features, not only method names. Alchemy is eligible for an ERC-20 request in every direction through 1,000 records; `direction: "both"` is a bounded merge of Alchemy's independent incoming and outgoing streams. Alchemy remains ineligible for normal transaction history because asset transfers are not complete transactions.
 
 ### 2.4 Meaning of the operations
 
@@ -91,8 +91,10 @@ The router must evaluate request features, not only method names. For example, A
 
 ### 2.5 Request normalization
 
-- List requests default to `pageSize: 50` and `order: "desc"`. Accepted page sizes are integers from 1 through 100.
+- List requests default to `pageSize: 50` and `order: "desc"`. Accepted page sizes are integers from 1 through 10,000. Provider eligibility is page-size-aware: Moralis accepts 1–100, Alchemy accepts 1–1,000 for ERC-20 operations, and Etherscan accepts 1–10,000 for list operations.
+- `fullData: true` is available on list requests. It forces the request (and every retry) to Etherscan, because Etherscan has the largest supported page capacity. When `pageSize` is omitted in this mode, it uses 10,000. The name does **not** mean that one SDK call aggregates every historical record: the result remains one Etherscan page and callers must follow `nextCursor` until it is `null`.
 - ERC-20 transfer requests default to `direction: "both"` and may specify one structurally valid `tokenAddress`.
+- For Alchemy `direction: "both"`, `pageSize` is applied to each upstream stream. One SDK page returns the complete de-duplicated union of those two upstream pages, so it may contain up to `2 × pageSize` transfers. A self-transfer is assigned to outgoing only, so it cannot be repeated when the independent stream cursors advance at different rates. Its next cursor contains only the two Alchemy continuation states.
 - Optional `startBlock` and `endBlock` filters are decimal strings. They are normalized without leading zeroes, and `startBlock` must not exceed `endBlock`.
 - Addresses are structurally validated as 20-byte `0x` hexadecimal strings and normalized to lowercase. No checksum validation is performed in v0.1.
 - Input aliases are trimmed and normalized to lowercase before chain resolution. An opaque continuation cursor is retained byte-for-byte for the cursor codec to validate in Work Package 4.
@@ -251,6 +253,8 @@ The client must validate configuration during construction and fail before any n
 ### FR-002 Provider selection
 
 The router must select providers in caller-configured priority order after filtering by chain, operation, and request features. It must return `UNSUPPORTED_OPERATION` without a network call when no provider is eligible.
+
+For list requests, page size is an exact capability feature. A request for 1,000 records may route only to eligible Alchemy and Etherscan adapters (Alchemy remains limited to ERC-20 transfers); a request for 1,001 through 10,000 records may route only to Etherscan. `fullData: true` limits candidates to Etherscan even when a smaller page size was explicitly supplied. Eligible candidates remain ordered by the caller's provider configuration and are tried serially under the existing bounded fallback policy.
 
 ### FR-003 Provider fallback
 
@@ -432,9 +436,9 @@ A caller requests Ethereum transactions. Etherscan returns page one and an SDK c
 
 The caller uses `chain: "bsc"`. The SDK resolves chain ID 56 and calls `https://api.etherscan.io/v2/api?chainid=56...`; it does not call the legacy BscScan V1 API domain. A free-plan restriction is classified as `PLAN_RESTRICTED` and may trigger fallback to another eligible provider.
 
-### Directional transfer query
+### ERC-20 transfer query
 
-A caller requests incoming ERC-20 transfers. Alchemy is eligible because the direction maps to one `alchemy_getAssetTransfers` stream. For `direction: "both"`, Alchemy is filtered out in v0.1.
+A caller requests ERC-20 transfers. Alchemy is eligible for incoming or outgoing because each maps to one `alchemy_getAssetTransfers` stream. For `direction: "both"`, it fetches one page for each stream, returns their complete de-duplicated union, and pins the continuation cursor to those two Alchemy streams.
 
 ### Cancellation
 

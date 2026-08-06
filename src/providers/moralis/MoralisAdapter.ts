@@ -29,6 +29,7 @@ import {
 } from "./moralisMapper";
 
 export const MORALIS_V2_BASE_URL = "https://deep-index.moralis.io/api/v2.2";
+export const MORALIS_MAX_PAGE_SIZE = 100;
 
 export interface MoralisAdapterOptions {
   readonly transport?: HttpTransport;
@@ -52,11 +53,9 @@ export class MoralisAdapter implements DataProviderAdapter {
   }
 
   supports(request: CapabilityRequest): boolean {
-    return request.chain.routes.moralis !== undefined && (
-      request.operation === "getTransactions" ||
-      request.operation === "getNativeBalance" ||
-      request.operation === "getErc20Transfers"
-    );
+    if (request.chain.routes.moralis === undefined) return false;
+    if (request.operation === "getNativeBalance") return true;
+    return "pageSize" in request.request && request.request.pageSize <= MORALIS_MAX_PAGE_SIZE;
   }
 
   async getTransactions(

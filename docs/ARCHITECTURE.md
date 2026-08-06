@@ -4,7 +4,7 @@ Version: 0.2.0
 
 Status: v0.1 accepted; v0.2 token price aggregation implemented
 
-Last verified: 2026-08-05
+Last verified: 2026-08-06
 
 ## 1. Architecture Goals
 
@@ -218,7 +218,7 @@ interface DataProviderAdapter {
 }
 ```
 
-`supports` evaluates the exact operation, chain routing metadata, and request features. The router also verifies that the corresponding method exists. An adapter method performs one upstream attempt with the already selected credential and proxy. It must not select another credential, sleep, retry, or call another provider.
+`supports` evaluates the exact operation, chain routing metadata, and request features, including a list request's `pageSize`. The router also verifies that the corresponding method exists and centrally restricts `fullData: true` list requests to Etherscan. An adapter method normally performs one upstream attempt with the already selected credential and proxy. The explicit exception is Alchemy `direction: "both"`: one bounded composite attempt issues independent incoming and outgoing requests, then merges their complete pages. It must not select another credential, sleep, retry, or call another provider.
 
 `ProviderAttemptContext` contains the resolved chain route, a credential lease value, optional proxy lease, attempt timeout, caller signal, and a generated correlation ID. It is internal and must never be stored in a cursor.
 
@@ -307,7 +307,10 @@ Provider paging state is local to each adapter:
 
 - Etherscan: next page number and fixed offset/sort/block range.
 - Moralis: provider cursor; the initial page size cannot change on continuation.
-- Alchemy directional transfers: `pageKey`, direction, and fixed query fields.
+- Alchemy incoming/outgoing transfers: `pageKey`, direction, and fixed query fields.
+- Alchemy both-direction transfers: two stream states (`incoming` and `outgoing`), each containing only a page key and exhausted state; the cursor contains no transfer items. A self-transfer is emitted from outgoing only, keeping the streams disjoint across continuations.
+
+The fingerprint also contains `fullData`, so a normal Etherscan cursor cannot be reused to enter Etherscan-only mode (or vice versa). `fullData` does not add an unbounded in-SDK aggregation loop; it is a provider-selection and default-page-size mode.
 
 The query fingerprint is a deterministic hash of normalized semantic filters, excluding `cursor`, `signal`, timeouts, credentials, and provider choice.
 
@@ -364,6 +367,7 @@ Proxy state is changed only by transport evidence. A provider 401, logical `NOTO
 - Native balance: `module=account&action=balance`.
 - ERC-20 transfers: `module=account&action=tokentx`.
 - Pagination: page/offset, fixed query filters and sort.
+- List page capacity: 1–10,000 records. This is the only built-in list adapter eligible above 1,000 records and is the exclusive `fullData` adapter.
 - Special handling: an endpoint-specific no-results response is a successful empty page; other `status: "0"` values are classified errors.
 - Plan behavior: BNB Smart Chain, Base, and OP access can require a paid tier even though the chain is supported.
 
@@ -374,12 +378,13 @@ The adapter does not use legacy per-explorer V1 API hosts or explorer-specific A
 - Base API: network-specific HTTPS endpoint, for example `https://eth-mainnet.g.alchemy.com/v2`.
 - Chain selection: the chain registry supplies the network URL prefix.
 - Native balance: JSON-RPC `eth_getBalance` at `latest`.
-- ERC-20 transfers: JSON-RPC `alchemy_getAssetTransfers` with category `erc20`, one `fromAddress` or `toAddress`, and a single directional stream.
-- Pagination: `pageKey` for directional transfers.
+- ERC-20 transfers: JSON-RPC `alchemy_getAssetTransfers` with category `erc20`. Incoming and outgoing use one `toAddress` or `fromAddress`; both-direction requests make one bounded request to each stream and merge their results.
+- Pagination: a single direction stores one `pageKey`; both direction stores two page keys and terminal flags. A continuation stays pinned to Alchemy and replays only its own two stream states; it never accepts an Etherscan or Moralis cursor.
+- ERC-20 list page capacity: 1–1,000 per upstream stream (`maxCount` defaults to `0x3e8`). A both-direction adapter attempt makes two calls and returns their complete de-duplicated union, so a public page can contain up to 2,000 transfers.
 - Authentication: `Authorization: Bearer <api-key>` header, keeping the key out of request URLs.
 - Throughput: account-level compute units over a rolling window, so request count alone is not a correct model.
 
-Alchemy does not implement `getTransactions` in v0.1. `alchemy_getAssetTransfers` is not a complete normal transaction history and must not be mapped as one. `direction: "both"` ERC-20 pagination is also unsupported until a correct ordered two-stream cursor is designed and tested.
+Alchemy does not implement `getTransactions` in v0.1. `alchemy_getAssetTransfers` is not a complete normal transaction history and must not be mapped as one. Both-direction ERC-20 pagination is a bounded, adapter-local merge of the documented incoming and outgoing streams; it has no cross-provider continuation or fallback after the first page.
 
 ### 13.3 Moralis
 
@@ -390,6 +395,7 @@ Alchemy does not implement `getTransactions` in v0.1. `alchemy_getAssetTransfers
 - Native balance: `GET /{address}/balance`.
 - ERC-20 transfers: `GET /{address}/erc20/transfers`.
 - Pagination: provider cursor with fixed initial limit and point-in-time behavior where supported.
+- List page capacity: 1–100 records.
 - Rate behavior: request throughput over a rolling four-second window; endpoint costs and plan rules can evolve.
 
 The adapter maps raw integer fields and does not use provider-formatted decimal values as the source of truth.

@@ -4,7 +4,7 @@ Version: 0.2.0
 
 Status: v0.1 accepted; v0.2 price integrations verified
 
-Last verified against official sources: 2026-08-05
+Last verified against official sources: 2026-08-06
 
 External APIs and package behavior change independently of this SDK. Before changing an adapter or upgrading a major dependency, recheck the linked official documentation and update this file first.
 
@@ -91,6 +91,7 @@ Important notes: Name-only input is resolved from search-pool relationships with
 - Some chains have shared community quotas. Rotating caller keys or proxies does not reliably or appropriately bypass an account/chain quota.
 - Etherscan can return HTTP 200 with logical errors in `status`, `message`, and `result`. Endpoint-specific no-result responses must be separated from failures.
 - Etherscan recommends page/offset and bounded block ranges. Large ranges may return query timeouts.
+- The V2 endpoint describes `offset` as records per page. SDK capability tests and the owner-requested live verification use the conservative 1–10,000 range; requests above 10,000 are rejected before network work. A 10,000-record page is still a page, not an all-history response.
 - The SDK adapter sends `page`, `offset`, `sort`, and optional `startblock`/`endblock` on every list attempt; continuation state contains only the next page number.
 - ERC-20 direction filtering is applied after the provider page is mapped. Provider page fullness, rather than filtered item count, determines whether another page is requested.
 - Successful payloads are validated with provider-local schemas. Missing optional fields map to `null`; decimal quantities are canonicalized and timestamps are converted from Unix seconds to ISO UTC.
@@ -115,7 +116,7 @@ Important notes: Name-only input is resolved from search-pool relationships with
 - Best practices: https://www.alchemy.com/docs/best-practices-when-using-alchemy
 - Header authentication: https://www.alchemy.com/docs/how-to-use-api-keys-in-http-headers
 
-**Purpose in the SDK:** latest native balance and directional ERC-20 transfer queries.
+**Purpose in the SDK:** latest native balance and ERC-20 transfer queries in every public direction.
 
 **Base endpoint:** network-specific, for example `https://eth-mainnet.g.alchemy.com/v2`.
 
@@ -126,13 +127,14 @@ Important notes: Name-only input is resolved from search-pool relationships with
 - Network hosts differ by chain. The chain registry owns the mapping, for example `eth-mainnet`, `bnb-mainnet`, `polygon-mainnet`, `arb-mainnet`, `base-mainnet`, and `opt-mainnet` where supported.
 - `eth_getBalance` returns a hexadecimal wei quantity and costs compute units.
 - `alchemy_getAssetTransfers` returns asset transfers and an optional `pageKey`; it is not a complete normal transaction history.
-- A wallet-wide both-directions transfer query requires two ordered streams (`fromAddress` and `toAddress`). Correct bounded merging needs additional cursor design, so Alchemy supports only explicit incoming or outgoing ERC-20 requests in v0.1.
+- A wallet-wide both-directions transfer query requires two independent streams (`fromAddress` and `toAddress`). The SDK requests both with the same fixed filters, combines the complete returned pages by block number and Alchemy `uniqueId`, and assigns self-transfers to the outgoing stream only so they cannot repeat across separately paged streams. `maxCount` applies independently to each stream, so one public response can contain up to twice the requested size. Its cursor contains the two Alchemy page keys and terminal flags only; it never contains transfers, API keys, or another provider's cursor. Alchemy documents an absent or blank `pageKey` as terminal; the adapter treats both forms as no continuation.
+- `maxCount` defaults to `0x3e8` (1,000). The SDK therefore makes Alchemy ineligible for ERC-20 transfer requests above 1,000 rather than sending an upstream-over-limit request.
 - Internal transfer data and metadata support vary by chain. v0.1 uses only the ERC-20 category needed by its contract.
 - At verification time, throughput was account-level CU/s over a 10-second rolling token-bucket window. Different methods have different CU weights; `alchemy_getAssetTransfers` documented 120 CUs and `eth_getBalance` documented 20 CUs.
 - HTTP 429 and JSON-RPC error envelopes must both be classified. Honor `Retry-After` when present and use bounded exponential backoff with jitter.
 - Alchemy recommends HTTPS for request/response methods and batches below 50. v0.1 does not batch provider calls.
 - Authorization headers and any legacy URL key form must be redacted.
-- The adapter sends JSON-RPC requests to the registry's network-specific `/v2` endpoint with `Authorization: Bearer`; API keys never enter endpoint URLs. It maps `eth_getBalance` hexadecimal wei values and directional `alchemy_getAssetTransfers` ERC-20 pages with `pageKey` continuation.
+- The adapter sends JSON-RPC requests to the registry's network-specific `/v2` endpoint with `Authorization: Bearer`; API keys never enter endpoint URLs. It maps `eth_getBalance` hexadecimal wei values and `alchemy_getAssetTransfers` ERC-20 pages with one single-stream or two both-direction `pageKey` continuations.
 
 ## 3. Moralis
 
@@ -163,6 +165,7 @@ Important notes: Name-only input is resolved from search-pool relationships with
 - The raw wallet transactions endpoint `GET /{address}` aligns with v0.1 transaction semantics better than the enriched `GET /wallets/{address}/history` activity feed.
 - Native balance is `GET /{address}/balance`; ERC-20 wallet transfers are `GET /{address}/erc20/transfers`.
 - Moralis list endpoints use cursor pagination. Documentation states that limit is set on the initial request and cannot change mid-pagination, and that cursors represent a stable snapshot where supported.
+- Wallet transaction and ERC-20 transfer `limit` values are limited by the SDK to 1–100. Larger public list pages are made ineligible before a Moralis request is attempted.
 - At verification time, rate limits used a rolling four-second window. Published request throughput was 40 requests/s for Free and Starter, 80 for Pro, 200 for Business, and custom for Enterprise. Plans and endpoint compute costs may change and are not hardcoded defaults.
 - HTTP 400, 401, 404, 425, 429, and 500 have conventional meanings, but 404 must be interpreted per endpoint rather than globally converted to an empty result. Moralis 425 responses are treated as transient provider unavailability and remain retryable.
 - Prefer raw integer fields over formatted decimal fields when mapping public amounts.

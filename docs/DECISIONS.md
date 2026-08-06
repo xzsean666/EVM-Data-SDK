@@ -160,17 +160,17 @@ The owner approved the architecture baseline in the 2026-08-05 implementation re
 
 ## ADR-012: Alchemy has partial v0.1 capabilities
 
-**Status:** Accepted
+**Status:** Superseded by ADR-022
 
 **Date:** 2026-08-05
 
-**Decision:** Use Alchemy for latest native balance and single-direction ERC-20 transfers. Do not use it for normal transaction history or both-direction transfer pagination in v0.1.
+**Decision:** Historical decision: use Alchemy for latest native balance and single-direction ERC-20 transfers. Do not use it for normal transaction history or both-direction transfer pagination in v0.1.
 
 **Reason:** `alchemy_getAssetTransfers` is an asset activity stream, not a complete transaction envelope list. A both-direction wallet query requires a correct ordered merge of two cursor streams.
 
 **Alternatives considered:** Map transfers to transactions with missing fields; hydrate each hash with N+1 JSON-RPC calls; merge two streams with an unbounded cursor buffer.
 
-**Trade-offs:** Alchemy provides less v0.1 fallback coverage. The public contract remains honest and can add a composite cursor later through a separate decision.
+**Trade-offs:** Superseded: ADR-022 adds the bounded composite cursor while preserving the restriction on normal transaction history.
 
 ## ADR-013: Axios transport with explicit proxy control
 
@@ -283,6 +283,34 @@ The owner approved the architecture baseline in the 2026-08-05 implementation re
 **Alternatives considered:** Provider-local day boundaries; timestamp conversion after retrieval; always query a pool base token.
 
 **Trade-offs:** Provider-specific request parameters remain explicit and require boundary fixtures.
+
+## ADR-021: Page-size-aware list routing and Etherscan-only full-data mode
+
+**Status:** Accepted
+
+**Date:** 2026-08-06
+
+**Decision:** Accept list `pageSize` values from 1 through 10,000. Treat each built-in provider's documented/verified list-page capacity as a capability: Moralis 100, Alchemy ERC-20 transfers 1,000 per stream, and Etherscan 10,000. Add `fullData: true` to list requests; it restricts candidates to Etherscan and defaults an omitted page size to 10,000. It does not collect an unbounded history in one SDK invocation.
+
+**Reason:** A single global 100-record validation ceiling prevents callers from using compatible provider capacities and sends no meaningful routing signal. The owner needs predictable 1,000-record Alchemy/Etherscan fallback and a deliberately Etherscan-only high-capacity mode.
+
+**Alternatives considered:** Keep a global 100-record ceiling; silently clamp a request per provider; use a page size of 10,000 with every configured adapter; make `fullData` recursively fetch an unbounded history.
+
+**Trade-offs:** Pagination remains provider-pinned and callers still follow `nextCursor`; no cross-provider page mixing or surprise fan-out is introduced. Page size becomes part of provider eligibility and cursor identity, so changing it or switching full-data mode invalidates an existing cursor.
+
+## ADR-022: Alchemy both-direction ERC-20 uses a bounded composite cursor
+
+**Status:** Accepted
+
+**Date:** 2026-08-06
+
+**Decision:** Support Alchemy `direction: "both"` by issuing one `toAddress` and one `fromAddress` Transfers API request with identical fixed filters, then merge their complete returned pages by block number and documented `uniqueId`. A self-transfer is emitted from the outgoing stream only, making the two streams disjoint even when their page keys advance at different rates. The Alchemy SDK cursor holds two provider-local stream states (page key and exhausted flag), never transfer items, keys, headers, or an Etherscan/Moralis cursor. `pageSize` applies per stream, so this special mode can return up to twice the public size.
+
+**Reason:** Applications need the same public direction options across built-in ERC-20 providers. Alchemy requires two requests because the Transfers API accepts one address-direction filter per request.
+
+**Alternatives considered:** Continue to reject both direction; return two provider-specific pages; collect an unbounded full history; store unreturned transfer items in the cursor; switch to Etherscan on continuation.
+
+**Trade-offs:** A single Alchemy both-direction adapter attempt makes two upstream calls rather than one and can return up to twice as many records as a single-direction page. Ordering is deterministic by block number then `uniqueId` within each composite page; global ordering across independent streams would require buffering unreturned transfers in the cursor, which this design deliberately avoids. A cursor remains Alchemy-pinned and changing providers, page size, filters, or mode is invalid.
 
 ## Open Decisions Requiring Owner Input
 

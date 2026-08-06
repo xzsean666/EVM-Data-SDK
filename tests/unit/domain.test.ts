@@ -32,6 +32,7 @@ describe("domain request contracts", () => {
       chain: "ethereum",
       address: mixedCaseAddress.toLowerCase(),
       pageSize: DEFAULT_PAGE_SIZE,
+      fullData: false,
       order: "desc",
       startBlock: "12",
       endBlock: "20",
@@ -58,6 +59,7 @@ describe("domain request contracts", () => {
       tokenAddress: "0x1234567890abcdef1234567890abcdef12345678",
       direction: "incoming",
       pageSize: 7,
+      fullData: false,
       order: "asc",
       startBlock: null,
       endBlock: null,
@@ -79,7 +81,7 @@ describe("domain request contracts", () => {
     for (const input of [
       { chain: 1, address: "0x123" },
       { chain: 1, address: mixedCaseAddress, pageSize: 0 },
-      { chain: 1, address: mixedCaseAddress, pageSize: 101 },
+      { chain: 1, address: mixedCaseAddress, pageSize: 10_001 },
       { chain: 1, address: mixedCaseAddress, startBlock: "9".repeat(79) },
       { chain: 1, address: mixedCaseAddress, startBlock: "10", endBlock: "9" },
     ]) {
@@ -90,6 +92,21 @@ describe("domain request contracts", () => {
     expect(() => normalizeChainReference(0)).toThrowError(
       expect.objectContaining({ code: "INVALID_REQUEST" }),
     );
+  });
+
+  it("allows provider-aware list sizes and defaults full-data mode to Etherscan's 10,000-record page", () => {
+    expect(normalizeTransactionsRequest({ chain: 1, address: mixedCaseAddress, pageSize: 10_000 })).toMatchObject({
+      pageSize: 10_000,
+      fullData: false,
+    });
+    expect(normalizeErc20TransfersRequest({ chain: 1, address: mixedCaseAddress, fullData: true })).toMatchObject({
+      pageSize: 10_000,
+      fullData: true,
+    });
+    expect(normalizeTransactionsRequest({ chain: 1, address: mixedCaseAddress, fullData: true, pageSize: 1_000 })).toMatchObject({
+      pageSize: 1_000,
+      fullData: true,
+    });
   });
 
   it("keeps public blockchain quantities as decimal strings", () => {

@@ -43,6 +43,13 @@ function context(overrides: Partial<ProviderAttemptContext> = {}): ProviderAttem
 }
 
 describe("MoralisAdapter", () => {
+  it("does not advertise list pages above 100 records", () => {
+    const adapter = new MoralisAdapter({ transport: new FixtureTransport(moralisTransactionsPage) });
+    const chain = new ChainRegistry().resolve("ethereum");
+    expect(adapter.supports({ operation: "getTransactions", chain, request: parseTransactionsRequest({ chain: 1, address: "0x1111111111111111111111111111111111111111", pageSize: 100 }), continuation: false })).toBe(true);
+    expect(adapter.supports({ operation: "getTransactions", chain, request: parseTransactionsRequest({ chain: 1, address: "0x1111111111111111111111111111111111111111", pageSize: 101 }), continuation: false })).toBe(false);
+  });
+
   it("maps raw transactions and preserves chain, block, order, and page filters", async () => {
     const transport = new FixtureTransport(moralisTransactionsPage);
     const adapter = new MoralisAdapter({ transport });

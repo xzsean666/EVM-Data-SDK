@@ -138,7 +138,7 @@ function parseCursorIdentity(value: unknown): CursorIdentity {
 function semanticQueryShape(
   request: NormalizedProviderRequest,
   chainId: number,
-): Record<string, string | number | null> {
+): Record<string, string | number | boolean | null> {
   switch (request.operation) {
     case "getNativeBalance":
       return {
@@ -152,6 +152,7 @@ function semanticQueryShape(
         chainId,
         address: request.address,
         pageSize: request.pageSize,
+        fullData: request.fullData,
         order: request.order,
         startBlock: request.startBlock,
         endBlock: request.endBlock,
@@ -164,6 +165,7 @@ function semanticQueryShape(
         tokenAddress: request.tokenAddress,
         direction: request.direction,
         pageSize: request.pageSize,
+        fullData: request.fullData,
         order: request.order,
         startBlock: request.startBlock,
         endBlock: request.endBlock,

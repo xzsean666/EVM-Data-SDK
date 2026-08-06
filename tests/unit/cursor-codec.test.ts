@@ -137,9 +137,21 @@ describe("cursor codec", () => {
       startBlock: "1",
       endBlock: "20",
     });
+    const fullData = normalizeErc20TransfersRequest({
+      chain: 1,
+      address,
+      tokenAddress: address,
+      direction: "incoming",
+      pageSize: 10,
+      order: "desc",
+      startBlock: "1",
+      endBlock: "20",
+      fullData: true,
+    });
 
     expect(queryFingerprint(first, 1)).toBe(queryFingerprint(equivalent, 1));
     expect(queryFingerprint(first, 1)).not.toBe(queryFingerprint(changed, 1));
+    expect(queryFingerprint(first, 1)).not.toBe(queryFingerprint(fullData, 1));
     expect(() =>
       assertCursorMatches(
         {

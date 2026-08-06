@@ -10,6 +10,7 @@ import type {
   NormalizedNativeBalanceRequest,
   NormalizedTransactionsRequest,
 } from "../../domain/operations";
+import { MAX_PAGE_SIZE } from "../../domain/operations";
 import type { ProviderPageResult } from "../../domain/pagination";
 import type { Erc20Transfer, NativeBalance, Transaction } from "../../domain/models";
 import { EvmDataError } from "../../domain/errors";
@@ -30,6 +31,7 @@ import {
 } from "./etherscanMapper";
 
 export const ETHERSCAN_V2_BASE_URL = "https://api.etherscan.io/v2/api";
+export const ETHERSCAN_MAX_PAGE_SIZE = MAX_PAGE_SIZE;
 
 export interface EtherscanAdapterOptions {
   readonly transport?: HttpTransport;
@@ -53,11 +55,9 @@ export class EtherscanAdapter implements DataProviderAdapter {
   }
 
   supports(request: CapabilityRequest): boolean {
-    return request.chain.routes.etherscan !== undefined && (
-      request.operation === "getTransactions" ||
-      request.operation === "getNativeBalance" ||
-      request.operation === "getErc20Transfers"
-    );
+    if (request.chain.routes.etherscan === undefined) return false;
+    if (request.operation === "getNativeBalance") return true;
+    return "pageSize" in request.request && request.request.pageSize <= ETHERSCAN_MAX_PAGE_SIZE;
   }
 
   async getTransactions(

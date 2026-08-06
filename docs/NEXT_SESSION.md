@@ -1,8 +1,34 @@
 # Current Progress
 
-Last updated: 2026-08-05
+Last updated: 2026-08-06
 
 Workflow state: Step 5 review complete for Work Packages 1 through 9 and Price-0 through Price-5; release decisions and Git identity remain outside implementation scope.
+
+## Work Package 10: Page-size-aware routing and Etherscan full-data mode
+
+**Status:** Completed. `pnpm check` passes with 133 deterministic tests and package smoke validation.
+
+**Purpose:** Raise the public list-page ceiling to the verified Etherscan capacity while preventing requests from reaching providers whose own page limit is lower.
+
+**Files:** `src/domain/operations.ts`, `src/execution/ProviderRouter.ts`, built-in list adapters, cursor tests, router/adapter/client tests, `scripts/live-smoke.mjs`, README, and the required architecture/integration/decision/build documents.
+
+**Design:** `pageSize` accepts 1–10,000. Moralis is eligible through 100, Alchemy ERC-20 through 1,000 per stream, and Etherscan through 10,000. `fullData: true` forces Etherscan, defaults an omitted page size to 10,000, and remains cursor-paginated rather than performing unbounded aggregation.
+
+**Acceptance:** Deterministic tests prove provider eligibility at 100, 1,000, 1,001, and 10,000; a cursor rejects a changed `fullData` setting; no over-limit provider request is sent; and opt-in live checks use `.env.key` without printing secret values, URLs, cursors, or returned records.
+
+**Live verification (2026-08-06):** The public Vitalik address (`0xd8dA…96045`) was used with the application-owned `.env.key` values held only in memory. Alchemy successfully returned exactly 1,000 incoming ERC-20 transfers with a continuation cursor at `pageSize: 1000`. Alchemy balance and two small directional pages, plus Moralis balance and two small transaction pages, also succeeded. Etherscan balance, small list calls, and `fullData` (the 10,000-record Etherscan request) returned normalized `REQUEST_TIMEOUT` in this network environment, so no claim is made that the upstream completed that large response here. Moralis ERC-20 returned retryable `PROVIDER_UNAVAILABLE`. No key, authenticated URL, provider cursor, or record payload was logged.
+
+## Work Package 11: Alchemy both-direction ERC-20 merge
+
+**Status:** Completed. Fixture tests, two-page live verification, and the full package check pass with 138 deterministic tests.
+
+**Purpose:** Make Alchemy support the same public ERC-20 direction options as Etherscan and Moralis without exposing or crossing provider cursors.
+
+**Design:** A both-direction request makes one incoming and one outgoing Alchemy Transfers API call with the same filters, merges their complete pages by block number and `uniqueId`, and stores only dual Alchemy page keys plus terminal flags in its SDK cursor. `pageSize` applies per stream, so the public page may contain up to twice that number of records. Continuations remain pinned to Alchemy; the request executor never falls back to another provider after a cursor has been issued.
+
+**Acceptance:** Fixture tests cover stream request construction, deterministic merge order, self-transfer partitioning across differently paced streams, two-stream continuation, blank terminal page keys, malformed dual state, max-size capability routing, and cursor pinning. A low-volume live request against the public test address succeeds through Alchemy. The user-supplied Etherscan proxy is separately recorded as `PROXY_ERROR` without exposing its URL or credentials.
+
+**Live verification (2026-08-06):** Alchemy `direction: "both"`, `pageSize: 5`, on the public Vitalik address returned 10 merged records and a cursor on page one; its Alchemy-pinned continuation returned another 10 records and a next cursor on page two. The user-supplied Etherscan proxy returned `PROXY_ERROR` before any Etherscan data response. No secret, proxy URL, cursor, or record contents were printed.
 
 ## Completed
 
@@ -56,12 +82,15 @@ Workflow state: Step 5 review complete for Work Packages 1 through 9 and Price-0
 - Official API semantics were rechecked. The implementation and `TOKEN_PRICE_UPGRADE.md` record the only material correction: OKX uses `bar=1Dutc` rather than `1D` to honor the SDK UTC-day contract. GeckoTerminal requests `currency=usd` and the resolved `token=base|quote` side.
 - Focused commits remain pending because Git user.name and user.email are unset; no identity will be fabricated and no push will be made.
 
+- Work Packages 10 and 11 are complete: list `pageSize` now accepts 1–10,000; provider capability filtering enforces Moralis 100, Alchemy ERC-20 1,000 per stream, and Etherscan 10,000. Alchemy both direction returns the full two-stream union with an Alchemy-pinned dual cursor. `fullData: true` makes Etherscan the only candidate and defaults an omitted page size to 10,000; it remains cursor-paginated and is part of the cursor fingerprint.
+- `scripts/live-config.mjs` now supports both labelled grouped values and conventional provider-named `NAME=value` lines in `.env.key`, without logging the values.
+
 - Architecture status: Accepted for v0.1 implementation.
-- Source status: Work Packages 1 through 9 are complete, including Moralis, scoped Alchemy, public client composition, proxy-only/mixed routing, and package smoke coverage.
-- Live smoke status: Alchemy balance and directional ERC-20 pagination, Alchemy capability rejection, and Moralis balance and transaction pagination succeeded. Proxy-only and mixed routes were exercised for Etherscan, Alchemy, and Moralis; the latest run classified the supplied proxy's Etherscan connection failure as `PROXY_ERROR`, while Alchemy and Moralis proxy-only and mixed balance calls succeeded. Moralis ERC-20 also observed retryable `PROVIDER_UNAVAILABLE` from a live HTTP 425. Etherscan direct operations returned normalized `REQUEST_TIMEOUT`. No secrets or cursors were printed.
+- Source status: Work Packages 1 through 11 are complete, including Moralis, Alchemy single- and both-direction ERC-20 pages, public client composition, proxy-only/mixed routing, and package smoke coverage.
+- Live smoke status: Alchemy balance, single-direction ERC-20 pagination, and both-direction two-page pagination succeeded. The latest Alchemy both-direction request returned 10 items for `pageSize: 5` on each of its two streams, with an Alchemy-pinned cursor continuing successfully to another 10-item page. The supplied Etherscan proxy failed as `PROXY_ERROR`; Etherscan direct operations returned normalized `REQUEST_TIMEOUT`. Moralis balance and transaction pagination succeeded; Moralis ERC-20 observed retryable `PROVIDER_UNAVAILABLE`. No secrets or cursors were printed.
 - Documentation status: Domain, transport, redaction, provider contract, cursor, capability routing, pools, retry, executor, all three provider adapters, public composition, live config, and package behavior are recorded.
 - Git status: The repository still has no configured Git `user.name` or `user.email`; no author identity was fabricated and no push was made.
-- Current workflow gate: Step 5 implementation review is complete. `pnpm check` passes with 125 tests and package smoke validation. Do not add further scope before release decisions are resolved.
+- Current workflow gate: Work Package 11 is complete; release decisions and Git identity remain unresolved.
 
 ## Pending Tasks
 
@@ -78,7 +107,8 @@ Workflow state: Step 5 review complete for Work Packages 1 through 9 and Price-0
 
 - Provider products and chain/plan matrices change independently. Capability fixtures and official links must be rechecked during adapter implementation.
 - Etherscan chain support and free-tier availability are different concepts; plan restriction must not be reported as unsupported chain. Live requests in this environment currently time out.
-- Alchemy asset transfers cannot safely masquerade as complete transactions. Expanding its capability without a new decision risks semantic corruption.
+- Etherscan's 10,000-record request encoding and routing are covered by deterministic tests, but the current network environment timed out before an upstream large-page response could be observed. Rerun the bounded `fullData` live smoke through a known-working route before claiming live Etherscan throughput.
+- Alchemy asset transfers cannot safely masquerade as complete transactions. ADR-022 expands only ERC-20 transfer direction support; normal transaction history remains ineligible.
 - Provider-specific no-result responses can resemble logical errors, especially Etherscan HTTP 200 envelopes; the Etherscan adapter now handles its documented list messages explicitly.
 - Credential rotation can amplify throttling if the real quota is account-, IP-, or chain-wide.
 - Axios can inherit environment proxy settings unless every direct attempt explicitly sets `proxy: false`.

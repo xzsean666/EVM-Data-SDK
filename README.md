@@ -39,7 +39,7 @@ const transfers = await client.token.getErc20Transfers({
 
 `allowDirect: false` requires every request to use a configured HTTP(S) proxy. With `allowDirect: true` and at least one proxy, requests round-robin through each proxy and the local direct route. With no proxies, the client uses the local route only.
 
-List `nextCursor` values are SDK-owned and provider-pinned. Pass the same filters and cursor back unchanged for the next page. Alchemy supports latest balances and one ERC-20 direction only; it is intentionally excluded from transaction history and both-direction transfer queries.
+List `nextCursor` values are SDK-owned and provider-pinned. Pass the same filters and cursor back unchanged for the next page. `pageSize` defaults to 50; valid values are 1–10,000. Provider eligibility is automatic: 1–100 can use Moralis, ERC-20 requests up to 1,000 can use Alchemy, and 1,001–10,000 use Etherscan only. Alchemy supports incoming, outgoing, and both-direction ERC-20 queries; its both-direction mode fetches one page per direction, returns their full de-duplicated union (up to `2 × pageSize` records), and uses one Alchemy-pinned dual cursor. Set `fullData: true` to force Etherscan and, when `pageSize` is omitted, request its 10,000-record page. `fullData` does not combine every historical page: continue with `nextCursor` to retrieve additional records. Alchemy remains intentionally excluded from normal transaction history.
 
 Run deterministic checks with `pnpm check`. Live provider tests are opt-in and never require the SDK itself to read environment files.
 

@@ -11,6 +11,7 @@ export const alchemyTransfersPage = {
     transfers: [
       {
         category: "erc20",
+        uniqueId: "0xabc:log:1",
         asset: "TOK",
         from: "0x1111111111111111111111111111111111111111",
         to: "0x2222222222222222222222222222222222222222",

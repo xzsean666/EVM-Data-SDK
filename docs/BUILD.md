@@ -123,7 +123,7 @@ ALCHEMY_API_KEY
 MORALIS_API_KEY
 ```
 
-Live tests must use stable public addresses, small page sizes, and low request counts. They must skip unavailable provider/chain capabilities rather than weakening deterministic tests. Output must never print keys or raw authenticated URLs.
+Live tests must use stable public addresses and low request counts. High-page-size checks are allowed only as one bounded first-page request: verify Etherscan at 10,000, Alchemy single-direction at 1,000, and Alchemy both-direction at a small page size without logging request URLs, keys, cursors, or items. They must skip unavailable provider/chain capabilities rather than weakening deterministic tests. Output must never print keys or raw authenticated URLs.
 
 The repository includes `scripts/live-config.mjs` and `scripts/live-smoke.mjs` for an owner-invoked smoke run. The config helper parses the grouped-key format in `.env.key` in memory and returns a normal `ClientConfiguration`; it never writes keys. The smoke runner uses the public Ethereum address in the script, caps list checks at two pages, and reports only provider/operation/status/count/error-code summaries. Set `EVM_SDK_LIVE_PROXY` to an HTTP(S) proxy URL to exercise proxy-only and mixed routing; the proxy value is never printed.
 

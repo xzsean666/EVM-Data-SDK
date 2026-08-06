@@ -2,11 +2,11 @@ import { AxiosHttpTransport, parseHttpProxyUrl } from "../../transport/AxiosHttp
 import type { HttpTransport } from "../../transport/HttpTransport";
 import { EvmDataError } from "../../domain/errors";
 import type { Erc20Transfer, NativeBalance } from "../../domain/models";
-import type { NormalizedErc20TransfersRequest, NormalizedNativeBalanceRequest, NormalizedTransactionsRequest } from "../../domain/operations";
+import type { NormalizedErc20TransfersRequest, NormalizedNativeBalanceRequest, NormalizedTransactionsRequest, TransferDirection } from "../../domain/operations";
 import type { ProviderPageResult } from "../../domain/pagination";
 import type { CapabilityRequest, DataProviderAdapter, ProviderAttemptContext } from "../DataProviderAdapter";
 import { classifyAlchemyHttpResponse, classifyAlchemyJsonRpcError, normalizeAlchemyTransportError } from "./alchemyErrors";
-import { alchemyBalanceResultSchema, alchemyJsonRpcResponseSchema, alchemyTransfersResultSchema } from "./alchemySchemas";
+import { alchemyBalanceResultSchema, alchemyJsonRpcResponseSchema, alchemyTransfersResultSchema, type AlchemyTransfer } from "./alchemySchemas";
 import { mapAlchemyBalance, mapAlchemyTransfer } from "./alchemyMapper";
 
 export interface AlchemyAdapterOptions {
@@ -15,8 +15,30 @@ export interface AlchemyAdapterOptions {
   readonly allowInsecureHttp?: boolean;
 }
 
-interface AlchemyPageState {
+export const ALCHEMY_MAX_PAGE_SIZE = 1_000;
+
+type AlchemyStreamDirection = Exclude<TransferDirection, "both">;
+
+interface AlchemySinglePageState {
   readonly pageKey: string;
+}
+
+interface AlchemyBothPageState {
+  readonly mode: "both";
+  readonly incomingPageKey: string | null;
+  readonly incomingExhausted: boolean;
+  readonly outgoingPageKey: string | null;
+  readonly outgoingExhausted: boolean;
+}
+
+interface AlchemyTransferPage {
+  readonly transfers: readonly AlchemyMappedTransfer[];
+  readonly nextPageKey: string | null;
+}
+
+interface AlchemyMappedTransfer {
+  readonly uniqueId: string;
+  readonly item: Erc20Transfer;
 }
 
 export class AlchemyAdapter implements DataProviderAdapter {
@@ -34,7 +56,9 @@ export class AlchemyAdapter implements DataProviderAdapter {
   supports(request: CapabilityRequest): boolean {
     if (request.chain.routes.alchemy === undefined) return false;
     if (request.operation === "getNativeBalance") return true;
-    if (request.operation === "getErc20Transfers" && "direction" in request.request) return request.request.direction !== "both";
+    if (request.operation === "getErc20Transfers" && "direction" in request.request) {
+      return request.request.pageSize <= ALCHEMY_MAX_PAGE_SIZE;
+    }
     return false;
   }
 
@@ -50,37 +74,87 @@ export class AlchemyAdapter implements DataProviderAdapter {
     }
   }
 
-  async getErc20Transfers(request: NormalizedErc20TransfersRequest, context: ProviderAttemptContext): Promise<ProviderPageResult<Erc20Transfer, AlchemyPageState>> {
+  async getErc20Transfers(request: NormalizedErc20TransfersRequest, context: ProviderAttemptContext): Promise<ProviderPageResult<Erc20Transfer, AlchemySinglePageState | AlchemyBothPageState>> {
     if (request.direction === "both") {
-      throw new EvmDataError({ code: "UNSUPPORTED_OPERATION", message: "Alchemy requires one transfer direction.", retryable: false, provider: this.name, chainId: context.chain.chainId });
+      return this.getBothDirectionTransfers(request, context);
     }
-    const pageState = readPageState(context.providerPageState);
+    const pageState = readSinglePageState(context.providerPageState);
+    const page = await this.getTransferPage(request, context, request.direction, pageState?.pageKey ?? null);
+    if (page.nextPageKey !== null && page.nextPageKey === pageState?.pageKey) {
+      throw invalidResponse(context, new Error("Alchemy returned the same pagination page key twice."));
+    }
+    return {
+      items: page.transfers.map((transfer) => transfer.item),
+      nextPageState: page.nextPageKey === null ? null : { pageKey: page.nextPageKey },
+      pageInfo: { provider: this.name, chainId: context.chain.chainId },
+    };
+  }
+
+  private async getBothDirectionTransfers(
+    request: NormalizedErc20TransfersRequest,
+    context: ProviderAttemptContext,
+  ): Promise<ProviderPageResult<Erc20Transfer, AlchemyBothPageState>> {
+    const pageState = readBothPageState(context.providerPageState);
+    const [incoming, outgoing] = await Promise.all([
+      pageState.incomingExhausted
+        ? null
+        : this.getTransferPage(request, context, "incoming", pageState.incomingPageKey, true),
+      pageState.outgoingExhausted
+        ? null
+        : this.getTransferPage(request, context, "outgoing", pageState.outgoingPageKey),
+    ]);
+    const nextPageState = (incoming === null || incoming.nextPageKey === null) &&
+      (outgoing === null || outgoing.nextPageKey === null)
+      ? null
+      : {
+        mode: "both" as const,
+        incomingPageKey: incoming?.nextPageKey ?? null,
+        incomingExhausted: incoming === null || incoming.nextPageKey === null,
+        outgoingPageKey: outgoing?.nextPageKey ?? null,
+        outgoingExhausted: outgoing === null || outgoing.nextPageKey === null,
+      };
+    return {
+      items: mergeBothDirectionPages(incoming, outgoing, request.order).map((transfer) => transfer.item),
+      nextPageState,
+      pageInfo: { provider: this.name, chainId: context.chain.chainId },
+    };
+  }
+
+  private async getTransferPage(
+    request: NormalizedErc20TransfersRequest,
+    context: ProviderAttemptContext,
+    direction: AlchemyStreamDirection,
+    pageKey: string | null,
+    excludeSelfTransfers = false,
+  ): Promise<AlchemyTransferPage> {
     const filter: Record<string, unknown> = {
       category: ["erc20"],
       withMetadata: true,
       excludeZeroValue: false,
       order: request.order,
       maxCount: `0x${request.pageSize.toString(16)}`,
-      ...(request.direction === "incoming" ? { toAddress: request.address } : { fromAddress: request.address }),
+      ...(direction === "incoming" ? { toAddress: request.address } : { fromAddress: request.address }),
       ...(request.tokenAddress === null ? {} : { contractAddresses: [request.tokenAddress] }),
       ...(request.startBlock === null ? { fromBlock: "0x0" } : { fromBlock: decimalToHex(request.startBlock) }),
       ...(request.endBlock === null ? { toBlock: "latest" } : { toBlock: decimalToHex(request.endBlock) }),
-      ...(pageState === null ? {} : { pageKey: pageState.pageKey }),
+      ...(pageKey === null ? {} : { pageKey }),
     };
     const body = await this.call("alchemy_getAssetTransfers", [filter], context);
     const result = alchemyTransfersResultSchema.safeParse(parseResult(body, context));
     if (!result.success) throw invalidResponse(context);
     try {
-      const allItems = result.data.transfers.map((item) => mapAlchemyTransfer(item, context.chain));
-      const items = allItems.filter((item) => (
-        request.direction === "incoming" && item.to === request.address ||
-        request.direction === "outgoing" && item.from === request.address
-      ));
-      const nextPageKey = result.data.pageKey === undefined || result.data.pageKey === null ? null : result.data.pageKey;
-      if (nextPageKey !== null && pageState !== null && nextPageKey === pageState.pageKey) {
+      const nextPageKey = normalizeNextPageKey(result.data.pageKey);
+      if (nextPageKey !== null && nextPageKey === pageKey) {
         throw new Error("Alchemy returned the same pagination page key twice.");
       }
-      return { items, nextPageState: nextPageKey === null ? null : { pageKey: nextPageKey }, pageInfo: { provider: this.name, chainId: context.chain.chainId } };
+      return {
+        transfers: result.data.transfers
+          .map((transfer) => mapTransferWithId(transfer, context))
+          // A self-transfer matches both upstream filters. In composite mode it
+          // belongs to outgoing only, keeping the two paginated streams disjoint.
+          .filter((transfer) => !excludeSelfTransfers || transfer.item.from !== request.address),
+        nextPageKey,
+      };
     } catch (error: unknown) {
       throw invalidResponse(context, error);
     }
@@ -118,12 +192,88 @@ function invalidResponse(context: ProviderAttemptContext, cause?: unknown): EvmD
   return new EvmDataError({ code: "INVALID_PROVIDER_RESPONSE", message: "Alchemy returned an invalid response.", retryable: false, provider: "alchemy", chainId: context.chain.chainId, ...(cause === undefined ? {} : { cause }) });
 }
 
-function readPageState(value: unknown): AlchemyPageState | null {
+function mapTransferWithId(value: AlchemyTransfer, context: ProviderAttemptContext): AlchemyMappedTransfer {
+  return { uniqueId: value.uniqueId, item: mapAlchemyTransfer(value, context.chain) };
+}
+
+function mergeBothDirectionPages(
+  incoming: AlchemyTransferPage | null,
+  outgoing: AlchemyTransferPage | null,
+  order: "asc" | "desc",
+): readonly AlchemyMappedTransfer[] {
+  const uniqueTransfers = new Map<string, AlchemyMappedTransfer>();
+  for (const transfer of [...(incoming?.transfers ?? []), ...(outgoing?.transfers ?? [])]) {
+    uniqueTransfers.set(transfer.uniqueId, transfer);
+  }
+  return [...uniqueTransfers.values()].sort((first, second) => compareTransfers(first, second, order));
+}
+
+function compareTransfers(
+  first: AlchemyMappedTransfer,
+  second: AlchemyMappedTransfer,
+  order: "asc" | "desc",
+): number {
+  const blockComparison = BigInt(first.item.blockNumber) < BigInt(second.item.blockNumber)
+    ? -1
+    : BigInt(first.item.blockNumber) > BigInt(second.item.blockNumber)
+      ? 1
+      : 0;
+  const identityComparison = first.uniqueId < second.uniqueId ? -1 : first.uniqueId > second.uniqueId ? 1 : 0;
+  const comparison = blockComparison === 0 ? identityComparison : blockComparison;
+  return order === "asc" ? comparison : -comparison;
+}
+
+function readSinglePageState(value: unknown): AlchemySinglePageState | null {
   if (value === undefined || value === null) return null;
   if (typeof value !== "object" || Array.isArray(value) || value === null) throw new EvmDataError({ code: "INVALID_PROVIDER_RESPONSE", message: "Alchemy page state is invalid.", retryable: false, provider: "alchemy" });
   const pageKey = (value as { pageKey?: unknown }).pageKey;
-  if (Object.keys(value).length !== 1 || typeof pageKey !== "string" || pageKey.length === 0 || pageKey.length > 2048 || /^https?:\/\//i.test(pageKey)) throw new EvmDataError({ code: "INVALID_PROVIDER_RESPONSE", message: "Alchemy page state is invalid.", retryable: false, provider: "alchemy" });
+  if (Object.keys(value).length !== 1 || !isPageKey(pageKey) || pageKey === null) throw new EvmDataError({ code: "INVALID_PROVIDER_RESPONSE", message: "Alchemy page state is invalid.", retryable: false, provider: "alchemy" });
   return { pageKey };
+}
+
+function readBothPageState(value: unknown): AlchemyBothPageState {
+  if (value === undefined || value === null) {
+    return {
+      mode: "both",
+      incomingPageKey: null,
+      incomingExhausted: false,
+      outgoingPageKey: null,
+      outgoingExhausted: false,
+    };
+  }
+  if (typeof value !== "object" || Array.isArray(value) || value === null) throw invalidBothPageState();
+  const state = value as Partial<AlchemyBothPageState>;
+  if (
+    Object.keys(value).length !== 5 ||
+    state.mode !== "both" ||
+    !isPageKey(state.incomingPageKey) ||
+    !isPageKey(state.outgoingPageKey) ||
+    typeof state.incomingExhausted !== "boolean" ||
+    typeof state.outgoingExhausted !== "boolean" ||
+    state.incomingExhausted && state.incomingPageKey !== null ||
+    state.outgoingExhausted && state.outgoingPageKey !== null
+  ) throw invalidBothPageState();
+  return {
+    mode: "both",
+    incomingPageKey: state.incomingPageKey,
+    incomingExhausted: state.incomingExhausted,
+    outgoingPageKey: state.outgoingPageKey,
+    outgoingExhausted: state.outgoingExhausted,
+  };
+}
+
+function isPageKey(value: unknown): value is string | null {
+  return value === null || typeof value === "string" && value.length > 0 && value.length <= 2048 && !/^https?:\/\//i.test(value);
+}
+
+function normalizeNextPageKey(value: string | null | undefined): string | null {
+  if (value === undefined || value === null || value === "") return null;
+  if (!isPageKey(value)) throw new Error("Alchemy returned an invalid pagination page key.");
+  return value;
+}
+
+function invalidBothPageState(): EvmDataError {
+  return new EvmDataError({ code: "INVALID_PROVIDER_RESPONSE", message: "Alchemy both-direction page state is invalid.", retryable: false, provider: "alchemy" });
 }
 
 function decimalToHex(value: string): string {

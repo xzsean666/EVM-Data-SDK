@@ -95,6 +95,9 @@ function supportsRequest(
   chain: ChainDefinition,
   continuation: boolean,
 ): boolean {
+  if (requiresEtherscan(request) && adapter.name !== "etherscan") {
+    return false;
+  }
   if (!hasOperationMethod(adapter, request.operation)) {
     return false;
   }
@@ -105,6 +108,11 @@ function supportsRequest(
     continuation,
   };
   return adapter.supports(capability);
+}
+
+function requiresEtherscan(request: NormalizedProviderRequest): boolean {
+  return (request.operation === "getTransactions" || request.operation === "getErc20Transfers") &&
+    request.fullData;
 }
 
 function hasOperationMethod(adapter: DataProviderAdapter, operation: NormalizedProviderRequest["operation"]): boolean {

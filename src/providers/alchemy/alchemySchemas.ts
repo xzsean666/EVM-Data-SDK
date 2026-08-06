@@ -13,6 +13,7 @@ const rawContractSchema = z.object({
 
 const transferSchema = z.object({
   category: z.string(),
+  uniqueId: z.string().min(1).max(512),
   asset: z.string().nullable().optional(),
   from: address,
   to: address,
@@ -37,7 +38,7 @@ export const alchemyBalanceResultSchema = hexQuantity;
 
 export const alchemyTransfersResultSchema = z.object({
   transfers: z.array(transferSchema),
-  pageKey: z.string().min(1).nullable().optional(),
+  pageKey: z.string().max(2048).nullable().optional(),
 }).passthrough();
 
 export type AlchemyTransfer = z.infer<typeof transferSchema>;

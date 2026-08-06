@@ -5,7 +5,7 @@ import { invalidRequest } from "./errors";
 import { MAX_CURSOR_LENGTH } from "./pagination";
 
 export const DEFAULT_PAGE_SIZE = 50;
-export const MAX_PAGE_SIZE = 100;
+export const MAX_PAGE_SIZE = 10_000;
 export const OPERATION_NAMES = [
   "getTransactions",
   "getNativeBalance",
@@ -21,6 +21,7 @@ export interface TransactionsRequest {
   readonly chain: ChainReference;
   readonly address: string;
   readonly pageSize?: number;
+  readonly fullData?: boolean;
   readonly order?: SortOrder;
   readonly startBlock?: string;
   readonly endBlock?: string;
@@ -40,6 +41,7 @@ export interface Erc20TransfersRequest {
   readonly tokenAddress?: string;
   readonly direction?: TransferDirection;
   readonly pageSize?: number;
+  readonly fullData?: boolean;
   readonly order?: SortOrder;
   readonly startBlock?: string;
   readonly endBlock?: string;
@@ -52,6 +54,7 @@ export interface NormalizedTransactionsRequest {
   readonly chain: ChainReference;
   readonly address: string;
   readonly pageSize: number;
+  readonly fullData: boolean;
   readonly order: SortOrder;
   readonly startBlock: string | null;
   readonly endBlock: string | null;
@@ -73,6 +76,7 @@ export interface NormalizedErc20TransfersRequest {
   readonly tokenAddress: string | null;
   readonly direction: TransferDirection;
   readonly pageSize: number;
+  readonly fullData: boolean;
   readonly order: SortOrder;
   readonly startBlock: string | null;
   readonly endBlock: string | null;
@@ -91,7 +95,8 @@ const decimalQuantitySchema = z
   .regex(/^[0-9]+$/)
   .transform((value) => canonicalDecimal(value));
 const cursorSchema = z.string().min(1).max(MAX_CURSOR_LENGTH);
-const pageSizeSchema = z.number().int().min(1).max(MAX_PAGE_SIZE).default(DEFAULT_PAGE_SIZE);
+const pageSizeSchema = z.number().int().min(1).max(MAX_PAGE_SIZE).optional();
+const fullDataSchema = z.boolean().default(false);
 const orderSchema = z.enum(["asc", "desc"]).default("desc");
 const directionSchema = z.enum(["incoming", "outgoing", "both"]).default("both");
 
@@ -100,6 +105,7 @@ const transactionsRequestSchema = z
     chain: chainReferenceSchema,
     address: addressSchema.transform((value) => value.toLowerCase()),
     pageSize: pageSizeSchema,
+    fullData: fullDataSchema,
     order: orderSchema,
     startBlock: decimalQuantitySchema.optional(),
     endBlock: decimalQuantitySchema.optional(),
@@ -125,6 +131,7 @@ const erc20TransfersRequestSchema = z
       .optional(),
     direction: directionSchema,
     pageSize: pageSizeSchema,
+    fullData: fullDataSchema,
     order: orderSchema,
     startBlock: decimalQuantitySchema.optional(),
     endBlock: decimalQuantitySchema.optional(),
@@ -140,7 +147,8 @@ export function parseTransactionsRequest(input: unknown): NormalizedTransactions
     operation: "getTransactions",
     chain: normalizeChainReference(parsed.chain),
     address: parsed.address,
-    pageSize: parsed.pageSize,
+    pageSize: parsed.pageSize ?? (parsed.fullData ? MAX_PAGE_SIZE : DEFAULT_PAGE_SIZE),
+    fullData: parsed.fullData,
     order: parsed.order,
     startBlock: parsed.startBlock ?? null,
     endBlock: parsed.endBlock ?? null,
@@ -168,7 +176,8 @@ export function parseErc20TransfersRequest(input: unknown): NormalizedErc20Trans
     address: parsed.address,
     tokenAddress: parsed.tokenAddress ?? null,
     direction: parsed.direction,
-    pageSize: parsed.pageSize,
+    pageSize: parsed.pageSize ?? (parsed.fullData ? MAX_PAGE_SIZE : DEFAULT_PAGE_SIZE),
+    fullData: parsed.fullData,
     order: parsed.order,
     startBlock: parsed.startBlock ?? null,
     endBlock: parsed.endBlock ?? null,
