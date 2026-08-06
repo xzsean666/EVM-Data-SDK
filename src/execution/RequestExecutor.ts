@@ -378,14 +378,14 @@ export class RequestExecutor {
       const now = this.ensureSignalAndDeadline(deadline, signal);
       const preferManaged = this.advancedProxyRoute !== undefined && this.nextAdvancedProxy();
       if (preferManaged) {
-        return this.advancedProxyRoute.acquire(signal);
+        return this.acquireManagedProxy(deadline, signal);
       }
       const lease = this.proxyPool.acquire(now);
       if (lease !== undefined) {
         return lease;
       }
       if (this.advancedProxyRoute !== undefined) {
-        return this.advancedProxyRoute.acquire(signal);
+        return this.acquireManagedProxy(deadline, signal);
       }
       if (this.proxyPool.isExhausted(now)) {
         return undefined;
@@ -407,6 +407,34 @@ export class RequestExecutor {
 
   private hasAvailableProxy(): boolean {
     return this.proxyPool.hasAvailable() || this.advancedProxyRoute !== undefined;
+  }
+
+  private async acquireManagedProxy(deadline: number, signal: AbortSignal | undefined): Promise<ProxyLease> {
+    const route = this.advancedProxyRoute;
+    if (route === undefined) {
+      throw new EvmDataError({ code: "PROXY_ERROR", message: "No managed proxy route is configured.", retryable: false });
+    }
+    const remaining = this.ensureSignalAndDeadline(deadline, signal);
+    const controller = new AbortController();
+    const forwardAbort = () => controller.abort();
+    signal?.addEventListener("abort", forwardAbort, { once: true });
+    const timeout = setTimeout(() => controller.abort(), remaining);
+    try {
+      return await route.acquire(controller.signal);
+    } catch (error: unknown) {
+      if (signal?.aborted === true) throw callerAborted();
+      if (controller.signal.aborted === true) {
+        throw new EvmDataError({
+          code: "REQUEST_TIMEOUT",
+          message: "Overall request deadline exceeded while preparing the managed proxy.",
+          retryable: false,
+        });
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", forwardAbort);
+    }
   }
 
   private reportProxy(lease: ProxyLease, outcome: "success" | "proxy_failure" | "neutral"): void {
