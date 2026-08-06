@@ -40,6 +40,7 @@ export const etherscanTokenTransferSchema = z
     timeStamp: optionalDecimalString,
     hash,
     transactionHash: z.union([hash, z.literal("")]).nullable().optional(),
+    transactionIndex: optionalDecimalString,
     logIndex: optionalDecimalString,
     from: address,
     to: address,

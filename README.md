@@ -52,3 +52,12 @@ Run deterministic checks with `pnpm check`. Live provider tests are opt-in and n
 The default source order is Binance, OKX, Coinbase, then GeckoTerminal. Each source returns daily open/high/low/close, decimal-string volume, `price === close`, ascending UTC dates, and explicit `missingDates`; no gap is filled with zero or a prior value. Binance and OKX use USDT markets while Coinbase and GeckoTerminal use USD. The SDK does not silently convert quotes.
 
 Price sources do not require an API key. Price routing defaults to `direct`, which explicitly uses the local route. Set `price.routeMode` to `"proxy-only"` to use only explicitly configured HTTP(S) proxies; it never falls back to direct, and an unavailable route returns `PROXY_ERROR`. Successful sources are returned independently with explicit `failures`; if all enabled sources fail, the operation rejects with `PRICE_DATA_UNAVAILABLE`.
+
+## Planned v0.3 upgrades
+
+The design proposal for opt-in VLESS/SS proxy URLs through a managed sing-box
+runtime and for page-size-free ERC-20 reads over an inclusive block range is in
+[`docs/PROXY_AND_BLOCK_RANGE_UPGRADE.md`](./docs/PROXY_AND_BLOCK_RANGE_UPGRADE.md).
+It is not part of the accepted v0.2 API yet. A staged implementation prompt for
+gpt-terra is in
+[`docs/GPT_TERRA_IMPLEMENTATION_PROMPT.md`](./docs/GPT_TERRA_IMPLEMENTATION_PROMPT.md).

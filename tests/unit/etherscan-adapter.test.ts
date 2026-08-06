@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { ChainRegistry } from "../../src/chains/ChainRegistry";
-import { parseErc20TransfersRequest, parseNativeBalanceRequest, parseTransactionsRequest } from "../../src/domain/operations";
+import { normalizeErc20BlockRangeRequest, parseErc20TransfersRequest, parseNativeBalanceRequest, parseTransactionsRequest } from "../../src/domain/operations";
 import type { ProviderAttemptContext } from "../../src/providers/DataProviderAdapter";
 import { EtherscanAdapter } from "../../src/providers/etherscan/EtherscanAdapter";
 import type { HttpRequest, HttpResponse, HttpTransport } from "../../src/transport/HttpTransport";
@@ -113,6 +113,37 @@ describe("EtherscanAdapter", () => {
     expect(result.items[0]).toMatchObject({ amount: "99", tokenDecimals: 18, logIndex: "3" });
     expect(result.nextPageState).toEqual({ page: 2 });
     expect(transport.requests[0]?.params).toMatchObject({ action: "tokentx", page: 1, offset: 1, sort: "desc" });
+  });
+
+  it("uses a fresh ascending closed range request and marks a full Etherscan page incomplete", async () => {
+    const fullPage = {
+      status: "1",
+      message: "OK",
+      result: Array.from({ length: 10_000 }, (_, index) => ({
+        blockNumber: "42",
+        hash: "0x" + String(index).padStart(64, "0"),
+        transactionHash: "0x" + String(index).padStart(64, "0"),
+        logIndex: String(index),
+        from: "0x1111111111111111111111111111111111111111",
+        to: "0x2222222222222222222222222222222222222222",
+        contractAddress: "0x5555555555555555555555555555555555555555",
+        value: "1",
+      })),
+    };
+    const transport = new FixtureTransport(fullPage);
+    const result = await new EtherscanAdapter({ transport }).getErc20TransfersByBlockRangeWindow(
+      normalizeErc20BlockRangeRequest({
+        chain: 1,
+        address: "0x1111111111111111111111111111111111111111",
+        startBlock: "40",
+        endBlock: "42",
+        direction: "outgoing",
+      }),
+      context(),
+    );
+    expect(result.complete).toBe(false);
+    expect(result.items).toHaveLength(10_000);
+    expect(transport.requests[0]?.params).toMatchObject({ action: "tokentx", page: 1, offset: 10_000, sort: "asc", startblock: "40", endblock: "42" });
   });
 
   it("maps an empty provider token-decimal field to null", async () => {

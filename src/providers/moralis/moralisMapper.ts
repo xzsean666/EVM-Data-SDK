@@ -60,6 +60,7 @@ export function mapMoralisTokenTransfer(
   return {
     chainId: chain.chainId,
     transactionHash: value.transaction_hash.toLowerCase(),
+    transactionIndex: nullableQuantity(value.transaction_index),
     logIndex: nullableQuantity(value.log_index),
     blockNumber: canonicalQuantity(value.block_number),
     timestamp: mapTimestamp(value.block_timestamp),

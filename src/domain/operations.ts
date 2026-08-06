@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import type { ChainReference } from "./chains";
-import { invalidRequest } from "./errors";
+import { invalidBlockRange, invalidRequest } from "./errors";
 import { MAX_CURSOR_LENGTH } from "./pagination";
 
 export const DEFAULT_PAGE_SIZE = 50;
@@ -10,6 +10,7 @@ export const OPERATION_NAMES = [
   "getTransactions",
   "getNativeBalance",
   "getErc20Transfers",
+  "getErc20TransfersByBlockRange",
   "getPriceHistory",
 ] as const;
 
@@ -49,6 +50,20 @@ export interface Erc20TransfersRequest {
   readonly signal?: AbortSignal;
 }
 
+/**
+ * Reads all address-scoped ERC-20 transfers in one inclusive block interval.
+ * This operation deliberately has no page-size or cursor controls.
+ */
+export interface Erc20BlockRangeRequest {
+  readonly chain: ChainReference;
+  readonly address: string;
+  readonly startBlock: string;
+  readonly endBlock: string;
+  readonly tokenAddress?: string;
+  readonly direction?: TransferDirection;
+  readonly signal?: AbortSignal;
+}
+
 export interface NormalizedTransactionsRequest {
   readonly operation: "getTransactions";
   readonly chain: ChainReference;
@@ -81,6 +96,17 @@ export interface NormalizedErc20TransfersRequest {
   readonly startBlock: string | null;
   readonly endBlock: string | null;
   readonly cursor: string | null;
+  readonly signal?: AbortSignal;
+}
+
+export interface NormalizedErc20BlockRangeRequest {
+  readonly operation: "getErc20TransfersByBlockRange";
+  readonly chain: ChainReference;
+  readonly address: string;
+  readonly startBlock: string;
+  readonly endBlock: string;
+  readonly tokenAddress: string | null;
+  readonly direction: TransferDirection;
   readonly signal?: AbortSignal;
 }
 
@@ -140,6 +166,20 @@ const erc20TransfersRequestSchema = z
   })
   .strict();
 
+const erc20BlockRangeRequestSchema = z
+  .object({
+    chain: chainReferenceSchema,
+    address: addressSchema.transform((value) => value.toLowerCase()),
+    startBlock: decimalQuantitySchema,
+    endBlock: decimalQuantitySchema,
+    tokenAddress: addressSchema
+      .transform((value) => value.toLowerCase())
+      .optional(),
+    direction: directionSchema,
+    signal: z.custom<AbortSignal>((value) => value instanceof AbortSignal).optional(),
+  })
+  .strict();
+
 export function parseTransactionsRequest(input: unknown): NormalizedTransactionsRequest {
   const parsed = parseSchema(transactionsRequestSchema, input, "transactions request");
   validateBlockRange(parsed.startBlock, parsed.endBlock);
@@ -186,9 +226,30 @@ export function parseErc20TransfersRequest(input: unknown): NormalizedErc20Trans
   };
 }
 
+export function parseErc20BlockRangeRequest(input: unknown): NormalizedErc20BlockRangeRequest {
+  const parsed = erc20BlockRangeRequestSchema.safeParse(input);
+  if (!parsed.success) {
+    throw invalidBlockRange("Invalid ERC-20 block-range request.");
+  }
+  if (BigInt(parsed.data.startBlock) > BigInt(parsed.data.endBlock)) {
+    throw invalidBlockRange("startBlock must not be greater than endBlock.");
+  }
+  return {
+    operation: "getErc20TransfersByBlockRange",
+    chain: normalizeChainReference(parsed.data.chain),
+    address: parsed.data.address,
+    startBlock: parsed.data.startBlock,
+    endBlock: parsed.data.endBlock,
+    tokenAddress: parsed.data.tokenAddress ?? null,
+    direction: parsed.data.direction,
+    ...(parsed.data.signal === undefined ? {} : { signal: parsed.data.signal }),
+  };
+}
+
 export const normalizeTransactionsRequest = parseTransactionsRequest;
 export const normalizeNativeBalanceRequest = parseNativeBalanceRequest;
 export const normalizeErc20TransfersRequest = parseErc20TransfersRequest;
+export const normalizeErc20BlockRangeRequest = parseErc20BlockRangeRequest;
 
 export function normalizeChainReference(value: ChainReference): ChainReference {
   if (typeof value === "number") {

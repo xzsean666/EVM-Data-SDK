@@ -3,9 +3,11 @@ import type { HttpTransport } from "../../transport/HttpTransport";
 import type {
   CapabilityRequest,
   DataProviderAdapter,
+  ProviderBlockRangeWindowResult,
   ProviderAttemptContext,
 } from "../DataProviderAdapter";
 import type {
+  NormalizedErc20BlockRangeRequest,
   NormalizedErc20TransfersRequest,
   NormalizedNativeBalanceRequest,
   NormalizedTransactionsRequest,
@@ -57,6 +59,7 @@ export class EtherscanAdapter implements DataProviderAdapter {
   supports(request: CapabilityRequest): boolean {
     if (request.chain.routes.etherscan === undefined) return false;
     if (request.operation === "getNativeBalance") return true;
+    if (request.operation === "getErc20TransfersByBlockRange") return true;
     return "pageSize" in request.request && request.request.pageSize <= ETHERSCAN_MAX_PAGE_SIZE;
   }
 
@@ -151,6 +154,42 @@ export class EtherscanAdapter implements DataProviderAdapter {
         request.direction === "outgoing" && item.from === request.address
       ));
       return pageResult(items, nextPage(allItems.length, request.pageSize, page), context);
+    } catch (error: unknown) {
+      throw invalidResponse(context, error);
+    }
+  }
+
+  async getErc20TransfersByBlockRangeWindow(
+    request: NormalizedErc20BlockRangeRequest,
+    context: ProviderAttemptContext,
+  ): Promise<ProviderBlockRangeWindowResult> {
+    const body = await this.call("tokentx", {
+      address: request.address,
+      ...(request.tokenAddress === null ? {} : { contractaddress: request.tokenAddress }),
+      page: 1,
+      offset: ETHERSCAN_MAX_PAGE_SIZE,
+      sort: "asc",
+      startblock: request.startBlock,
+      endblock: request.endBlock,
+    }, context);
+    const envelope = etherscanTokenTransferEnvelopeSchema.safeParse(body);
+    if (!envelope.success) throw invalidResponse(context);
+    if (envelope.data.status === "0") {
+      if (isEmptyMessage(envelope.data.message, envelope.data.result, "transfers")) {
+        return { items: [], complete: true, pageInfo: { provider: this.name, chainId: context.chain.chainId } };
+      }
+      throw classifyEtherscanEnvelopeError(envelope.data.message, envelope.data.result, context.chain.chainId);
+    }
+    if (!Array.isArray(envelope.data.result)) throw invalidResponse(context);
+    try {
+      const mapped = envelope.data.result.map((item) => mapEtherscanTokenTransfer(item, context.chain));
+      return {
+        items: mapped
+          .filter((item) => directionMatches(item, request.direction, request.address))
+          .map((item) => ({ item, identityKey: null })),
+        complete: mapped.length < ETHERSCAN_MAX_PAGE_SIZE,
+        pageInfo: { provider: this.name, chainId: context.chain.chainId },
+      };
     } catch (error: unknown) {
       throw invalidResponse(context, error);
     }
@@ -264,6 +303,14 @@ function pageResult<T>(items: T[], nextPageState: EtherscanPageState | null, con
     nextPageState,
     pageInfo: { provider: "etherscan", chainId: context.chain.chainId },
   };
+}
+
+function directionMatches(
+  item: Erc20Transfer,
+  direction: NormalizedErc20BlockRangeRequest["direction"],
+  address: string,
+): boolean {
+  return direction === "both" || direction === "incoming" && item.to === address || direction === "outgoing" && item.from === address;
 }
 
 function invalidResponse(context: ProviderAttemptContext, cause?: unknown): EvmDataError {

@@ -4,6 +4,50 @@ Last updated: 2026-08-06
 
 Workflow state: Step 5 review complete for Work Packages 1 through 9 and Price-0 through Price-5; release decisions and Git identity remain outside implementation scope.
 
+## v0.3 Proposal: Advanced Proxy and Block-Range ERC-20 Reads
+
+**Status:** ADR-023/ADR-024 were explicitly approved by the owner on 2026-08-06; source implementation and deterministic verification are complete in the working tree.
+
+**Design source:** `docs/PROXY_AND_BLOCK_RANGE_UPGRADE.md`
+**Terra handoff:** `docs/GPT_TERRA_IMPLEMENTATION_PROMPT.md`
+
+The proposal keeps existing HTTP(S) proxy and page/cursor APIs compatible. It
+adds an opt-in `advancedProxy.kind: "sing-box"` runtime for fixed-version
+VLESS/SS URL lists and a separate
+`client.token.getErc20TransfersByBlockRange()` operation that hides page size,
+scans an inclusive block interval through a ledger of disjoint adaptive windows,
+restarts each smaller window as a new range request, de-duplicates stable
+transfer identities, and can complete different windows through Etherscan,
+Alchemy, or Moralis with explicit provenance.
+
+### Approved work packages
+
+1. **P0 — Recheck integrations and approve decisions**: verify sing-box release asset names/digests, VLESS/SS fields, mixed inbound behavior, and each provider's block-range parameters. Update `INTEGRATIONS.md` before adding dependencies or source.
+2. **P1 — Public range and runtime contracts**: configuration schemas, request/result models, error codes, service method, `initialize()`/`close()` lifecycle contract, and capability names.
+3. **P2 — VLESS/SS parser and sing-box config**: strict URL validation, secrets-safe internal representation, loopback-only mixed inbound, outbound generation and config fixtures.
+4. **P3 — Binary manager/runtime**: fixed platform mapping, digest verification, safe archive extraction, cache, child-process seam, readiness, cancellation and cleanup. No npm postinstall and no binary in the tarball.
+5. **P4 — Provider range adapters**: implement Etherscan, Alchemy dual-stream, and Moralis range adapters; lock every provider's boundary and terminal semantics with official-source-backed fixtures before enablement.
+6. **P5 — BlockRangeScanner and composition**: adaptive coverage windows, fresh range re-queries, provider rotation at window boundaries, explicit provenance, dedup/order, incomplete/stalled errors, record safety bounds, public exports and proxy integration for data/price paths.
+7. **P6 — Verification and docs**: deterministic fake transport/process/downloader tests, opt-in live smoke with `.env.key` held in memory, package tarball secret scan, README and all required handoff updates.
+
+**P0 evidence recorded:** The official immutable GitHub release API confirms the six `sing-box` `v1.13.16` desktop/server assets and their SHA-256 digests. `INTEGRATIONS.md` now records the pinned fixture manifest. Alchemy's official Transfers reference confirms `fromBlock`, `toBlock`, `fromAddress`, `toAddress`, `maxCount`, and `pageKey`. The Moralis documentation endpoint returned HTTP 403 in this environment, so its exact range-boundary/terminal behavior still requires an official-source capture and fixtures before source enablement.
+
+### Current risks and open decisions
+
+- A sing-box `urltest` group appears as one local proxy to the SDK; per-node SDK cooldowns would require a different runtime/control API. The owner must accept this trade-off or choose one process per node.
+- sing-box release assets and schema fields can change; a fixed version and digest must be recorded before implementation.
+- Returning every range record as one array can exhaust memory. `maxRangeRecords` must fail explicitly; async iteration is a later extension.
+- Provider-specific range filters may not have equivalent snapshot/finality semantics. Window-level mixing is intentional, so the completed-window ledger, item provenance, and aggregate provider/window counts must prove coverage and prevent silent source mixing.
+- The implementation must preserve the coverage-ledger invariants while adding the authorized source files.
+
+### v0.3 implementation completed (uncommitted)
+
+- Added the public ERC-20 block-range request/result contracts, typed range and sing-box errors, `maxRangeRecords`/`maxRangeWindows`, and `client.token.getErc20TransfersByBlockRange()`. The scanner uses fresh, non-overlapping closed windows, BigInt splitting, explicit provenance, safe identity rules, full-coverage verification, and bounded `BLOCK_RANGE_STALLED`/`BLOCK_RANGE_INCOMPLETE` outcomes.
+- Added range-window adapters for Etherscan (`page=1`, `offset=10000`, ascending), Alchemy (fresh incoming/outgoing streams with outgoing-only self transfers), and Moralis (fresh `from_block`/`to_block`, ascending). No provider cursor or page key is carried between windows.
+- Added opt-in VLESS/Shadowsocks parsing, loopback-only sing-box config rendering, pinned `1.13.16` release/digest handling, temporary private runtime configuration, readiness probing, idempotent bounded shutdown, and `initialize()`/async `close()` on the client. Both data execution and price `proxy-only` requests consume only the managed loopback HTTP route.
+- Deterministic tests cover scanner splitting, coverage/provenance, deduplication, dense-block stalling, range limits, all three provider range request shapes, VLESS/SS validation, loopback config, eager lifecycle behavior, and secret-safe failures. Default tests neither download nor launch sing-box.
+- The complete verification set now passes: `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build`, and `pnpm test:package`. No Git commit was made because repository author identity remains unset.
+
 ## Work Package 10: Page-size-aware routing and Etherscan full-data mode
 
 **Status:** Completed. `pnpm check` passes with 133 deterministic tests and package smoke validation.

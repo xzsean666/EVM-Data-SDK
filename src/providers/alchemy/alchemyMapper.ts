@@ -23,6 +23,7 @@ export function mapAlchemyTransfer(value: AlchemyTransfer, chain: ChainDefinitio
   return {
     chainId: chain.chainId,
     transactionHash: value.hash.toLowerCase(),
+    transactionIndex: null,
     logIndex: null,
     blockNumber: hexQuantityToDecimal(value.blockNum),
     timestamp: mapTimestamp(value.metadata?.blockTimestamp),

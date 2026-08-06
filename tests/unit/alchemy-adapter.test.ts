@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { ChainRegistry } from "../../src/chains/ChainRegistry";
-import { parseErc20TransfersRequest, parseNativeBalanceRequest, parseTransactionsRequest } from "../../src/domain/operations";
+import { normalizeErc20BlockRangeRequest, parseErc20TransfersRequest, parseNativeBalanceRequest, parseTransactionsRequest } from "../../src/domain/operations";
 import type { ProviderAttemptContext } from "../../src/providers/DataProviderAdapter";
 import { AlchemyAdapter } from "../../src/providers/alchemy/AlchemyAdapter";
 import type { HttpRequest, HttpResponse, HttpTransport } from "../../src/transport/HttpTransport";
@@ -129,6 +129,21 @@ describe("AlchemyAdapter", () => {
     expect(second.nextPageState).toBeNull();
     expect(transport.requests[2]?.body).toMatchObject({ params: [{ toAddress: address, pageKey: "incoming-next" }] });
     expect(transport.requests[3]?.body).toMatchObject({ params: [{ fromAddress: address, pageKey: "outgoing-next" }] });
+  });
+
+  it("restarts both directions from one inclusive range without carrying page keys", async () => {
+    const incoming = transfersResponse([transfer("incoming", "0x2a", "0x1111111111111111111111111111111111111111", address)], null);
+    const outgoing = transfersResponse([transfer("outgoing", "0x2a", address, "0x3333333333333333333333333333333333333333")], "must-split");
+    const transport = new BothDirectionTransport(incoming, outgoing, incoming, outgoing);
+    const result = await new AlchemyAdapter({ transport }).getErc20TransfersByBlockRangeWindow(
+      normalizeErc20BlockRangeRequest({ chain: 1, address, startBlock: "40", endBlock: "42", direction: "both" }),
+      context({ providerPageState: { pageKey: "ignored-by-range-operation" } }),
+    );
+    expect(result.complete).toBe(false);
+    expect(transport.requests).toHaveLength(2);
+    expect(transport.requests[0]?.body).toMatchObject({ params: [{ toAddress: address, fromBlock: "0x28", toBlock: "0x2a", maxCount: "0x3e8", order: "asc" }] });
+    expect(transport.requests[1]?.body).toMatchObject({ params: [{ fromAddress: address, fromBlock: "0x28", toBlock: "0x2a", maxCount: "0x3e8", order: "asc" }] });
+    expect(JSON.stringify(transport.requests)).not.toContain("ignored-by-range-operation");
   });
 
   it("rejects a single-stream cursor for a both-direction request", async () => {

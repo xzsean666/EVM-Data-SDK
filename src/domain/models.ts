@@ -41,6 +41,7 @@ export interface NativeBalance {
 export interface Erc20Transfer {
   chainId: number;
   transactionHash: string;
+  transactionIndex: string | null;
   logIndex: string | null;
   blockNumber: string;
   timestamp: string | null;
@@ -52,4 +53,26 @@ export interface Erc20Transfer {
   to: string;
   amount: string;
   provider: ProviderName;
+}
+
+export interface BlockRange {
+  readonly startBlock: string;
+  readonly endBlock: string;
+}
+
+export interface Erc20BlockRangeStats {
+  readonly windows: number;
+  readonly upstreamRequests: number;
+  readonly duplicateItemsRemoved: number;
+  readonly providerWindows: Readonly<Record<string, number>>;
+}
+
+export interface Erc20BlockRangeResult {
+  readonly chainId: number;
+  readonly address: string;
+  readonly range: BlockRange;
+  readonly direction: "incoming" | "outgoing" | "both";
+  readonly items: readonly Erc20Transfer[];
+  readonly providers: readonly ProviderName[];
+  readonly stats: Erc20BlockRangeStats;
 }

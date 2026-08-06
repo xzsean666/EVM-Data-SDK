@@ -7,7 +7,12 @@ import {
   type ErrorCode,
 } from "../domain/errors";
 import type { NormalizedProviderRequest, ProviderAttemptContext } from "../providers/DataProviderAdapter";
-import type { CredentialLease, DataProviderAdapter, ProxyLease } from "../providers/DataProviderAdapter";
+import type {
+  CredentialLease,
+  DataProviderAdapter,
+  ProviderBlockRangeWindowResult,
+  ProxyLease,
+} from "../providers/DataProviderAdapter";
 import type { Erc20Transfer, NativeBalance, Page, Transaction } from "../domain/models";
 import type { ProviderPageResult } from "../domain/pagination";
 import { decodeCursor, encodeCursor, queryFingerprint } from "./cursorCodec";
@@ -20,12 +25,15 @@ import { ProxyPool } from "./ProxyPool";
 import { isHttpTransportError } from "../transport/HttpTransport";
 import { redactMessage } from "../transport/redaction";
 import { isEvmDataError } from "../domain/errors";
+import type { ManagedProxyRoute } from "../proxy/SingBoxProxyManager";
 
 export interface RequestExecutorOptions {
   readonly router: ProviderRouter;
   readonly requestPolicy: NormalizedRequestPolicy;
   readonly credentialPools?: ReadonlyMap<string, CredentialPool> | Readonly<Record<string, CredentialPool>>;
   readonly proxyPool?: ProxyPool;
+  /** One optional managed loopback HTTP route for advanced proxies. */
+  readonly advancedProxyRoute?: ManagedProxyRoute;
   readonly retryPolicy?: RetryPolicy;
   readonly clock?: Clock;
   readonly random?: RandomSource;
@@ -35,6 +43,12 @@ export interface RequestExecutorOptions {
 }
 
 type ExecutorResult = Page<Transaction> | NativeBalance | Page<Erc20Transfer>;
+type MappedProviderResult = ExecutorResult | ProviderBlockRangeWindowResult;
+
+export interface BlockRangeWindowExecution {
+  readonly result: ProviderBlockRangeWindowResult;
+  readonly upstreamRequests: number;
+}
 
 const PROVIDER_FAILURE_THRESHOLD = 2;
 const PROVIDER_COOLDOWN_MS = 1_000;
@@ -57,6 +71,7 @@ export class RequestExecutor {
   private readonly requestPolicy: NormalizedRequestPolicy;
   private readonly credentialPools: ReadonlyMap<string, CredentialPool> | Readonly<Record<string, CredentialPool>>;
   private readonly proxyPool: ProxyPool;
+  private readonly advancedProxyRoute: ManagedProxyRoute | undefined;
   private readonly retryPolicy: RetryPolicy;
   private readonly clock: Clock;
   private readonly random: RandomSource;
@@ -72,6 +87,7 @@ export class RequestExecutor {
     this.requestPolicy = options.requestPolicy;
     this.credentialPools = options.credentialPools ?? new Map();
     this.proxyPool = options.proxyPool ?? new ProxyPool([], { allowDirect: options.requestPolicy.allowDirect });
+    this.advancedProxyRoute = options.advancedProxyRoute;
     this.retryPolicy = options.retryPolicy ?? new RetryPolicy();
     this.clock = options.clock ?? systemClock;
     this.random = options.random ?? systemRandom;
@@ -83,15 +99,26 @@ export class RequestExecutor {
   execute(request: import("../domain/operations").NormalizedTransactionsRequest): Promise<Page<Transaction>>;
   execute(request: import("../domain/operations").NormalizedNativeBalanceRequest): Promise<NativeBalance>;
   execute(request: import("../domain/operations").NormalizedErc20TransfersRequest): Promise<Page<Erc20Transfer>>;
-  async execute(request: NormalizedProviderRequest): Promise<ExecutorResult> {
+  execute(
+    request: import("../domain/operations").NormalizedErc20BlockRangeRequest,
+    providerOffset?: number,
+  ): Promise<BlockRangeWindowExecution>;
+  async execute(
+    request: NormalizedProviderRequest,
+    providerOffset = 0,
+  ): Promise<ExecutorResult | BlockRangeWindowExecution> {
+    this.advancedProxyRoute?.assertReady();
     if (request.signal?.aborted === true) {
       throw callerAborted();
     }
     const cursorValue = "cursor" in request ? request.cursor : null;
     const identity = cursorValue === null ? null : decodeCursor(cursorValue);
-    const candidates = identity === null
+    const routedCandidates = identity === null
       ? this.router.route(request)
       : [this.router.routeContinuation(request, identity)];
+    const candidates = request.operation === "getErc20TransfersByBlockRange"
+      ? rotateCandidates(routedCandidates, providerOffset)
+      : routedCandidates;
     const deadline = this.clock.now() + this.requestPolicy.totalTimeoutMs;
     const executionId = ++this.nextExecutionId;
     const continuation = identity !== null;
@@ -145,7 +172,7 @@ export class RequestExecutor {
             maxTotalAttempts: this.requestPolicy.maxTotalAttempts,
             continuation,
             hasAlternativeCredential: false,
-            hasAlternativeProxy: this.proxyPool.hasAvailable(),
+            hasAlternativeProxy: this.hasAvailableProxy(),
             hasAlternativeProvider: !continuation && candidateIndex + 1 < candidates.length,
             remainingMs: remainingBeforeAttempt,
             randomValue: this.random.next(),
@@ -165,7 +192,7 @@ export class RequestExecutor {
         if (
           !continuation &&
           candidateIndex + 1 < candidates.length &&
-          !this.proxyPool.hasAvailable() &&
+          !this.hasAvailableProxy() &&
           this.proxyPool.nextAvailableAt() !== null
         ) {
           candidateIndex += 1;
@@ -229,11 +256,23 @@ export class RequestExecutor {
             credentialPool.report(credential, "success");
           }
           if (proxy !== null) {
-            this.proxyPool.report(proxy, "success");
+            this.reportProxy(proxy, "success");
           }
           this.recordProviderSuccess(candidate, request.operation);
           this.observeAttempt(request, candidate, attempt, startedAt, "success");
-          return mapped;
+          if (request.operation === "getErc20TransfersByBlockRange") {
+            if (!isProviderBlockRangeWindowResult(mapped)) {
+              throw invalidProviderResponse(candidate);
+            }
+            const result = mapped;
+            if (!result.complete && candidateIndex + 1 < candidates.length && attempt < this.requestPolicy.maxTotalAttempts) {
+              candidateIndex += 1;
+              useNextCandidate = true;
+              break;
+            }
+            return { result, upstreamRequests: attempt };
+          }
+          return mapped as ExecutorResult;
         } catch (error: unknown) {
           const failure = request.signal !== undefined && request.signal.aborted
             ? callerAborted(candidate)
@@ -243,7 +282,7 @@ export class RequestExecutor {
             credentialPool.report(credential, credentialOutcome(failure));
           }
           if (proxy !== null) {
-            this.proxyPool.report(proxy, failure.code === "PROXY_ERROR" ? "proxy_failure" : "neutral");
+            this.reportProxy(proxy, failure.code === "PROXY_ERROR" ? "proxy_failure" : "neutral");
           }
           this.recordProviderOutcome(candidate, request.operation, failure, executionId);
           this.observeAttempt(request, candidate, attempt, startedAt, "failure", failure.code);
@@ -257,7 +296,7 @@ export class RequestExecutor {
             maxTotalAttempts: this.requestPolicy.maxTotalAttempts,
             continuation,
             hasAlternativeCredential: credentialPool?.hasAvailable() ?? false,
-            hasAlternativeProxy: this.proxyPool.hasAvailable(),
+            hasAlternativeProxy: this.hasAvailableProxy(),
             hasAlternativeProvider: !continuation && candidateIndex + 1 < candidates.length,
             remainingMs: Math.max(0, deadline - this.clock.now()),
             randomValue: this.random.next(),
@@ -337,9 +376,16 @@ export class RequestExecutor {
   ): Promise<ProxyLease | null | undefined> {
     while (true) {
       const now = this.ensureSignalAndDeadline(deadline, signal);
+      const preferManaged = this.advancedProxyRoute !== undefined && this.nextAdvancedProxy();
+      if (preferManaged) {
+        return this.advancedProxyRoute.acquire(signal);
+      }
       const lease = this.proxyPool.acquire(now);
       if (lease !== undefined) {
         return lease;
+      }
+      if (this.advancedProxyRoute !== undefined) {
+        return this.advancedProxyRoute.acquire(signal);
       }
       if (this.proxyPool.isExhausted(now)) {
         return undefined;
@@ -350,6 +396,22 @@ export class RequestExecutor {
       }
       await this.waitWithinBudget(next - now, deadline, signal);
     }
+  }
+
+  private advancedProxySequence = false;
+
+  private nextAdvancedProxy(): boolean {
+    this.advancedProxySequence = !this.advancedProxySequence;
+    return this.advancedProxySequence;
+  }
+
+  private hasAvailableProxy(): boolean {
+    return this.proxyPool.hasAvailable() || this.advancedProxyRoute !== undefined;
+  }
+
+  private reportProxy(lease: ProxyLease, outcome: "success" | "proxy_failure" | "neutral"): void {
+    this.proxyPool.report(lease, outcome);
+    this.advancedProxyRoute?.report(lease, outcome);
   }
 
   private async pace(provider: string, deadline: number, signal: AbortSignal | undefined): Promise<void> {
@@ -514,7 +576,7 @@ async function invokeAdapter(
   adapter: DataProviderAdapter,
   request: NormalizedProviderRequest,
   context: ProviderAttemptContext,
-): Promise<ProviderPageResult<unknown> | NativeBalance> {
+): Promise<ProviderPageResult<unknown> | NativeBalance | ProviderBlockRangeWindowResult> {
   switch (request.operation) {
     case "getTransactions":
       if (adapter.getTransactions === undefined) {
@@ -531,15 +593,26 @@ async function invokeAdapter(
         throw new EvmDataError({ code: "UNSUPPORTED_OPERATION", message: "Provider method is unavailable.", retryable: false });
       }
       return adapter.getErc20Transfers(request, context) as Promise<ProviderPageResult<unknown>>;
+    case "getErc20TransfersByBlockRange":
+      if (adapter.getErc20TransfersByBlockRangeWindow === undefined) {
+        throw new EvmDataError({ code: "BLOCK_RANGE_UNSUPPORTED", message: "Provider block-range method is unavailable.", retryable: false });
+      }
+      return adapter.getErc20TransfersByBlockRangeWindow(request, context);
   }
 }
 
 function mapSuccess(
-  raw: ProviderPageResult<unknown> | NativeBalance,
+  raw: ProviderPageResult<unknown> | NativeBalance | ProviderBlockRangeWindowResult,
   candidate: ProviderCandidate,
   request: NormalizedProviderRequest,
   fingerprint: string,
-): ExecutorResult {
+): MappedProviderResult {
+  if (request.operation === "getErc20TransfersByBlockRange") {
+    if (!isProviderBlockRangeWindowResult(raw) || raw.pageInfo.chainId !== candidate.chain.chainId || raw.pageInfo.provider !== candidate.adapter.name) {
+      throw invalidProviderResponse(candidate);
+    }
+    return raw;
+  }
   if (request.operation === "getNativeBalance") {
     if (!isNativeBalance(raw) || raw.chainId !== candidate.chain.chainId || raw.provider !== candidate.adapter.name) {
       throw invalidProviderResponse(candidate);
@@ -675,20 +748,47 @@ function credentialOutcome(error: EvmDataError): "authentication_failed" | "rate
   return "neutral";
 }
 
-function isNativeBalance(value: ProviderPageResult<unknown> | NativeBalance): value is NativeBalance {
+function isNativeBalance(value: ProviderPageResult<unknown> | NativeBalance | ProviderBlockRangeWindowResult): value is NativeBalance {
   return typeof value === "object" && value !== null && !("items" in value) && "chainId" in value && "provider" in value;
 }
 
-function isProviderPageResult(value: ProviderPageResult<unknown> | NativeBalance): value is ProviderPageResult<unknown> {
+function isProviderPageResult(value: ProviderPageResult<unknown> | NativeBalance | ProviderBlockRangeWindowResult): value is ProviderPageResult<unknown> {
   return typeof value === "object" &&
     value !== null &&
     "items" in value &&
     Array.isArray(value.items) &&
+    "nextPageState" in value &&
     value.nextPageState !== undefined &&
     typeof value.pageInfo === "object" &&
     value.pageInfo !== null &&
     typeof value.pageInfo.chainId === "number" &&
     typeof value.pageInfo.provider === "string";
+}
+
+function isProviderBlockRangeWindowResult(value: unknown): value is ProviderBlockRangeWindowResult {
+  if (typeof value !== "object" || value === null || !("complete" in value) ||
+    !("items" in value) || !("pageInfo" in value)) {
+    return false;
+  }
+  const pageInfo = value.pageInfo;
+  return typeof value.complete === "boolean" &&
+    Array.isArray(value.items) &&
+    typeof pageInfo === "object" &&
+    pageInfo !== null &&
+    "chainId" in pageInfo &&
+    "provider" in pageInfo &&
+    typeof pageInfo.chainId === "number" &&
+    typeof pageInfo.provider === "string";
+}
+
+function rotateCandidates(candidates: readonly ProviderCandidate[], offset: number): readonly ProviderCandidate[] {
+  if (candidates.length < 2) {
+    return candidates;
+  }
+  const normalizedOffset = ((Math.trunc(offset) % candidates.length) + candidates.length) % candidates.length;
+  return normalizedOffset === 0
+    ? candidates
+    : Object.freeze([...candidates.slice(normalizedOffset), ...candidates.slice(0, normalizedOffset)]);
 }
 
 function invalidProviderResponse(candidate: ProviderCandidate): EvmDataError {

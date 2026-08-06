@@ -474,3 +474,50 @@ A caller aborts while the executor is in backoff. The wait terminates immediatel
 - Binance Spot, OKX Spot UTC day candles, Coinbase Exchange Spot, and GeckoTerminal USD pool OHLCV use provider-local schemas, mappers, error classifiers, and fixtures.
 - Results contain decimal-string OHLCV, `price === close`, ascending UTC points, explicit `missingDates`, source market/quote metadata, and GeckoTerminal network/contract/pool identity.
 - Four-success, partial-success, all-failure, direct, proxy-only, 429, selected 5xx, timeout, caller abort, redaction, chunk/deduplication, and ambiguity cases are deterministic tests.
+
+## 12. v0.3 Upgrade Proposal: Advanced Proxy and Block-Range Reads
+
+This v0.3 section is accepted by the owner on 2026-08-06. The full design,
+examples, algorithms, security requirements, and implementation queue are in
+[PROXY_AND_BLOCK_RANGE_UPGRADE.md](./PROXY_AND_BLOCK_RANGE_UPGRADE.md).
+
+### 12.1 Advanced proxy
+
+Add an independent `advancedProxy.kind: "sing-box"` configuration accepting a
+non-empty list of `vless://` or `ss://` URLs. The SDK must lazily prepare a
+fixed-version sing-box binary for `linux|darwin|win32 × x64|arm64`, verify its
+SHA-256 release digest, run a loopback-only `mixed` inbound, and expose only a
+local HTTP proxy to the existing execution and price transport paths. No
+binary is shipped in the npm tarball, no unconditional `postinstall` download
+is allowed, and no implicit `.env`/proxy environment read is introduced.
+
+`requestPolicy.allowDirect: false` must apply to this route as well as existing
+HTTP(S) proxies. If the advanced runtime cannot start, the SDK must return a
+typed proxy/runtime error rather than silently sending credentials over a
+direct route. URL secrets, temporary config, child-process output, and runtime
+metadata must be redacted or removed on close.
+
+### 12.2 Block-range ERC-20 operation
+
+Add `client.token.getErc20TransfersByBlockRange()` with a required address,
+chain, and inclusive decimal-string `startBlock`/`endBlock`; direction defaults
+to `both`, and one token-address filter remains optional. The public request
+does not contain `pageSize`, and a successful response contains every matching
+transfer in the range, sorted deterministically and de-duplicated by the
+provider-neutral transfer identity.
+
+Internally, each eligible provider uses its own bounded maximum page and
+ascending range filter. The scanner keeps a coverage ledger of disjoint closed
+block windows. A response that cannot prove a whole window is terminal causes
+that window to be split and re-requested from new block ranges; it never carries
+a provider cursor/page state into the next window. Windows may use Etherscan,
+Alchemy, or Moralis independently, with each item and aggregate metadata
+showing provenance. A successful result is returned only when the completed
+windows exactly cover the requested interval; otherwise it raises a typed
+incomplete/stalled error and never a falsely complete partial array. An explicit
+record safety limit fails with `RANGE_RESULT_TOO_LARGE` rather than truncating
+data.
+
+The upgrade does not add global chain event scanning, normal transactions from
+Alchemy asset transfers, arbitrary sing-box configuration, TUN/system routing,
+unbounded memory, or a promise to evade API quotas or network policy.

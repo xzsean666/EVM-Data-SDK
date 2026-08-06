@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { ChainRegistry } from "../../src/chains/ChainRegistry";
 import { HttpTransportError } from "../../src/transport/HttpTransport";
 import type { HttpRequest, HttpResponse, HttpTransport } from "../../src/transport/HttpTransport";
-import { parseErc20TransfersRequest, parseNativeBalanceRequest, parseTransactionsRequest } from "../../src/domain/operations";
+import { normalizeErc20BlockRangeRequest, parseErc20TransfersRequest, parseNativeBalanceRequest, parseTransactionsRequest } from "../../src/domain/operations";
 import type { ProviderAttemptContext } from "../../src/providers/DataProviderAdapter";
 import { MoralisAdapter } from "../../src/providers/moralis/MoralisAdapter";
 import {
@@ -121,6 +121,23 @@ describe("MoralisAdapter", () => {
       order: "DESC",
       contract_addresses: "0x5555555555555555555555555555555555555555",
     });
+  });
+
+  it("uses a fresh ascending closed range request and only accepts an absent cursor as terminal", async () => {
+    const terminalTransport = new FixtureTransport({ ...moralisTokenTransfers, cursor: null });
+    const request = normalizeErc20BlockRangeRequest({
+      chain: 1,
+      address: "0x4444444444444444444444444444444444444444",
+      startBlock: "40",
+      endBlock: "43",
+      direction: "incoming",
+    });
+    const terminal = await new MoralisAdapter({ transport: terminalTransport }).getErc20TransfersByBlockRangeWindow(request, context());
+    expect(terminal.complete).toBe(true);
+    expect(terminalTransport.requests[0]?.params).toMatchObject({ chain: "0x1", limit: 100, order: "ASC", from_block: "40", to_block: "43" });
+
+    const incomplete = await new MoralisAdapter({ transport: new FixtureTransport(moralisTokenTransfers) }).getErc20TransfersByBlockRangeWindow(request, context());
+    expect(incomplete.complete).toBe(false);
   });
 
   it.each([

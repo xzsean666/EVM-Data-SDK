@@ -312,6 +312,44 @@ The owner approved the architecture baseline in the 2026-08-05 implementation re
 
 **Trade-offs:** A single Alchemy both-direction adapter attempt makes two upstream calls rather than one and can return up to twice as many records as a single-direction page. Ordering is deterministic by block number then `uniqueId` within each composite page; global ordering across independent streams would require buffering unreturned transfers in the cursor, which this design deliberately avoids. A cursor remains Alchemy-pinned and changing providers, page size, filters, or mode is invalid.
 
+## ADR-023: Advanced proxy uses a managed sing-box loopback runtime
+
+**Status:** Accepted by owner on 2026-08-06
+
+**Date:** 2026-08-06
+
+**Decision:** Add an independent `advancedProxy.kind: "sing-box"` configuration that accepts only `vless://` and `ss://` URLs. On first actual use, a fixed-version platform binary is downloaded or reused from a verified cache, started with a generated loopback-only `mixed` inbound, and exposed to the existing execution/price paths as a local HTTP proxy. Keep the current explicit HTTP(S) proxy shape unchanged.
+
+**Reason:** Axios cannot speak VLESS or Shadowsocks directly. A managed sing-box process provides one narrow translation boundary while preserving the existing transport, retry, proxy lease, and redaction contracts. Lazy download avoids npm install-time network side effects.
+
+**Alternatives considered:**
+
+- Add a SOCKS/VLESS implementation directly to Axios: rejected because it couples protocol parsing, transport agents, and process lifecycle to every provider adapter.
+- Ship a binary in the npm package: rejected because of package size, platform matrix, native executable provenance, and release licensing/update concerns.
+- Read `.env.key` or implicit proxy environment variables inside the SDK: rejected because configuration ownership and secret boundaries would become nondeterministic.
+- Accept arbitrary sing-box JSON: rejected because TUN/system routing, LAN listeners, DNS, and unreviewed capabilities would escape the SDK's transport boundary.
+
+**Trade-offs:** The SDK gains binary download, checksum, child-process, and cleanup complexity. sing-box may select among nodes internally, so the SDK observes one local route rather than one independently cooled route per URL. The feature is Node.js-only, opt-in, and makes no quota or censorship-evasion guarantee.
+
+## ADR-024: Block-range ERC-20 reads use adaptive coverage windows
+
+**Status:** Accepted by owner on 2026-08-06
+
+**Date:** 2026-08-06
+
+**Decision:** Add `getErc20TransfersByBlockRange` with a required wallet address and inclusive `startBlock`/`endBlock`; do not expose `pageSize` or raw cursors. The scanner owns a ledger of disjoint closed windows that must exactly partition the requested range. Each provider attempt uses its internal maximum page and ascending fresh block-range request. If an attempt cannot prove a window is terminal, the scanner discards that partial window response, splits the window at its `BigInt` midpoint, and re-queries the children without carrying any provider cursor/page state. Every window may try Etherscan, Alchemy, and Moralis in capability-aware priority order. A single dense block that no candidate can prove complete fails as stalled.
+
+**Reason:** Provider page limits and range query timeouts make one request insufficient. Restarting a smaller closed range is safer than carrying heterogeneous provider cursor states, while a coverage ledger proves that changing provider between windows creates neither a gap nor an out-of-range result. A full response must never be advanced with `lastBlock + 1`, because that can lose the remaining transfers in a dense last block.
+
+**Alternatives considered:**
+
+- Expose `pageSize`/`nextCursor` and require callers to loop: rejected for this operation because the owner wants a range-only contract.
+- Set `offset=10,000` once and assume a full page means the next block is `lastBlock + 1`: rejected because a page can end halfway through a block.
+- Pin one provider and advance its internal page state: rejected because the requested design is fresh block-range queries and all three supported range APIs can be scheduled at the window boundary.
+- Return a partial array on timeout: rejected because partial data cannot be mistaken for complete range coverage; return a typed incomplete error with a safe next block instead.
+
+**Trade-offs:** A successful call may make more requests because overflowing windows are re-read after splitting, and it holds all records in memory. An explicit `maxRangeRecords` and maximum-window safety limit must fail rather than truncate or loop; a future async iterator can address very large ranges. Results can have multiple sources, so every transfer retains its provider and the aggregate exposes providers plus completed-window counts. Provider-specific support remains capability-gated: all three planned range adapters require fixture-backed boundary and terminal semantics before enablement.
+
 ## Open Decisions Requiring Owner Input
 
 These are not architecture blockers for writing code until their named milestone, but they block release where noted:

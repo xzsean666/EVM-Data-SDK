@@ -3,6 +3,7 @@ import type { HttpTransport } from "../../transport/HttpTransport";
 import { EvmDataError } from "../../domain/errors";
 import type { Erc20Transfer, NativeBalance, Transaction } from "../../domain/models";
 import type {
+  NormalizedErc20BlockRangeRequest,
   NormalizedErc20TransfersRequest,
   NormalizedNativeBalanceRequest,
   NormalizedTransactionsRequest,
@@ -11,6 +12,7 @@ import type { ProviderPageResult } from "../../domain/pagination";
 import type {
   CapabilityRequest,
   DataProviderAdapter,
+  ProviderBlockRangeWindowResult,
   ProviderAttemptContext,
 } from "../DataProviderAdapter";
 import {
@@ -55,6 +57,7 @@ export class MoralisAdapter implements DataProviderAdapter {
   supports(request: CapabilityRequest): boolean {
     if (request.chain.routes.moralis === undefined) return false;
     if (request.operation === "getNativeBalance") return true;
+    if (request.operation === "getErc20TransfersByBlockRange") return true;
     return "pageSize" in request.request && request.request.pageSize <= MORALIS_MAX_PAGE_SIZE;
   }
 
@@ -115,6 +118,34 @@ export class MoralisAdapter implements DataProviderAdapter {
         request.direction === "outgoing" && item.from === request.address
       ));
       return pageResult(items, nextPageState(parsed.data.cursor, cursor), context);
+    } catch (error: unknown) {
+      throw invalidResponse(context, error);
+    }
+  }
+
+  async getErc20TransfersByBlockRangeWindow(
+    request: NormalizedErc20BlockRangeRequest,
+    context: ProviderAttemptContext,
+  ): Promise<ProviderBlockRangeWindowResult> {
+    const body = await this.call(`/${request.address}/erc20/transfers`, {
+      chain: moralisChain(context),
+      limit: MORALIS_MAX_PAGE_SIZE,
+      order: "ASC",
+      from_block: request.startBlock,
+      to_block: request.endBlock,
+      ...(request.tokenAddress === null ? {} : { contract_addresses: request.tokenAddress }),
+    }, context);
+    const parsed = moralisTokenTransferCollectionSchema.safeParse(body);
+    if (!parsed.success) throw invalidResponse(context);
+    try {
+      const mapped = parsed.data.result.map((item) => mapMoralisTokenTransfer(item, context.chain));
+      return {
+        items: mapped
+          .filter((item) => directionMatches(item, request.direction, request.address))
+          .map((item) => ({ item, identityKey: null })),
+        complete: parsed.data.cursor === undefined || parsed.data.cursor === null || parsed.data.cursor === "",
+        pageInfo: { provider: this.name, chainId: context.chain.chainId },
+      };
     } catch (error: unknown) {
       throw invalidResponse(context, error);
     }
@@ -259,6 +290,14 @@ function pageResult<T>(items: T[], nextPageStateValue: MoralisPageState | null, 
     nextPageState: nextPageStateValue,
     pageInfo: { provider: "moralis", chainId: context.chain.chainId },
   };
+}
+
+function directionMatches(
+  item: Erc20Transfer,
+  direction: NormalizedErc20BlockRangeRequest["direction"],
+  address: string,
+): boolean {
+  return direction === "both" || direction === "incoming" && item.to === address || direction === "outgoing" && item.from === address;
 }
 
 function invalidResponse(context: ProviderAttemptContext, cause?: unknown): EvmDataError {

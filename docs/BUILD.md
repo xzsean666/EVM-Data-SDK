@@ -131,6 +131,22 @@ The repository includes `scripts/live-config.mjs` and `scripts/live-smoke.mjs` f
 
 `pnpm test:package` must run `pnpm pack`, consume the produced tarball from temporary ESM/CJS/TypeScript consumers, and validate public imports. Temporary paths must be narrow and safely removed. The suite must inspect tarball contents for accidental fixtures, `.env` files, and source credentials.
 
+### Planned v0.3 runtime checks
+
+The v0.3 proposal adds a lazily managed sing-box executable but must not add a
+binary to the npm tarball or an unconditional networked `postinstall`. Default
+tests use fake download, filesystem, child-process, and readiness seams. They
+must cover the fixed `linux|darwin|win32 × x64|arm64` asset mapping, SHA-256
+verification, safe archive extraction, cache permissions, startup/abort/close,
+and the invariant that a client without `advancedProxy` has no process or
+network side effect. An opt-in live smoke may use an explicitly supplied binary
+or download mirror; it must never print proxy URLs or runtime config.
+
+The block-range operation is tested with fixture providers and has no public
+`pageSize`; its test suite must prove closed-range coverage, overlap dedup,
+dense-block progress, provider pinning, bounded fallback before first response,
+incomplete/stalled errors, and explicit record-limit failure.
+
 ## 7. Local Usage During Development
 
 This repository is a library, not a server. There is no long-running development URL. Use tests or a small ignored example script after the package exists:

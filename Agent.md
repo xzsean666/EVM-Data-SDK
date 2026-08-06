@@ -20,10 +20,10 @@ Do not rely on previous conversations or hidden context. The repository document
 
 ## Current Gate
 
-- Current workflow step: Step 5, review and refactoring.
-- Architecture status: Accepted by the owner in the current work request.
-- Implementation status: Work Packages 1 through 9 complete; Step 5 review is complete and opt-in live smoke has been run.
-- No production code may be added until the owner explicitly approves the architecture baseline.
+- Current workflow step: Step 4, v0.3 implementation.
+- Architecture status: v0.1/v0.2 baseline and v0.3 ADR-023/ADR-024 are accepted by the owner in the current work request.
+- Implementation status: Work Packages 1 through 11 and v0.3 P0 documentation/integration discovery are complete; v0.3 source implementation is authorized.
+- Production code may be added only within the accepted v0.3 advanced-proxy and block-range design.
 
 ## Mandatory Workflow
 

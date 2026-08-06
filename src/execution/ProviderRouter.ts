@@ -1,5 +1,5 @@
 import type { ChainDefinition } from "../domain/chains";
-import { invalidConfiguration, invalidCursor, unsupportedOperation } from "../domain/errors";
+import { EvmDataError, invalidConfiguration, invalidCursor, unsupportedOperation } from "../domain/errors";
 import type { NormalizedProviderRequest, CapabilityRequest, DataProviderAdapter } from "../providers/DataProviderAdapter";
 import { validateProviderName } from "../providers/DataProviderAdapter";
 import type { CursorIdentity } from "../domain/pagination";
@@ -55,6 +55,14 @@ export class ProviderRouter {
       .map((entry) => toCandidate(entry, chain));
 
     if (candidates.length === 0) {
+      if (request.operation === "getErc20TransfersByBlockRange") {
+        throw new EvmDataError({
+          code: "BLOCK_RANGE_UNSUPPORTED",
+          message: `No configured provider supports the requested block-range operation on chain ${chain.chainId}.`,
+          retryable: false,
+          chainId: chain.chainId,
+        });
+      }
       throw unsupportedOperation(
         `No configured provider supports ${request.operation} on chain ${chain.chainId}.`,
         chain.chainId,
@@ -123,6 +131,8 @@ function hasOperationMethod(adapter: DataProviderAdapter, operation: NormalizedP
       return typeof adapter.getNativeBalance === "function";
     case "getErc20Transfers":
       return typeof adapter.getErc20Transfers === "function";
+    case "getErc20TransfersByBlockRange":
+      return typeof adapter.getErc20TransfersByBlockRangeWindow === "function";
   }
 }
 

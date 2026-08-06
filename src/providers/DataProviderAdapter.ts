@@ -2,6 +2,7 @@ import type { ChainDefinition, ProviderName } from "../domain/chains";
 import type { EvmDataError } from "../domain/errors";
 import { invalidConfiguration } from "../domain/errors";
 import type {
+  NormalizedErc20BlockRangeRequest,
   NormalizedErc20TransfersRequest,
   NormalizedNativeBalanceRequest,
   NormalizedTransactionsRequest,
@@ -35,7 +36,28 @@ export interface ProviderAttemptContext {
 export type NormalizedProviderRequest =
   | NormalizedTransactionsRequest
   | NormalizedNativeBalanceRequest
-  | NormalizedErc20TransfersRequest;
+  | NormalizedErc20TransfersRequest
+  | NormalizedErc20BlockRangeRequest;
+
+/** A provider-private stable identity for one range result. */
+export interface ProviderBlockRangeItem {
+  readonly item: Erc20Transfer;
+  /**
+   * A provider documented stable identity when logIndex is unavailable. It is
+   * not exposed as a fabricated log index.
+   */
+  readonly identityKey: string | null;
+}
+
+/** One new provider request for one inclusive block window. */
+export interface ProviderBlockRangeWindowResult {
+  readonly items: readonly ProviderBlockRangeItem[];
+  readonly complete: boolean;
+  readonly pageInfo: {
+    readonly provider: ProviderName;
+    readonly chainId: number;
+  };
+}
 
 export interface CapabilityRequest {
   readonly operation: OperationName;
@@ -63,6 +85,11 @@ export interface DataProviderAdapter {
     request: NormalizedErc20TransfersRequest,
     context: ProviderAttemptContext,
   ): Promise<ProviderPageResult<Erc20Transfer>>;
+
+  getErc20TransfersByBlockRangeWindow?(
+    request: NormalizedErc20BlockRangeRequest,
+    context: ProviderAttemptContext,
+  ): Promise<ProviderBlockRangeWindowResult>;
 }
 
 export type ProviderAdapterFailure = EvmDataError;

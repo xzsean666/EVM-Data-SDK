@@ -170,6 +170,16 @@ function semanticQueryShape(
         startBlock: request.startBlock,
         endBlock: request.endBlock,
       };
+    case "getErc20TransfersByBlockRange":
+      return {
+        operation: request.operation,
+        chainId,
+        address: request.address,
+        tokenAddress: request.tokenAddress,
+        direction: request.direction,
+        startBlock: request.startBlock,
+        endBlock: request.endBlock,
+      };
   }
 }
 

@@ -1,6 +1,7 @@
 export type ErrorCode =
   | "INVALID_CONFIGURATION"
   | "INVALID_REQUEST"
+  | "INVALID_BLOCK_RANGE"
   | "INVALID_CURSOR"
   | "UNSUPPORTED_CHAIN"
   | "UNSUPPORTED_OPERATION"
@@ -17,7 +18,20 @@ export type ErrorCode =
   | "TOKEN_AMBIGUOUS"
   | "MARKET_NOT_FOUND"
   | "HISTORY_NOT_AVAILABLE"
-  | "PRICE_DATA_UNAVAILABLE";
+  | "PRICE_DATA_UNAVAILABLE"
+  | "BLOCK_RANGE_UNSUPPORTED"
+  | "BLOCK_RANGE_INCOMPLETE"
+  | "BLOCK_RANGE_STALLED"
+  | "RANGE_RESULT_TOO_LARGE"
+  | "SING_BOX_PLATFORM_UNSUPPORTED"
+  | "SING_BOX_VERSION_INVALID"
+  | "SING_BOX_DOWNLOAD_FAILED"
+  | "SING_BOX_CHECKSUM_MISMATCH"
+  | "SING_BOX_START_FAILED"
+  | "SING_BOX_START_TIMEOUT"
+  | "SING_BOX_EXITED"
+  | "SING_BOX_CONFIG_INVALID"
+  | "PROXY_NOT_READY";
 
 export interface EvmDataErrorOptions {
   readonly code: ErrorCode;
@@ -100,6 +114,15 @@ export function invalidConfiguration(message: string, cause?: unknown): EvmDataE
 export function invalidRequest(message: string, cause?: unknown): EvmDataError {
   return new EvmDataError({
     code: "INVALID_REQUEST",
+    message,
+    retryable: false,
+    ...(cause === undefined ? {} : { cause }),
+  });
+}
+
+export function invalidBlockRange(message: string, cause?: unknown): EvmDataError {
+  return new EvmDataError({
+    code: "INVALID_BLOCK_RANGE",
     message,
     retryable: false,
     ...(cause === undefined ? {} : { cause }),

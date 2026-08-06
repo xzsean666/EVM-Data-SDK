@@ -171,6 +171,7 @@ Important notes: Name-only input is resolved from search-pool relationships with
 - Prefer raw integer fields over formatted decimal fields when mapping public amounts.
 - Redact `X-API-Key` and provider cursor values from observations.
 - The adapter uses the raw transaction endpoint, native balance endpoint, and ERC-20 transfer endpoint with provider-local schemas. Its cursor is wrapped in the SDK cursor and is never exposed directly.
+- For the proposed v0.3 block-range operation, Moralis is a planned peer candidate with Etherscan and Alchemy. Before source enablement, fixture tests must establish the exact `from_block`/`to_block` inclusive-boundary and terminal-response semantics; the scanner will use fresh range windows rather than carrying a Moralis cursor between windows.
 
 ## 4. Axios
 
@@ -194,7 +195,43 @@ Important notes: Name-only input is resolved from search-pool relationships with
 - Prevent redirects from forwarding or reinjecting provider authorization to an untrusted or downgraded destination. Prefer disabling redirects unless a provider has a documented need.
 - Do not pass untrusted Axios configuration through public APIs. In particular, do not expose `socketPath`, arbitrary agents, or header overrides.
 
-## 5. Zod
+## 5. sing-box (v0.3 proposal)
+
+**External project:** sing-box by SagerNet
+
+**Selected version:** `1.13.16` observed from the official latest release on 2026-08-06; the implementation must pin an explicit version and must not follow `latest` at runtime.
+
+**Official documentation:**
+
+- Configuration: https://sing-box.sagernet.org/configuration/
+- Mixed inbound: https://sing-box.sagernet.org/configuration/inbound/mixed/
+- VLESS outbound: https://sing-box.sagernet.org/configuration/outbound/vless/
+- Shadowsocks outbound: https://sing-box.sagernet.org/configuration/outbound/shadowsocks/
+- Official releases: https://github.com/SagerNet/sing-box/releases
+- Releases API: https://api.github.com/repos/SagerNet/sing-box/releases
+
+**Purpose in the SDK:** Optional v0.3 advanced proxy runtime. The SDK accepts `vless://` and `ss://` URLs, renders a restricted sing-box configuration with a loopback `mixed` inbound, and supplies the resulting local HTTP endpoint to the existing transport/execution layer. This feature is not part of the accepted v0.2 contract yet.
+
+**Runtime/download policy:** Do not add the binary to the npm tarball and do not use an unconditional npm `postinstall` download. The proposal uses a fixed release version and lazy first-use download, with an explicit `binaryPath`/cache override for air-gapped deployments. The default official release assets currently use `amd64` and `arm64` names: Linux and macOS are `.tar.gz`, Windows is `.zip`; the required mappings are `linux|darwin|win32 × x64|arm64`.
+
+**Pinned release manifest (verified from the immutable GitHub `v1.13.16` release API on 2026-08-06):** Tests use this manifest as fixture data; runtime code must verify the downloaded asset's SHA-256 before extraction and must not query GitHub `latest`.
+
+| Runtime | Release asset | SHA-256 |
+| --- | --- | --- |
+| `darwin/x64` | `sing-box-1.13.16-darwin-amd64.tar.gz` | `2bfad58d034e280c773e194be03649555e5a7040c48b559dd0898ad293fe793d` |
+| `darwin/arm64` | `sing-box-1.13.16-darwin-arm64.tar.gz` | `32fa21fd75ad62d86a2dcb7e0be77359c35e12798cdbb6a0e30654ef487d90d6` |
+| `linux/x64` | `sing-box-1.13.16-linux-amd64.tar.gz` | `e37c312859dfa84cba148f41072ff6369f08361ae91d622dc1fd3aab49611a8d` |
+| `linux/arm64` | `sing-box-1.13.16-linux-arm64.tar.gz` | `d587fb00bdc3c044227f35d15d154f271bc75108475091eda2542e4b82bb2949` |
+| `win32/x64` | `sing-box-1.13.16-windows-amd64.zip` | `6cbf90ec4ee87122ffce09b73928fb31e763bc1c75a119f79c61d24734c78807` |
+| `win32/arm64` | `sing-box-1.13.16-windows-arm64.zip` | `8412e9751a776a1cd5138fde8a6b60784af91b0fe596cba1b6efcd05144ef511` |
+
+**Integrity and process boundary:** Downloaded archives must be verified against the release asset SHA-256 digest (or an explicitly configured trusted manifest) before atomic installation. Archive extraction must reject path traversal and the installed Unix binary must be user-executable only. Runtime configuration files contain proxy secrets and must be `0600`/current-user-only, never logged, and removed on close. The inbound must bind to loopback only; the SDK does not expose TUN, system routing, UDP, LAN listening, arbitrary sing-box JSON, or browser support.
+
+**URL semantics:** VLESS URLs require a valid UUID, host, and port; the first implementation explicitly supports only the documented TLS/Reality and transport combinations. Shadowsocks URLs must decode a valid method/password/host/port form; SIP002 plugins are rejected until separately specified. Raw URLs, UUIDs, passwords, Reality keys, and full configs are secrets and must be redacted from errors, telemetry, cursors, fixtures, and package output.
+
+**Open caveat:** sing-box may select among configured outbounds internally (for example through a URL-test group), while the SDK sees one loopback HTTP route. That is different from the SDK's existing per-proxy cooldown model and must be covered by an explicit architecture decision before implementation. The SDK must not describe this transport as a quota or provider-plan bypass.
+
+## 6. Zod
 
 **External project:** Zod
 
@@ -206,7 +243,7 @@ Important notes: Name-only input is resolved from search-pool relationships with
 
 **Important notes:** Provider schemas are private. Public TypeScript types should have one clear ownership source; do not create drift between hand-written interfaces and inferred schemas.
 
-## 6. TypeScript
+## 7. TypeScript
 
 **External project:** TypeScript
 
@@ -218,7 +255,7 @@ Important notes: Name-only input is resolved from search-pool relationships with
 
 **Important notes:** Strict flags in `BUILD.md` are required. Do not weaken compiler settings to accommodate provider payloads; validate unknown data at boundaries.
 
-## 7. tsup
+## 8. tsup
 
 **External project:** tsup
 
@@ -230,7 +267,7 @@ Important notes: Name-only input is resolved from search-pool relationships with
 
 **Important notes:** The ESM/CJS bundling path in `tsup@8.5.1` works with TypeScript 7. Its declaration path is not compatible: the bundled `rollup-plugin-dts@6.1.1` crashes against TypeScript 7's compiler API. Work Package 1 disables tsup declaration bundling and invokes TypeScript 7 with `emitDeclarationOnly` after the JavaScript build. Recheck this workaround before upgrading either tool.
 
-## 8. Vitest
+## 9. Vitest
 
 **External project:** Vitest
 
@@ -242,7 +279,7 @@ Important notes: Name-only input is resolved from search-pool relationships with
 
 **Important notes:** Default tests must not use the network or real time. Live tests are separately selected and credential-gated.
 
-## 9. ESLint
+## 10. ESLint
 
 **External project:** ESLint
 
@@ -254,7 +291,7 @@ Important notes: Name-only input is resolved from search-pool relationships with
 
 **Important notes:** The checked `@typescript-eslint/parser` and `@typescript-eslint/eslint-plugin` 8.66.0 peer ranges are `typescript >=4.8.4 <6.1.0`; with TypeScript 7.0.2 they fail at startup with `typescript-eslint does not support TS 7.0`. Work Package 1 therefore uses ESLint 10 flat config for JavaScript package tooling and smoke tests, while strict `tsc` validates TypeScript source. Do not add a TypeScript ESLint parser until it supports the selected TypeScript major.
 
-## 10. Changesets
+## 11. Changesets
 
 **External project:** Changesets
 
@@ -266,7 +303,7 @@ Important notes: Name-only input is resolved from search-pool relationships with
 
 **Important notes:** Publishing remains blocked until package ownership, package name, access level, license, and CI provenance are approved.
 
-## 11. pnpm
+## 12. pnpm
 
 **External project:** pnpm
 
@@ -278,7 +315,7 @@ Important notes: Name-only input is resolved from search-pool relationships with
 
 **Important notes:** Record the version in `packageManager` and commit `pnpm-lock.yaml`. CI uses `--frozen-lockfile`. pnpm 11.20.0 moved lifecycle approval to `pnpm-workspace.yaml`; this repository allows only `esbuild`, which tsup requires.
 
-## 12. Node.js
+## 13. Node.js
 
 **External project:** Node.js
 
@@ -290,7 +327,7 @@ Important notes: Name-only input is resolved from search-pool relationships with
 
 **Important notes:** HTTP(S) proxies are a Node-only SDK feature. Do not claim browser support in v0.1. Test any additional active LTS line before listing it in `engines`.
 
-## 13. Node Type Definitions
+## 14. Node Type Definitions
 
 **External project:** DefinitelyTyped Node.js declarations
 

@@ -484,7 +484,71 @@ Define its semantics and public model in `SPEC.md`, add a domain operation reque
 
 Caching belongs around normalized operation results and must define cursor/finality semantics before adoption. Metrics belong behind an optional telemetry sink. Neither concern enters provider mappers.
 
-## 19. Rejected Draft Elements
+## 19. v0.3 Extensions (accepted; implementation in progress)
+
+The following boundaries are proposed in
+[`PROXY_AND_BLOCK_RANGE_UPGRADE.md`](./PROXY_AND_BLOCK_RANGE_UPGRADE.md). They
+are accepted by the owner through ADR-023 and ADR-024. Their implementation
+must preserve all accepted v0.2 contracts.
+
+### Managed advanced proxy
+
+```text
+advancedProxy URLs
+       |
+       v
+SingBoxUrlParser -> SingBoxConfigBuilder -> SingBoxRuntime
+                                      |             |
+                                      +--> local mixed HTTP inbound
+                                                    |
+                                                    v
+                                           ProxyPool / HttpTransport
+```
+
+`SingBoxBinaryManager` owns only fixed-version download, digest verification,
+cache and executable permissions. `SingBoxRuntime` owns one child process,
+loopback readiness, temporary config and bounded shutdown. `SingBoxProxyManager`
+adapts the runtime to a local HTTP `ProxyLease`. Existing request and price
+executors remain protocol-agnostic. No SDK module reads `.env.key`, accepts
+arbitrary sing-box JSON, or binds a non-loopback inbound.
+
+### Block-range scanner
+
+```text
+getErc20TransfersByBlockRange
+       -> range validation
+       -> capability-aware provider selection
+       -> coverage-ledger BlockRangeScanner
+       -> provider-local fresh range / dual-stream adapter
+       -> split overflowing windows + provider-explicit dedup/sort
+       -> complete Erc20BlockRangeResult
+```
+
+The scanner is a sibling of the existing cursor-based `RequestExecutor`, not a
+recursive call to a public page API. It owns a closed-range coverage ledger,
+window splitting, provider-explicit provenance and a total record safety bound;
+adapters own their provider's maximum page size, block filter encoding,
+terminal signal and response mapping. An overflowing window is split and each
+child is re-requested without carrying a provider cursor/page state. Different
+completed windows may use different providers, but the result cannot silently
+mix them: every item retains its provider and the aggregate reports the
+providers and completed-window counts.
+
+### Proposed module contracts
+
+| Module | Owns | Must not own |
+| --- | --- | --- |
+| `SingBoxUrlParser` | VLESS/SS URL validation and safe internal representation | process, HTTP, logs |
+| `SingBoxBinaryManager` | fixed asset mapping, download, digest, cache | proxy selection, provider retries |
+| `SingBoxRuntime` | child process and loopback readiness/cleanup | URL interpretation, API credentials |
+| `SingBoxProxyManager` | runtime-to-local-HTTP lease and async initialization | Axios request semantics |
+| `BlockRangeScanner` | closed-range coverage ledger, split progress, dedup, ordering, provenance, safety bound | provider URL/schema details |
+| provider range adapter | provider-specific fresh range filter, page limit and terminal signal | cross-provider coverage, public retry loops |
+
+All new loops must be bounded, abortable and total-time aware. New runtime
+resources must be released by `EvmDataClient.close()`.
+
+## 20. Rejected Draft Elements
 
 - A single `BaseProvider` inheritance tree: replaced by a small compositional adapter contract.
 - A universal `normalizer` directory: mappings stay provider-local so a file is understandable with its schema.
@@ -496,6 +560,6 @@ Caching belongs around normalized operation results and must define cursor/final
 - `number` for blockchain quantities: replaced with decimal strings.
 - Alchemy asset transfers as full transactions: rejected because the semantics are not equivalent.
 
-## 20. Approval Gate
+## 21. Approval Gate
 
-Implementation may begin only after the owner explicitly approves this architecture and the related decisions. Any approval changes must be applied consistently to `SPEC.md`, this file, `DECISIONS.md`, and `NEXT_SESSION.md` before creating `src/`.
+Implementation is authorized for the accepted v0.3 architecture. Any future material design change must be applied consistently to `SPEC.md`, this file, `DECISIONS.md`, and `NEXT_SESSION.md` before creating source for that change.

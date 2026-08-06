@@ -15,6 +15,8 @@ export type {
   ProviderConfigurationBase,
   ProxyConfiguration,
   RequestPolicy,
+  SingBoxProxyConfiguration,
+  SingBoxRuntimeConfiguration,
   TelemetryEvent,
 } from "./domain/configuration";
 export type {
@@ -31,6 +33,7 @@ export type {
 export type { ErrorCode, EvmDataErrorOptions } from "./domain/errors";
 export type {
   Erc20TransfersRequest,
+  Erc20BlockRangeRequest,
   NativeBalanceRequest,
   OperationName,
   SortOrder,
@@ -50,7 +53,15 @@ export type {
   TokenPriceProviderResult,
 } from "./domain/priceModels";
 export type { PageInfo } from "./domain/pagination";
-export type { Erc20Transfer, NativeBalance, Page, Transaction } from "./domain/models";
+export type {
+  BlockRange,
+  Erc20BlockRangeResult,
+  Erc20BlockRangeStats,
+  Erc20Transfer,
+  NativeBalance,
+  Page,
+  Transaction,
+} from "./domain/models";
 export { EvmDataClient } from "./client/EvmDataClient";
 export type { EvmDataClientOptions } from "./client/EvmDataClient";
 export type { DataProviderAdapter, ProviderAdapterFailure } from "./providers/DataProviderAdapter";

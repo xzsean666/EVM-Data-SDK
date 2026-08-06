@@ -6,6 +6,7 @@ import { CredentialPool } from "../execution/CredentialPool";
 import { ProviderRouter } from "../execution/ProviderRouter";
 import { ProxyPool } from "../execution/ProxyPool";
 import { RequestExecutor } from "../execution/RequestExecutor";
+import { BlockRangeScanner } from "../execution/BlockRangeScanner";
 import { AddressService } from "../services/AddressService";
 import { TokenService } from "../services/TokenService";
 import { EtherscanAdapter } from "../providers/etherscan/EtherscanAdapter";
@@ -21,11 +22,14 @@ import { PriceRequestExecutor } from "../price/PriceRequestExecutor";
 import { TokenPriceAggregator } from "../price/TokenPriceAggregator";
 import type { TokenPriceProviderAdapter } from "../price/TokenPriceProviderAdapter";
 import type { HttpTransport } from "../transport/HttpTransport";
+import { SingBoxProxyManager } from "../proxy/SingBoxProxyManager";
 
 export interface EvmDataClientOptions {
   readonly transport?: HttpTransport;
   readonly adapters?: Partial<Record<"etherscan" | "alchemy" | "moralis", DataProviderAdapter>>;
   readonly priceAdapters?: Partial<Record<"binance" | "okx" | "coinbase" | "geckoterminal", TokenPriceProviderAdapter>>;
+  /** Test seam for the optional managed proxy; it never changes public configuration. */
+  readonly advancedProxyManager?: SingBoxProxyManager;
 }
 
 export class EvmDataClient {
@@ -33,6 +37,7 @@ export class EvmDataClient {
   readonly token: TokenService;
 
   private readonly configuration: NormalizedClientConfiguration;
+  private readonly advancedProxyManager: SingBoxProxyManager | null;
 
   constructor(configuration: ClientConfiguration, options: EvmDataClientOptions = {}) {
     this.configuration = parseClientConfiguration(configuration);
@@ -53,6 +58,9 @@ export class EvmDataClient {
       credentialPools.set(configurationId, new CredentialPool(provider.apiKeys, { providerConfigurationId: configurationId }));
     });
     const proxyPool = new ProxyPool(this.configuration.proxies, { allowDirect: this.configuration.requestPolicy.allowDirect });
+    this.advancedProxyManager = this.configuration.advancedProxy === undefined
+      ? null
+      : options.advancedProxyManager ?? new SingBoxProxyManager(this.configuration.advancedProxy);
     const observe = this.configuration.logger === undefined && this.configuration.telemetry === undefined
       ? undefined
       : (event: Parameters<NonNullable<NormalizedClientConfiguration["logger"]>>[0]) => {
@@ -64,6 +72,7 @@ export class EvmDataClient {
       requestPolicy: this.configuration.requestPolicy,
       credentialPools,
       proxyPool,
+      ...(this.advancedProxyManager === null ? {} : { advancedProxyRoute: this.advancedProxyManager }),
       ...(observe === undefined ? {} : { observe }),
     });
     const priceConfiguration = this.configuration.price;
@@ -87,15 +96,30 @@ export class EvmDataClient {
         new PriceRequestExecutor({
           configuration: priceConfiguration,
           proxies: this.configuration.proxies,
+          ...(this.advancedProxyManager === null ? {} : { advancedProxyRoute: this.advancedProxyManager }),
           ...(observe === undefined ? {} : { observe }),
         }),
       );
     this.address = new AddressService(executor);
-    this.token = new TokenService(executor, priceAggregator, priceConfiguration.tokenAliases);
+    this.token = new TokenService(
+      executor,
+      new BlockRangeScanner({
+        executor,
+        maxRangeRecords: this.configuration.maxRangeRecords,
+        maxRangeWindows: this.configuration.maxRangeWindows,
+      }),
+      priceAggregator,
+      priceConfiguration.tokenAliases,
+    );
   }
 
-  close(): void {
-    // v0.1 transports and pools do not own background resources.
+  async initialize(signal?: AbortSignal): Promise<void> {
+    if (this.advancedProxyManager === null) return;
+    await this.advancedProxyManager.initialize(signal);
+  }
+
+  async close(): Promise<void> {
+    await this.advancedProxyManager?.close();
   }
 }
 

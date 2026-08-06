@@ -59,6 +59,7 @@ export function mapEtherscanTokenTransfer(
     transactionHash: value.transactionHash === undefined || value.transactionHash === null || value.transactionHash === ""
       ? value.hash.toLowerCase()
       : value.transactionHash.toLowerCase(),
+    transactionIndex: normalizeNullableDecimal(value.transactionIndex),
     logIndex: normalizeNullableDecimal(value.logIndex),
     blockNumber: canonicalDecimal(value.blockNumber),
     timestamp: mapTimestamp(value.timeStamp),

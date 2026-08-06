@@ -2,9 +2,9 @@ import { AxiosHttpTransport, parseHttpProxyUrl } from "../../transport/AxiosHttp
 import type { HttpTransport } from "../../transport/HttpTransport";
 import { EvmDataError } from "../../domain/errors";
 import type { Erc20Transfer, NativeBalance } from "../../domain/models";
-import type { NormalizedErc20TransfersRequest, NormalizedNativeBalanceRequest, NormalizedTransactionsRequest, TransferDirection } from "../../domain/operations";
+import type { NormalizedErc20BlockRangeRequest, NormalizedErc20TransfersRequest, NormalizedNativeBalanceRequest, NormalizedTransactionsRequest, TransferDirection } from "../../domain/operations";
 import type { ProviderPageResult } from "../../domain/pagination";
-import type { CapabilityRequest, DataProviderAdapter, ProviderAttemptContext } from "../DataProviderAdapter";
+import type { CapabilityRequest, DataProviderAdapter, ProviderBlockRangeWindowResult, ProviderAttemptContext } from "../DataProviderAdapter";
 import { classifyAlchemyHttpResponse, classifyAlchemyJsonRpcError, normalizeAlchemyTransportError } from "./alchemyErrors";
 import { alchemyBalanceResultSchema, alchemyJsonRpcResponseSchema, alchemyTransfersResultSchema, type AlchemyTransfer } from "./alchemySchemas";
 import { mapAlchemyBalance, mapAlchemyTransfer } from "./alchemyMapper";
@@ -56,9 +56,10 @@ export class AlchemyAdapter implements DataProviderAdapter {
   supports(request: CapabilityRequest): boolean {
     if (request.chain.routes.alchemy === undefined) return false;
     if (request.operation === "getNativeBalance") return true;
-    if (request.operation === "getErc20Transfers" && "direction" in request.request) {
-      return request.request.pageSize <= ALCHEMY_MAX_PAGE_SIZE;
+    if (request.operation === "getErc20Transfers") {
+      return "pageSize" in request.request && request.request.pageSize <= ALCHEMY_MAX_PAGE_SIZE;
     }
+    if (request.operation === "getErc20TransfersByBlockRange") return true;
     return false;
   }
 
@@ -86,6 +87,31 @@ export class AlchemyAdapter implements DataProviderAdapter {
     return {
       items: page.transfers.map((transfer) => transfer.item),
       nextPageState: page.nextPageKey === null ? null : { pageKey: page.nextPageKey },
+      pageInfo: { provider: this.name, chainId: context.chain.chainId },
+    };
+  }
+
+  async getErc20TransfersByBlockRangeWindow(
+    request: NormalizedErc20BlockRangeRequest,
+    context: ProviderAttemptContext,
+  ): Promise<ProviderBlockRangeWindowResult> {
+    if (request.direction !== "both") {
+      const page = await this.getRangeTransferPage(request, context, request.direction, false);
+      return {
+        items: page.transfers.map((transfer) => ({ item: transfer.item, identityKey: transfer.uniqueId })),
+        complete: page.nextPageKey === null,
+        pageInfo: { provider: this.name, chainId: context.chain.chainId },
+      };
+    }
+
+    const [incoming, outgoing] = await Promise.all([
+      this.getRangeTransferPage(request, context, "incoming", true),
+      this.getRangeTransferPage(request, context, "outgoing", false),
+    ]);
+    const transfers = mergeBothDirectionPages(incoming, outgoing, "asc");
+    return {
+      items: transfers.map((transfer) => ({ item: transfer.item, identityKey: transfer.uniqueId })),
+      complete: incoming.nextPageKey === null && outgoing.nextPageKey === null,
       pageInfo: { provider: this.name, chainId: context.chain.chainId },
     };
   }
@@ -154,6 +180,38 @@ export class AlchemyAdapter implements DataProviderAdapter {
           // belongs to outgoing only, keeping the two paginated streams disjoint.
           .filter((transfer) => !excludeSelfTransfers || transfer.item.from !== request.address),
         nextPageKey,
+      };
+    } catch (error: unknown) {
+      throw invalidResponse(context, error);
+    }
+  }
+
+  private async getRangeTransferPage(
+    request: NormalizedErc20BlockRangeRequest,
+    context: ProviderAttemptContext,
+    direction: AlchemyStreamDirection,
+    excludeSelfTransfers: boolean,
+  ): Promise<AlchemyTransferPage> {
+    const filter: Record<string, unknown> = {
+      category: ["erc20"],
+      withMetadata: true,
+      excludeZeroValue: false,
+      order: "asc",
+      maxCount: "0x3e8",
+      ...(direction === "incoming" ? { toAddress: request.address } : { fromAddress: request.address }),
+      ...(request.tokenAddress === null ? {} : { contractAddresses: [request.tokenAddress] }),
+      fromBlock: decimalToHex(request.startBlock),
+      toBlock: decimalToHex(request.endBlock),
+    };
+    const body = await this.call("alchemy_getAssetTransfers", [filter], context);
+    const result = alchemyTransfersResultSchema.safeParse(parseResult(body, context));
+    if (!result.success) throw invalidResponse(context);
+    try {
+      return {
+        transfers: result.data.transfers
+          .map((transfer) => mapTransferWithId(transfer, context))
+          .filter((transfer) => !excludeSelfTransfers || transfer.item.from !== request.address),
+        nextPageKey: normalizeNextPageKey(result.data.pageKey),
       };
     } catch (error: unknown) {
       throw invalidResponse(context, error);
