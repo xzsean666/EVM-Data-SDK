@@ -546,6 +546,14 @@ completed windows may use different providers, but the result cannot silently
 mix them: every item retains its provider and the aggregate reports the
 providers and completed-window counts.
 
+When a caller supplies `onWindow`, `BlockRangeScanner` awaits that callback at
+the complete-window boundary and drops those records from its aggregate. The
+callback boundary is after validation/provenance checks and before the next
+upstream request, making it suitable for caller-owned durable checkpoint
+transactions without SDK cursor persistence. `AddressService` uses the same
+fresh-window split rule for complete transaction ranges: a full page is a
+density signal, not a value that can be checkpointed.
+
 ### Proposed module contracts
 
 | Module | Owns | Must not own |

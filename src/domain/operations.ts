@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import type { ChainReference } from "./chains";
+import type { Erc20BlockRangeWindow, TransactionBlockRangeWindow } from "./models";
 import { invalidBlockRange, invalidRequest } from "./errors";
 import { MAX_CURSOR_LENGTH } from "./pagination";
 
@@ -33,6 +34,11 @@ export interface TransactionsRequest {
 export interface TransactionsBlockRangeRequest extends Omit<TransactionsRequest, 'startBlock' | 'endBlock' | 'cursor' | 'pageSize' | 'fullData'> {
   readonly startBlock: string;
   readonly endBlock: string;
+  /**
+   * Called only for a complete, closed window. When supplied, the SDK does
+   * not retain completed transaction items in the final aggregate result.
+   */
+  readonly onWindow?: (window: TransactionBlockRangeWindow) => void | Promise<void>;
 }
 
 export interface NativeBalanceRequest {
@@ -80,6 +86,11 @@ export interface Erc20BlockRangeRequest {
   readonly tokenAddress?: string;
   readonly direction?: TransferDirection;
   readonly signal?: AbortSignal;
+  /**
+   * Called only for a complete, closed window. When supplied, the SDK does
+   * not retain completed transfer items in the final aggregate result.
+   */
+  readonly onWindow?: (window: Erc20BlockRangeWindow) => void | Promise<void>;
 }
 
 /**

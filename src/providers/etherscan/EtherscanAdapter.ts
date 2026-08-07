@@ -196,6 +196,10 @@ export class EtherscanAdapter implements DataProviderAdapter {
         items: mapped
           .filter((item) => directionMatches(item, request.direction, request.address))
           .map((item) => ({ item, identityKey: null })),
+        // The Etherscan range endpoint returns an already-deduplicated list.
+        // Some valid responses omit logIndex, so no event identity can be
+        // required a second time by the generic scanner.
+        itemsAlreadyDeduplicated: true,
         complete: mapped.length < ETHERSCAN_MAX_PAGE_SIZE,
         pageInfo: { provider: this.name, chainId: context.chain.chainId },
       };

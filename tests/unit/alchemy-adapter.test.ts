@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { ChainRegistry } from "../../src/chains/ChainRegistry";
 import { normalizeErc20BlockRangeRequest, parseErc20TransfersRequest, parseTransactionsRequest } from "../../src/domain/operations";
 import type { ProviderAttemptContext } from "../../src/providers/DataProviderAdapter";
-import { AlchemyAdapter } from "../../src/providers/alchemy/AlchemyAdapter";
+import { ALCHEMY_MULTICALL_MAX_BATCH_SIZE, AlchemyAdapter } from "../../src/providers/alchemy/AlchemyAdapter";
 import type { HttpRequest, HttpResponse, HttpTransport } from "../../src/transport/HttpTransport";
 import { alchemyTransfersLastPage, alchemyTransfersPage } from "../fixtures/alchemy";
 
@@ -34,6 +34,17 @@ class BothDirectionTransport implements HttpTransport {
     const body = incoming
       ? continuation ? this.incomingContinuation : this.incomingFirst
       : continuation ? this.outgoingContinuation : this.outgoingFirst;
+    return { status: 200, headers: {}, body };
+  }
+}
+
+class SequenceTransport implements HttpTransport {
+  readonly requests: HttpRequest[] = [];
+  constructor(private readonly bodies: unknown[]) {}
+  async request(request: HttpRequest): Promise<HttpResponse> {
+    this.requests.push(request);
+    const body = this.bodies.shift();
+    if (body === undefined) throw new Error("Unexpected request");
     return { status: 200, headers: {}, body };
   }
 }
@@ -80,6 +91,29 @@ describe("AlchemyAdapter", () => {
     expect(result.items).toEqual([]);
     expect(result.nextPageState).toBeNull();
     expect(transport.requests[0]?.body).toMatchObject({ params: [{ fromAddress: address, pageKey: "page-key-2" }] });
+  });
+
+  it("batches explicit historical ERC-20 balances through Multicall3", async () => {
+    const tokens = Array.from({ length: ALCHEMY_MULTICALL_MAX_BATCH_SIZE + 1 }, (_, index) =>
+      `0x${(index + 1).toString(16).padStart(40, "0")}`,
+    );
+    const transport = new SequenceTransport([
+      aggregate3Response(Array.from({ length: ALCHEMY_MULTICALL_MAX_BATCH_SIZE }, (_, index) => BigInt(index + 1))),
+      aggregate3Response([0n]),
+    ]);
+    const result = await new AlchemyAdapter({ transport }).getErc20BalancesAtBlock({
+      address,
+      blockNumber: "25486078",
+      tokenAddresses: tokens,
+    }, context({ proxy: { id: "proxy", url: "http://127.0.0.1:3128" } }));
+
+    expect(result).toMatchObject({ provider: "alchemy", blockNumber: "25486078" });
+    expect(result.items).toHaveLength(tokens.length);
+    expect(result.items[0]).toMatchObject({ tokenAddress: tokens[0], amount: "1" });
+    expect(result.items.at(-1)).toMatchObject({ tokenAddress: tokens.at(-1), amount: "0" });
+    expect(transport.requests).toHaveLength(2);
+    expect(transport.requests.every((request) => (request.body as { method?: string }).method === "eth_call")).toBe(true);
+    expect(transport.requests.every((request) => request.proxy?.host === "127.0.0.1")).toBe(true);
   });
 
   it("returns both complete Alchemy pages, de-duplicates a self-transfer, and keeps two stream page keys", async () => {
@@ -214,4 +248,20 @@ function transfer(uniqueId: string, blockNum: string, from: string, to: string):
 
 function transfersResponse(transfers: readonly Record<string, unknown>[], pageKey: string | null): unknown {
   return { jsonrpc: "2.0", id: 1, result: { transfers, pageKey } };
+}
+
+function aggregate3Response(balances: readonly bigint[]): unknown {
+  const word = (value: bigint) => value.toString(16).padStart(64, "0");
+  const tuples = balances.map((balance) => `${word(1n)}${word(64n)}${word(32n)}${word(balance)}`);
+  let offset = balances.length * 32;
+  const offsets = tuples.map((tuple) => {
+    const value = word(BigInt(offset));
+    offset += tuple.length / 2;
+    return value;
+  });
+  return {
+    jsonrpc: "2.0",
+    id: 1,
+    result: `0x${word(32n)}${word(BigInt(balances.length))}${offsets.join("")}${tuples.join("")}`,
+  };
 }

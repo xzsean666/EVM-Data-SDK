@@ -1,4 +1,4 @@
-import type { Erc20BlockRangeResult, Erc20Transfer } from "../domain/models";
+import type { Erc20BlockRangeResult, Erc20BlockRangeWindow, Erc20Transfer } from "../domain/models";
 import { EvmDataError, isEvmDataError } from "../domain/errors";
 import type { NormalizedErc20BlockRangeRequest } from "../domain/operations";
 import type { ProviderBlockRangeItem } from "../providers/DataProviderAdapter";
@@ -17,7 +17,8 @@ interface ClosedWindow {
 
 interface CollectedItem {
   readonly item: Erc20Transfer;
-  readonly identity: string;
+  readonly identity: string | null;
+  readonly ordinal: number;
 }
 
 /** Covers an inclusive interval using complete, disjoint fresh range windows. */
@@ -32,12 +33,16 @@ export class BlockRangeScanner {
     this.maxRangeWindows = options.maxRangeWindows;
   }
 
-  async scan(request: NormalizedErc20BlockRangeRequest): Promise<Erc20BlockRangeResult> {
+  async scan(
+    request: NormalizedErc20BlockRangeRequest,
+    onWindow?: (window: Erc20BlockRangeWindow) => void | Promise<void>,
+  ): Promise<Erc20BlockRangeResult> {
     const pending: ClosedWindow[] = [{ startBlock: request.startBlock, endBlock: request.endBlock }];
     const completed: ClosedWindow[] = [];
     const providers: Erc20Transfer["provider"][] = [];
     const providerWindows: Record<string, number> = {};
-    const records = new Map<string, CollectedItem>();
+    const records: CollectedItem[] = [];
+    const recordIdentities = new Set<string>();
     let chainId: number | null = null;
     let upstreamRequests = 0;
     let duplicateItemsRemoved = 0;
@@ -92,7 +97,9 @@ export class BlockRangeScanner {
       chainId = execution.result.pageInfo.chainId;
       if (!providers.includes(provider)) providers.push(provider);
       providerWindows[provider] = (providerWindows[provider] ?? 0) + 1;
-      for (const resultItem of execution.result.items) {
+      const windowRecords: CollectedItem[] = [];
+      const windowIdentities = new Set<string>();
+      for (const [ordinal, resultItem] of execution.result.items.entries()) {
         if (
           resultItem.item.chainId !== execution.result.pageInfo.chainId ||
           resultItem.item.provider !== provider ||
@@ -101,14 +108,16 @@ export class BlockRangeScanner {
           throw stalled(completed.length, "Provider returned a transfer with an invalid range, chain, or provenance boundary.");
         }
         const identity = stableIdentity(resultItem);
-        if (identity === null) {
+        if (identity === null && execution.result.itemsAlreadyDeduplicated !== true) {
           throw stalled(completed.length, "Provider omitted both log index and a documented stable transfer identity.");
         }
-        if (records.has(identity)) {
+        const seen = onWindow === undefined ? recordIdentities : windowIdentities;
+        if (identity !== null && seen.has(identity)) {
           duplicateItemsRemoved += 1;
           continue;
         }
-        if (records.size >= this.maxRangeRecords) {
+        const collected = onWindow === undefined ? records : windowRecords;
+        if (collected.length >= this.maxRangeRecords) {
           throw new EvmDataError({
             code: "RANGE_RESULT_TOO_LARGE",
             message: "The block-range result exceeds the configured record safety limit.",
@@ -117,7 +126,21 @@ export class BlockRangeScanner {
             chainId: resultItem.item.chainId,
           });
         }
-        records.set(identity, { item: resultItem.item, identity });
+        if (identity !== null) seen.add(identity);
+        collected.push({ item: resultItem.item, identity, ordinal });
+      }
+      if (onWindow !== undefined) {
+        const items = [...windowRecords]
+          .sort(compareCollectedItems)
+          .map((entry) => Object.freeze({ ...entry.item }));
+        await onWindow(Object.freeze({
+          chainId: execution.result.pageInfo.chainId,
+          address: request.address,
+          range: Object.freeze({ startBlock: window.startBlock, endBlock: window.endBlock }),
+          items: Object.freeze(items),
+          provider,
+          upstreamRequests: execution.upstreamRequests,
+        }));
       }
       completed.push(window);
     }
@@ -126,7 +149,9 @@ export class BlockRangeScanner {
       throw incomplete({ startBlock: request.startBlock, endBlock: request.endBlock }, completed.length, undefined);
     }
 
-    const items = [...records.values()].sort(compareCollectedItems).map((entry) => Object.freeze({ ...entry.item }));
+    const items = onWindow === undefined
+      ? [...records].sort(compareCollectedItems).map((entry) => Object.freeze({ ...entry.item }))
+      : [];
     return Object.freeze({
       chainId,
       address: request.address,
@@ -174,7 +199,12 @@ function compareCollectedItems(first: CollectedItem, second: CollectedItem): num
   const byLog = compareNullableDecimal(first.item.logIndex, second.item.logIndex);
   if (byLog !== 0) return byLog;
   const byHash = first.item.transactionHash.localeCompare(second.item.transactionHash);
-  return byHash !== 0 ? byHash : first.identity.localeCompare(second.identity);
+  if (byHash !== 0) return byHash;
+  if (first.identity !== null && second.identity !== null) {
+    const byIdentity = first.identity.localeCompare(second.identity);
+    if (byIdentity !== 0) return byIdentity;
+  }
+  return first.ordinal - second.ordinal;
 }
 
 function compareDecimal(first: string, second: string): number {

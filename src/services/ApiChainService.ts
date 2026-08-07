@@ -11,6 +11,7 @@ import { ChainRegistry } from '../chains/ChainRegistry'
 import { EvmDataError, isEvmDataError } from '../domain/errors'
 import type { NormalizedClientConfiguration } from '../domain/configuration'
 import { EtherscanAdapter } from '../providers/etherscan/EtherscanAdapter'
+import { AlchemyAdapter } from '../providers/alchemy/AlchemyAdapter'
 import { MoralisAdapter } from '../providers/moralis/MoralisAdapter'
 import type {
   DataProviderAdapter,
@@ -104,6 +105,13 @@ export class ApiChainService {
             tokenAddresses: input.tokenAddresses,
           }, context)
         }
+        if (adapter instanceof AlchemyAdapter) {
+          return adapter.getErc20BalancesAtBlock({
+            address: input.address,
+            blockNumber: input.blockNumber,
+            tokenAddresses: input.tokenAddresses,
+          }, context)
+        }
         const items = []
         for (const tokenAddress of input.tokenAddresses) {
           items.push(await adapter.getErc20BalanceAtBlock({
@@ -120,6 +128,7 @@ export class ApiChainService {
           provider: 'etherscan' as const,
         }
       },
+      { includeAlchemy: true },
     )
   }
 
@@ -143,8 +152,18 @@ export class ApiChainService {
             blockNumber: moralisBlockNumber,
           }, context)
         }
+        if (adapter instanceof AlchemyAdapter) {
+          throw new EvmDataError({
+            code: 'UNSUPPORTED_OPERATION',
+            message: 'Alchemy cannot enumerate an unconstrained ERC-20 inventory.',
+            retryable: false,
+            provider: 'alchemy',
+            chainId: chain.chainId,
+          })
+        }
         return adapter.getErc20TokenHoldings({ address: input.address }, context)
       },
+      { includeAlchemy: false },
     )
   }
 
@@ -277,20 +296,22 @@ export class ApiChainService {
   }
 
   /**
-   * Only these two providers expose an API-only semantic match for the token
-   * inventory operations. Alchemy's equivalent APIs are JSON-RPC and are
-   * deliberately not a candidate for backend business data.
+   * These providers expose an exact-balance operation. Alchemy is restricted
+   * to caller-supplied contracts and uses one Multicall3 `eth_call` per batch.
    */
   private async withTokenBalanceCandidates<T>(
     chain: ReturnType<ChainRegistry['resolve']>,
     signal: AbortSignal | undefined,
     unavailableMessage: string,
-    work: (adapter: EtherscanAdapter | MoralisAdapter, context: ProviderAttemptContext) => Promise<T>,
+    work: (adapter: EtherscanAdapter | AlchemyAdapter | MoralisAdapter, context: ProviderAttemptContext) => Promise<T>,
+    options: { includeAlchemy?: boolean } = {},
   ): Promise<T> {
     let lastError: unknown
     for (const configuredProvider of this.providers) {
       const adapter = configuredProvider.adapter
-      if (!(adapter instanceof EtherscanAdapter) && !(adapter instanceof MoralisAdapter)) continue
+      if (!(adapter instanceof EtherscanAdapter) &&
+          !(adapter instanceof MoralisAdapter) &&
+          !(options.includeAlchemy === true && adapter instanceof AlchemyAdapter)) continue
       for (const apiKey of configuredProvider.apiKeys) {
         try {
           return await this.withCandidateContext(chain, { adapter, apiKey }, signal, (context) =>

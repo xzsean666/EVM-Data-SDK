@@ -147,6 +147,11 @@ The block-range operation is tested with fixture providers and has no public
 dense-block progress, provider pinning, bounded fallback before first response,
 incomplete/stalled errors, and explicit record-limit failure.
 
+Callback-mode tests must additionally prove that only complete windows are
+emitted, callback-consumed records are not retained in the aggregate result,
+and configured provider pacing has no delay before a single first request but
+does delay a real subsequent request.
+
 ## 7. Local Usage During Development
 
 This repository is a library, not a server. There is no long-running development URL. Use tests or a small ignored example script after the package exists:

@@ -25,7 +25,8 @@ export class TokenService {
   }
 
   getErc20TransfersByBlockRange(request: Erc20BlockRangeRequest): Promise<Erc20BlockRangeResult> {
-    return this.blockRangeScanner.scan(normalizeErc20BlockRangeRequest(request));
+    const { onWindow, ...rangeRequest } = request;
+    return this.blockRangeScanner.scan(normalizeErc20BlockRangeRequest(rangeRequest), onWindow);
   }
 
   /**

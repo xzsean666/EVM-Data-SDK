@@ -1,7 +1,7 @@
 import { AxiosHttpTransport, parseHttpProxyUrl } from "../../transport/AxiosHttpTransport";
 import type { HttpTransport } from "../../transport/HttpTransport";
 import { EvmDataError } from "../../domain/errors";
-import type { Erc20Transfer } from "../../domain/models";
+import type { Erc20BalanceAtBlock, Erc20BalancesAtBlock, Erc20Transfer } from "../../domain/models";
 import type { NormalizedErc20BlockRangeRequest, NormalizedErc20TransfersRequest, NormalizedTransactionsRequest, TransferDirection } from "../../domain/operations";
 import type { ProviderPageResult } from "../../domain/pagination";
 import type { CapabilityRequest, DataProviderAdapter, ProviderBlockRangeWindowResult, ProviderAttemptContext } from "../DataProviderAdapter";
@@ -16,6 +16,17 @@ export interface AlchemyAdapterOptions {
 }
 
 export const ALCHEMY_MAX_PAGE_SIZE = 1_000;
+/** Keep one RPC request comfortably below provider request-size limits. */
+// 50 calls keeps historical archive reads below conservative provider payload
+// and compute limits while avoiding a request per token.
+export const ALCHEMY_MULTICALL_MAX_BATCH_SIZE = 50;
+
+const MULTICALL3_BY_CHAIN_ID: Readonly<Record<number, string>> = {
+  1: "0xcA11bde05977b3631167028862bE2a173976CA11",
+  8453: "0xcA11bde05977b3631167028862bE2a173976CA11",
+};
+const ERC20_BALANCE_OF_SELECTOR = "70a08231";
+const MULTICALL3_AGGREGATE3_SELECTOR = "82ad56cb";
 
 type AlchemyStreamDirection = Exclude<TransferDirection, "both">;
 
@@ -103,6 +114,57 @@ export class AlchemyAdapter implements DataProviderAdapter {
       items: transfers.map((transfer) => ({ item: transfer.item, identityKey: transfer.uniqueId })),
       complete: incoming.nextPageKey === null && outgoing.nextPageKey === null,
       pageInfo: { provider: this.name, chainId: context.chain.chainId },
+    };
+  }
+
+  /**
+   * Exact balances of a caller-supplied ERC-20 set at one historical block.
+   * Each request is one standard JSON-RPC `eth_call` to Multicall3, not one
+   * request per token. `allowFailure` prevents an unusual contract from
+   * poisoning unrelated calls, but a failed/invalid result is still surfaced
+   * rather than fabricated as a zero balance.
+   */
+  async getErc20BalancesAtBlock(
+    request: { readonly address: string; readonly blockNumber: string; readonly tokenAddresses: readonly string[] },
+    context: ProviderAttemptContext,
+  ): Promise<Erc20BalancesAtBlock> {
+    const multicall3 = MULTICALL3_BY_CHAIN_ID[context.chain.chainId];
+    if (multicall3 === undefined) {
+      throw new EvmDataError({
+        code: "UNSUPPORTED_OPERATION",
+        message: "Alchemy historical ERC-20 balance batching is unsupported for this chain.",
+        retryable: false,
+        provider: this.name,
+        chainId: context.chain.chainId,
+      });
+    }
+    const tokenAddresses = uniqueAddresses(request.tokenAddresses, context);
+    const items: Erc20BalanceAtBlock[] = [];
+    for (const tokens of chunk(tokenAddresses, ALCHEMY_MULTICALL_MAX_BATCH_SIZE)) {
+      const body = await this.call(
+        "eth_call",
+        [{ to: multicall3, data: encodeAggregate3(tokens, request.address) }, decimalToHex(request.blockNumber)],
+        context,
+      );
+      const result = parseResult(body, context);
+      const balances = decodeAggregate3Balances(result, tokens, context);
+      for (let index = 0; index < tokens.length; index += 1) {
+        items.push({
+          chainId: context.chain.chainId,
+          address: request.address,
+          tokenAddress: tokens[index]!,
+          blockNumber: BigInt(request.blockNumber).toString(),
+          amount: balances[index]!.toString(),
+          provider: this.name,
+        });
+      }
+    }
+    return {
+      chainId: context.chain.chainId,
+      address: request.address,
+      blockNumber: BigInt(request.blockNumber).toString(),
+      items,
+      provider: this.name,
     };
   }
 
@@ -214,7 +276,7 @@ export class AlchemyAdapter implements DataProviderAdapter {
     if (context.credential === null) throw new EvmDataError({ code: "AUTHENTICATION_FAILED", message: "Alchemy requires an API key.", retryable: false, provider: this.name, chainId: context.chain.chainId });
     let response;
     try {
-      response = await this.transport.request({ method: "POST", url: this.baseUrlOverride ?? route.httpUrlPrefix, headers: { Authorization: `Bearer ${context.credential.value}`, "content-type": "application/json" }, body: { jsonrpc: "2.0", id: 1, method, params }, timeoutMs: context.timeoutMs, ...(context.signal === undefined ? {} : { signal: context.signal }), proxy: context.proxy === null ? null : parseHttpProxyUrl(context.proxy.url) });
+      response = await this.transport.request({ method: "POST", url: alchemyEndpoint(this.baseUrlOverride ?? route.httpUrlPrefix, context.credential.value), headers: { "content-type": "application/json" }, body: { jsonrpc: "2.0", id: 1, method, params }, timeoutMs: context.timeoutMs, ...(context.signal === undefined ? {} : { signal: context.signal }), proxy: context.proxy === null ? null : parseHttpProxyUrl(context.proxy.url) });
     } catch (error: unknown) {
       const normalized = normalizeAlchemyTransportError(error, context.chain.chainId);
       if (normalized !== null) throw normalized;
@@ -326,6 +388,113 @@ function invalidBothPageState(): EvmDataError {
 
 function decimalToHex(value: string): string {
   return `0x${BigInt(value).toString(16)}`;
+}
+
+function uniqueAddresses(values: readonly string[], context: ProviderAttemptContext): string[] {
+  const seen = new Set<string>();
+  const addresses: string[] = [];
+  for (const value of values) {
+    if (!/^0x[0-9a-fA-F]{40}$/.test(value)) {
+      throw new EvmDataError({ code: "INVALID_REQUEST", message: "Alchemy ERC-20 balance batching requires contract addresses.", retryable: false, provider: "alchemy", chainId: context.chain.chainId });
+    }
+    const normalized = value.toLowerCase();
+    if (!seen.has(normalized)) {
+      seen.add(normalized);
+      addresses.push(normalized);
+    }
+  }
+  return addresses;
+}
+
+function chunk<T>(values: readonly T[], size: number): T[][] {
+  const batches: T[][] = [];
+  for (let index = 0; index < values.length; index += size) batches.push(values.slice(index, index + size));
+  return batches;
+}
+
+function encodeAggregate3(tokenAddresses: readonly string[], owner: string): string {
+  if (!/^0x[0-9a-fA-F]{40}$/.test(owner)) throw new Error("Invalid ERC-20 owner address.");
+  const calls = tokenAddresses.map((token) => {
+    const callData = `${ERC20_BALANCE_OF_SELECTOR}${wordAddress(owner)}`;
+    return `${wordAddress(token)}${wordUint(1n)}${wordUint(96n)}${wordUint(BigInt(callData.length / 2))}${padRight(callData)}`;
+  });
+  const offsets: string[] = [];
+  // Dynamic-array element offsets are relative to the element-offset table
+  // (immediately after the array length), not to the beginning of the array.
+  let offset = BigInt(tokenAddresses.length * 32);
+  for (const call of calls) {
+    offsets.push(wordUint(offset));
+    offset += BigInt(call.length / 2);
+  }
+  return `0x${MULTICALL3_AGGREGATE3_SELECTOR}${wordUint(32n)}${wordUint(BigInt(tokenAddresses.length))}${offsets.join("")}${calls.join("")}`;
+}
+
+function decodeAggregate3Balances(value: unknown, tokenAddresses: readonly string[], context: ProviderAttemptContext): bigint[] {
+  if (typeof value !== "string" || !/^0x(?:[0-9a-fA-F]{2})*$/.test(value)) throw invalidResponse(context);
+  const hex = value.slice(2);
+  const word = (offset: number) => {
+    const valueAtOffset = hex.slice(offset * 2, (offset + 32) * 2);
+    if (valueAtOffset.length !== 64) throw invalidResponse(context);
+    return BigInt(`0x${valueAtOffset}`);
+  };
+  const arrayOffset = Number(word(0));
+  if (!Number.isSafeInteger(arrayOffset) || arrayOffset < 32 || arrayOffset % 32 !== 0) throw invalidResponse(context);
+  const length = Number(word(arrayOffset));
+  if (length !== tokenAddresses.length) throw invalidResponse(context);
+  const tupleBase = arrayOffset + 32;
+  const balances: bigint[] = [];
+  for (let index = 0; index < length; index += 1) {
+    const tupleOffset = Number(word(tupleBase + index * 32));
+    const tupleStart = tupleBase + tupleOffset;
+    if (!Number.isSafeInteger(tupleOffset) || tupleOffset < length * 32 || tupleStart % 32 !== 0) {
+      throw invalidResponse(context);
+    }
+    const success = word(tupleStart);
+    if (success === 0n) {
+      throw new EvmDataError({
+        code: "INVALID_PROVIDER_RESPONSE",
+        message: `Alchemy Multicall balanceOf reverted for ${tokenAddresses[index]}.`,
+        retryable: false,
+        provider: "alchemy",
+        chainId: context.chain.chainId,
+      });
+    }
+    if (success !== 1n) throw invalidResponse(context);
+    const dataOffset = Number(word(tupleStart + 32));
+    const dataStart = tupleStart + dataOffset;
+    const dataLength = Number(word(dataStart));
+    if (!Number.isSafeInteger(dataOffset) || !Number.isSafeInteger(dataLength) || dataOffset !== 64) throw invalidResponse(context);
+    // An eth_call to an address without code succeeds and returns 0x. At the
+    // requested historical block that means this contract was not deployed,
+    // so its ERC-20 balance is deterministically zero.
+    if (dataLength === 0) {
+      balances.push(0n);
+      continue;
+    }
+    if (dataLength !== 32) throw invalidResponse(context);
+    balances.push(word(dataStart + 32));
+  }
+  return balances;
+}
+
+function wordUint(value: bigint): string {
+  if (value < 0n || value >= 1n << 256n) throw new Error("ABI uint256 out of range.");
+  return value.toString(16).padStart(64, "0");
+}
+
+function wordAddress(value: string): string {
+  if (!/^0x[0-9a-fA-F]{40}$/.test(value)) throw new Error("Invalid ABI address.");
+  return value.slice(2).toLowerCase().padStart(64, "0");
+}
+
+function padRight(value: string): string {
+  return value.padEnd(Math.ceil(value.length / 64) * 64, "0");
+}
+
+/** Alchemy JSON-RPC authenticates with the key in the `/v2/<key>` path. */
+function alchemyEndpoint(prefix: string, apiKey: string): string {
+  if (!apiKey.trim()) throw new Error("Alchemy API key is empty.");
+  return `${prefix.replace(/\/$/, "")}/${encodeURIComponent(apiKey)}`;
 }
 
 function normalizeBaseUrl(value: string, allowInsecureHttp: boolean): string {

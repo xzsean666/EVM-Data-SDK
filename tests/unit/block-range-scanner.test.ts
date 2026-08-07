@@ -59,6 +59,26 @@ describe("BlockRangeScanner", () => {
     expect(result.items[0]?.logIndex).toBeNull();
   });
 
+  it("emits only complete windows and does not retain callback-consumed records", async () => {
+    const executor = {
+      execute: async () => execution([item("42", "0", "1", "etherscan")], true, "etherscan"),
+    } as unknown as RequestExecutor;
+    const scanner = new BlockRangeScanner({ executor, maxRangeRecords: 10, maxRangeWindows: 1 });
+    const windows: Array<{ startBlock: string; endBlock: string; items: number }> = [];
+
+    const result = await scanner.scan(request("42", "42"), async (window) => {
+      windows.push({
+        startBlock: window.range.startBlock,
+        endBlock: window.range.endBlock,
+        items: window.items.length,
+      });
+    });
+
+    expect(windows).toEqual([{ startBlock: "42", endBlock: "42", items: 1 }]);
+    expect(result.items).toEqual([]);
+    expect(result.stats.windows).toBe(1);
+  });
+
   it("fails closed when a provider cannot prove a dense single-block window is complete", async () => {
     const executor = {
       execute: async () => execution([], false, "etherscan"),
@@ -70,15 +90,22 @@ describe("BlockRangeScanner", () => {
     expect(error).toMatchObject({ code: "BLOCK_RANGE_STALLED" });
   });
 
-  it("fails closed when a completed item lacks both log index and provider identity", async () => {
+  it("preserves an already-deduplicated completed response without an event identity", async () => {
     const executor = {
-      execute: async () => execution([item("42", "0", null, "moralis", null)], true, "moralis"),
+      execute: async () => ({
+        ...execution([item("42", "0", null, "etherscan", null)], true, "etherscan"),
+        result: {
+          ...execution([item("42", "0", null, "etherscan", null)], true, "etherscan").result,
+          itemsAlreadyDeduplicated: true,
+        },
+      }),
     } as unknown as RequestExecutor;
     const scanner = new BlockRangeScanner({ executor, maxRangeRecords: 10, maxRangeWindows: 1 });
 
-    const error = await scanner.scan(request("42", "42")).catch((value: unknown) => value);
+    const result = await scanner.scan(request("42", "42"));
 
-    expect(error).toMatchObject({ code: "BLOCK_RANGE_STALLED" });
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]?.logIndex).toBeNull();
   });
 
   it("reports a non-stalled provider failure as incomplete without returning partial data", async () => {

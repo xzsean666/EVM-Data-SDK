@@ -81,6 +81,28 @@ describe("EvmDataClient", () => {
     expect(result).not.toHaveProperty("nextCursor");
   });
 
+  it("emits a complete transaction window without retaining it in callback mode", async () => {
+    const transport = new SequenceTransport([{
+      status: "1", message: "OK", result: [{
+        blockNumber: "10", timeStamp: "1700000000", hash: "0xaaa", nonce: "0", blockHash: "0xbbb", transactionIndex: "0", from: address, to: "0x2222222222222222222222222222222222222222", value: "1", gas: "21000", gasPrice: "1", gasUsed: "21000", input: "0x", isError: "0", txreceipt_status: "1",
+      }],
+    }]);
+    const client = new EvmDataClient({ providers: [{ kind: "etherscan", apiKeys: ["key"] }], requestPolicy: { maxTotalAttempts: 1 } }, { transport });
+    const windows: number[] = [];
+
+    const result = await client.address.getTransactionsByBlockRange({
+      chain: 1,
+      address,
+      startBlock: "1",
+      endBlock: "10",
+      onWindow: (window) => { windows.push(window.items.length); },
+    });
+
+    expect(windows).toEqual([1]);
+    expect(result.items).toEqual([]);
+    expect(result.pages).toBe(1);
+  });
+
   it("maps latest height through the explorer API instead of an RPC endpoint", async () => {
     const transport = new SequenceTransport([{ status: "1", message: "OK", result: "12345" }]);
     const client = new EvmDataClient({ providers: [{ kind: "etherscan", apiKeys: ["key"] }] }, { transport });

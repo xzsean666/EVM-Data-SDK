@@ -592,6 +592,14 @@ The upgrade does not add global chain event scanning, normal transactions from
 Alchemy asset transfers, arbitrary sing-box configuration, TUN/system routing,
 unbounded memory, or a promise to evade API quotas or network policy.
 
+For durable consumers, both block-range methods accept an optional asynchronous
+`onWindow` callback. It receives only a complete, inclusive, disjoint window
+after the SDK has proved the provider response terminal. The callback is
+awaited before the next window is requested, so a caller may atomically persist
+the window and its own block checkpoint. In callback mode the final aggregate
+response intentionally has an empty `items` array: completed records are not
+retained in SDK memory. The callback never receives a provider cursor.
+
 ### 12.4 API-only ERC-20 historical snapshots
 
 `client.token.getErc20TokenHoldings({ chain, address })` and
@@ -606,9 +614,12 @@ Etherscan two-request-per-second limit is enforced in the adapter.
 ### API-only address range contracts
 
 `client.address.getTransactionsByBlockRange()` completes one inclusive,
-bounded transaction range. Provider pagination is consumed internally and is
-never exposed as a business cursor. It uses indexed HTTP APIs only; no
-JSON-RPC method or provider RPC proxy is part of this contract.
+bounded transaction range. A full first page is discarded and its closed block
+window is split before either child is retried; a terminal window is therefore
+complete without exposing or persisting a provider cursor. It supports the
+same optional complete-window callback and memory behavior as the ERC-20 range
+operation. It uses indexed HTTP APIs only; no JSON-RPC method or provider RPC
+proxy is part of this contract.
 
 `client.chain.getLatestBlockNumber()` and
 `client.chain.getBlockNumberByTimestamp()` use Etherscan's indexed block API.

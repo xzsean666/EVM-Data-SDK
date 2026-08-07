@@ -110,7 +110,10 @@ export class EvmDataClient {
         ...(this.advancedProxyManager === null ? {} : { advancedProxyRoute: this.advancedProxyManager }),
       },
     );
-    this.address = new AddressService(executor, this.chain);
+    this.address = new AddressService(executor, this.chain, {
+      maxRangeRecords: this.configuration.maxRangeRecords,
+      maxRangeWindows: this.configuration.maxRangeWindows,
+    });
     this.token = new TokenService(
       executor,
       new BlockRangeScanner({

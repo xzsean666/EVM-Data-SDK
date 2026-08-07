@@ -158,6 +158,14 @@ Alchemy, or Moralis with explicit provenance.
 
 ## Current State
 
+- Complete-window streaming is implemented for ERC-20 and normal transaction
+  block-range operations. `onWindow` is awaited only after a terminal closed
+  window is validated; callback mode returns an empty aggregate `items` array
+  to avoid retaining historical results. Normal transactions now split a dense
+  full first page instead of carrying its continuation. Deterministic scanner
+  and client tests pass, and `RequestExecutor` already covers first-request/no-
+  wait and subsequent-request/provider-pacing behavior.
+
 - Token Price Aggregation Price-0 through Price-5 is implemented in the working tree. `client.token.getPriceHistory()` supports latest, one UTC date, and inclusive UTC ranges through default Binance, OKX, Coinbase, and GeckoTerminal adapters.
 - The price path is independent of credential-based blockchain execution. It uses no API key or environment key, has direct and proxy-only routes, bounded retries, caller abort handling, partial result failures, and aggregate `PRICE_DATA_UNAVAILABLE` behavior.
 - Provider-local schema, mapper, error classifier, and deterministic fixtures exist for every price provider. Fixtures cover market selection, UTC ordering/deduplication, range chunking, missing dates, Gecko ambiguity and quote-side resolution, direct/proxy-only, retry, timeout, abort, partial/all failures, and sensitive failure redaction.

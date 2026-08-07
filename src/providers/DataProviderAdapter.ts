@@ -52,6 +52,12 @@ export interface ProviderBlockRangeItem {
 /** One new provider request for one inclusive block window. */
 export interface ProviderBlockRangeWindowResult {
   readonly items: readonly ProviderBlockRangeItem[];
+  /**
+   * The provider documents that this one complete closed-range response is
+   * already deduplicated. The scanner may therefore preserve records that do
+   * not expose an event-level identity such as a log index.
+   */
+  readonly itemsAlreadyDeduplicated?: boolean;
   readonly complete: boolean;
   readonly pageInfo: {
     readonly provider: ProviderName;

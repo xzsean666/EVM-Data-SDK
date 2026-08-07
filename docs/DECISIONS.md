@@ -350,6 +350,28 @@ The owner approved the architecture baseline in the 2026-08-05 implementation re
 
 **Trade-offs:** A successful call may make more requests because overflowing windows are re-read after splitting, and it holds all records in memory. An explicit `maxRangeRecords` and maximum-window safety limit must fail rather than truncate or loop; a future async iterator can address very large ranges. Results can have multiple sources, so every transfer retains its provider and the aggregate exposes providers plus completed-window counts. Provider-specific support remains capability-gated: all three planned range adapters require fixture-backed boundary and terminal semantics before enablement.
 
+### ADR-027: Complete-window callbacks support durable consumers
+
+**Status:** Accepted
+
+**Date:** 2026-08-07
+
+**Decision:** Both ERC-20 and normal-transaction block-range operations accept
+an optional awaited `onWindow` callback. The SDK calls it only after it has
+verified an inclusive closed window is complete. Callback mode returns summary
+statistics but intentionally does not retain completed items in the final
+aggregate. Normal transaction ranges treat a full first page as an incomplete
+window and split it before emitting any items.
+
+**Reason:** A process that persists a long historical ledger needs a durable
+block checkpoint after each complete range, but must not store provider cursor
+state or wait for a whole account history in memory. Fresh closed windows make
+restart behavior deterministic and provider cursors remain SDK-private.
+
+**Trade-off:** Dense ranges are re-read after splitting, increasing indexed API
+requests. Provider pacing remains a caller-supplied request policy and is
+applied only before actual upstream attempts, never as a callback delay.
+
 ### ADR-023: API-only chain data
 
 **Status:** Accepted

@@ -61,6 +61,7 @@ export type {
   BlockRange,
   Erc20BlockRangeResult,
   Erc20BlockRangeStats,
+  Erc20BlockRangeWindow,
   Erc20Transfer,
   Erc20BalanceAtBlock,
   Erc20BalancesAtBlock,
@@ -78,6 +79,7 @@ export type {
   TransactionReceipt,
   TransactionReceiptLog,
   TransactionBlockRange,
+  TransactionBlockRangeWindow,
 } from "./domain/models";
 export { ApiChainService } from './services/ApiChainService';
 export { EvmDataClient } from "./client/EvmDataClient";

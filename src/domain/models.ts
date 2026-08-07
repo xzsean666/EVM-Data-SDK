@@ -163,6 +163,16 @@ export interface Erc20BlockRangeResult {
   readonly stats: Erc20BlockRangeStats;
 }
 
+/** One complete, closed ERC-20 range window emitted during a streamed scan. */
+export interface Erc20BlockRangeWindow {
+  readonly chainId: number;
+  readonly address: string;
+  readonly range: BlockRange;
+  readonly items: readonly Erc20Transfer[];
+  readonly provider: ProviderName;
+  readonly upstreamRequests: number;
+}
+
 export interface TransactionBlockRange {
   readonly chainId: number;
   readonly address: string;
@@ -170,6 +180,16 @@ export interface TransactionBlockRange {
   readonly items: readonly Transaction[];
   readonly provider: ProviderName;
   readonly pages: number;
+  readonly upstreamRequests: number;
+}
+
+/** One complete, closed transaction range window emitted during a streamed scan. */
+export interface TransactionBlockRangeWindow {
+  readonly chainId: number;
+  readonly address: string;
+  readonly range: BlockRange;
+  readonly items: readonly Transaction[];
+  readonly provider: ProviderName;
   readonly upstreamRequests: number;
 }
 
