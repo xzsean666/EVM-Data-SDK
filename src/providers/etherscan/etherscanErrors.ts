@@ -3,6 +3,8 @@ import { EvmDataError as EvmDataErrorClass } from "../../domain/errors";
 import { isHttpTransportError } from "../../transport/HttpTransport";
 import type { HttpResponse } from "../../transport/HttpTransport";
 
+const PLAN_RESTRICTION_PATTERN = /(?:free|plan|upgrade|subscription|not available).*?(?:chain|tier|plan)|chain.*?(?:free|plan|tier)|plan.*?(?:restrict|not permit)|(?:endpoint|api|action).*?(?:requires?|(?:only )?available|limited to).*?(?:plan|tier|standard|pro|paid)|(?:requires?|(?:only )?available|limited to).*?(?:standard|pro|paid).*(?:plan|tier)?/;
+
 export interface EtherscanErrorContext {
   readonly chainId: number;
   readonly response?: HttpResponse;
@@ -59,7 +61,7 @@ export function classifyEtherscanEnvelopeError(
   if (/(invalid|missing|not found).*api key|api key.*(invalid|missing)|invalid api key|unauthorized/.test(text)) {
     return providerError("AUTHENTICATION_FAILED", "Etherscan rejected the API key.", false, chainId);
   }
-  if (/(free|plan|upgrade|subscription|not available).*?(chain|tier|plan)|chain.*?(free|plan|tier)|plan.*?(restrict|not permit)/.test(text)) {
+  if (PLAN_RESTRICTION_PATTERN.test(text)) {
     return providerError("PLAN_RESTRICTED", "Etherscan plan does not permit this request.", false, chainId);
   }
   if (/(unsupported|invalid).*chain|chainid|chain id/.test(text)) {
@@ -75,6 +77,23 @@ export function classifyEtherscanEnvelopeError(
     return providerError("PROVIDER_UNAVAILABLE", "Etherscan is temporarily unavailable.", true, chainId);
   }
   return providerError("PROVIDER_UNAVAILABLE", "Etherscan rejected the request.", false, chainId);
+}
+
+/**
+ * Etherscan documents these endpoints as Standard-plan-and-above. A logical
+ * rejection that is not a credential, parameter, rate, or transient error is
+ * therefore a plan restriction rather than a generic provider outage.
+ */
+export function classifyEtherscanStandardEndpointError(
+  message: string,
+  result: unknown,
+  chainId: number,
+): EvmDataError {
+  const classified = classifyEtherscanEnvelopeError(message, result, chainId);
+  if (classified.code !== "PROVIDER_UNAVAILABLE" || classified.retryable) {
+    return classified;
+  }
+  return providerError("PLAN_RESTRICTED", "Etherscan plan does not permit this request.", false, chainId);
 }
 
 export function normalizeEtherscanTransportError(error: unknown, chainId: number): EvmDataError | null {
@@ -115,7 +134,7 @@ function providerError(
 }
 
 function looksLikePlanRestriction(body: unknown): boolean {
-  return /(free|plan|upgrade|subscription|not available).*?(chain|tier|plan)/.test(bodyText(body));
+  return PLAN_RESTRICTION_PATTERN.test(bodyText(body));
 }
 
 function bodyText(body: unknown): string {

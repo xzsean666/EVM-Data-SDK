@@ -51,6 +51,16 @@ export const moralisBalance = {
   balance_formatted: "0.000000000000000123",
 };
 
+export const moralisErc20Balances = [
+  {
+    token_address: "0x5555555555555555555555555555555555555555",
+    balance: "000123456",
+    decimals: "6",
+    name: "Fixture Token",
+    symbol: "FIX",
+  },
+];
+
 export const moralisTokenTransfers = {
   cursor: "moralis-token-cursor-page-2",
   page: 1,

@@ -1,13 +1,13 @@
 import { AxiosHttpTransport, parseHttpProxyUrl } from "../../transport/AxiosHttpTransport";
 import type { HttpTransport } from "../../transport/HttpTransport";
 import { EvmDataError } from "../../domain/errors";
-import type { Erc20Transfer, NativeBalance } from "../../domain/models";
-import type { NormalizedErc20BlockRangeRequest, NormalizedErc20TransfersRequest, NormalizedNativeBalanceRequest, NormalizedTransactionsRequest, TransferDirection } from "../../domain/operations";
+import type { Erc20Transfer } from "../../domain/models";
+import type { NormalizedErc20BlockRangeRequest, NormalizedErc20TransfersRequest, NormalizedTransactionsRequest, TransferDirection } from "../../domain/operations";
 import type { ProviderPageResult } from "../../domain/pagination";
 import type { CapabilityRequest, DataProviderAdapter, ProviderBlockRangeWindowResult, ProviderAttemptContext } from "../DataProviderAdapter";
 import { classifyAlchemyHttpResponse, classifyAlchemyJsonRpcError, normalizeAlchemyTransportError } from "./alchemyErrors";
-import { alchemyBalanceResultSchema, alchemyJsonRpcResponseSchema, alchemyTransfersResultSchema, type AlchemyTransfer } from "./alchemySchemas";
-import { mapAlchemyBalance, mapAlchemyTransfer } from "./alchemyMapper";
+import { alchemyJsonRpcResponseSchema, alchemyTransfersResultSchema, type AlchemyTransfer } from "./alchemySchemas";
+import { mapAlchemyTransfer } from "./alchemyMapper";
 
 export interface AlchemyAdapterOptions {
   readonly transport?: HttpTransport;
@@ -55,24 +55,14 @@ export class AlchemyAdapter implements DataProviderAdapter {
 
   supports(request: CapabilityRequest): boolean {
     if (request.chain.routes.alchemy === undefined) return false;
-    if (request.operation === "getNativeBalance") return true;
+    // Native balances are not an indexed Alchemy API operation in this SDK.
+    // Route native-balance reads to indexed explorer APIs instead.
+    if (request.operation === "getNativeBalance") return false;
     if (request.operation === "getErc20Transfers") {
       return "pageSize" in request.request && request.request.pageSize <= ALCHEMY_MAX_PAGE_SIZE;
     }
     if (request.operation === "getErc20TransfersByBlockRange") return true;
     return false;
-  }
-
-  async getNativeBalance(request: NormalizedNativeBalanceRequest, context: ProviderAttemptContext): Promise<NativeBalance> {
-    const body = await this.call("eth_getBalance", [request.address, "latest"], context);
-    const result = parseResult(body, context);
-    const parsed = alchemyBalanceResultSchema.safeParse(result);
-    if (!parsed.success) throw invalidResponse(context);
-    try {
-      return mapAlchemyBalance(parsed.data, context.chain, request.address);
-    } catch (error: unknown) {
-      throw invalidResponse(context, error);
-    }
   }
 
   async getErc20Transfers(request: NormalizedErc20TransfersRequest, context: ProviderAttemptContext): Promise<ProviderPageResult<Erc20Transfer, AlchemySinglePageState | AlchemyBothPageState>> {

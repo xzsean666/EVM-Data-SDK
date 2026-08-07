@@ -4,6 +4,44 @@ Last updated: 2026-08-06
 
 Workflow state: Step 5 review complete for Work Packages 1 through 9 and Price-0 through Price-5; release decisions and Git identity remain outside implementation scope.
 
+## 2026-08-06 API-only Backend Integration Update
+
+The backend integration now consumes the following SDK API-only operations:
+
+- `client.chain.getLatestBlockNumber()` and `getBlockNumberByTimestamp()` for a finalized, 30-day onboarding boundary;
+- `client.token.getErc20TransfersByBlockRange()` for one address-scoped ERC-20 transfer scan;
+- `client.token.getErc20TokenHoldings()` plus `getErc20BalancesAtBlock()` for exact opening ERC-20 balances; and
+- `client.address.getTransactionsByBlockRange()`, `getInternalNativeTransfersByBlockRange()`, and `getBeaconWithdrawalsByBlockRange()` for normalized PostgreSQL ingestion.
+
+The token-holdings endpoint is discovery only. The backend unions current
+holdings with contracts observed in the 30-day transfer range, then requests
+each contract's exact opening balance through an indexed API. Etherscan uses
+`tokenbalancehistory` and is serialized at two requests per second; when its
+Standard+ endpoints reject the configured credentials, Moralis REST obtains a
+complete wallet snapshot at the requested historical block and projects it
+onto the same candidate contracts. Neither path uses RPC.
+
+Backend verification on 2026-08-06: API-only finalized-head succeeded with
+direct traffic disabled and a managed local sing-box route. A real
+`addresstokenbalance` smoke reached Etherscan through the same route and
+returned `PLAN_RESTRICTED` after every configured Etherscan credential was
+tried. The SDK now falls back to Moralis's REST wallet-balance endpoint: a
+VLESS-only smoke completed both current-holdings discovery (using an indexed
+Etherscan head as Moralis `to_block`) and an explicit historical snapshot.
+The smoke logged no credential, proxy URI, continuation cursor, block value,
+or raw provider response.
+
+The SDK treats opaque non-retryable logical rejections from those two
+documented Standard+ endpoints as `PLAN_RESTRICTED`, tries a later configured
+Etherscan credential after authentication or plan rejection, and then tries
+the compatible Moralis REST adapter. Alchemy's JSON-RPC endpoints remain
+excluded from this backend path. `pnpm check` had previously passed with 17
+test files / 156 tests; rerun it after this work package before release.
+
+The next SDK P0 work remains receipt/full-log and exact effective-gas-price
+contracts needed by the backend Action Parser. Do not replace those operations
+with RPC fallbacks: this integration is explicitly API-only.
+
 ## v0.3 Proposal: Advanced Proxy and Block-Range ERC-20 Reads
 
 **Status:** ADR-023/ADR-024 were explicitly approved by the owner on 2026-08-06; source implementation and deterministic verification are complete in the working tree.
@@ -127,6 +165,15 @@ Alchemy, or Moralis with explicit provenance.
 - Focused commits remain pending because Git user.name and user.email are unset; no identity will be fabricated and no push will be made.
 
 - Work Packages 10 and 11 are complete: list `pageSize` now accepts 1–10,000; provider capability filtering enforces Moralis 100, Alchemy ERC-20 1,000 per stream, and Etherscan 10,000. Alchemy both direction returns the full two-stream union with an Alchemy-pinned dual cursor. `fullData: true` makes Etherscan the only candidate and defaults an omitted page size to 10,000; it remains cursor-paginated and is part of the cursor fingerprint.
+- API-only chain additions are implemented: `address.getTransactionsByBlockRange`
+  consumes provider cursors internally, and `chain.getLatestBlockNumber` /
+  `getBlockNumberByTimestamp` use Etherscan's indexed block API. Alchemy is not
+  eligible for native balance because that would require `eth_getBalance`.
+  No new SDK path calls JSON-RPC or a provider RPC proxy.
+- `address.getInternalNativeTransfersByBlockRange` and
+  `address.getBeaconWithdrawalsByBlockRange` are also indexed Etherscan account
+  API operations. They have bounded pagination, provider-local schemas/mappers
+  and fixture-backed tests; no JSON-RPC fallback is permitted.
 - `scripts/live-config.mjs` now supports both labelled grouped values and conventional provider-named `NAME=value` lines in `.env.key`, without logging the values.
 
 - Architecture status: Accepted for v0.1 implementation.

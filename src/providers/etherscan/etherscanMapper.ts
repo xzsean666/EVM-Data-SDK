@@ -1,6 +1,6 @@
 import type { ChainDefinition } from "../../domain/chains";
-import type { Erc20Transfer, NativeBalance, Transaction } from "../../domain/models";
-import type { EtherscanTokenTransfer, EtherscanTransaction } from "./etherscanSchemas";
+import type { BeaconWithdrawal, Erc20TokenHolding, Erc20Transfer, InternalNativeTransfer, NativeBalance, Transaction } from "../../domain/models";
+import type { EtherscanBeaconWithdrawal, EtherscanInternalTransaction, EtherscanTokenHolding, EtherscanTokenTransfer, EtherscanTransaction } from "./etherscanSchemas";
 
 export function mapEtherscanTransaction(
   value: EtherscanTransaction,
@@ -73,6 +73,61 @@ export function mapEtherscanTokenTransfer(
     to: value.to.toLowerCase(),
     amount: canonicalDecimal(value.value),
     provider: "etherscan",
+  };
+}
+
+export function mapEtherscanInternalTransaction(
+  value: EtherscanInternalTransaction,
+  chain: ChainDefinition,
+): InternalNativeTransfer {
+  return {
+    chainId: chain.chainId,
+    transactionHash: value.hash.toLowerCase(),
+    traceId: normalizeNullableText(value.traceId),
+    blockNumber: canonicalDecimal(value.blockNumber),
+    timestamp: mapTimestamp(value.timeStamp),
+    from: value.from.toLowerCase(),
+    to: value.to.toLowerCase(),
+    value: canonicalDecimal(value.value),
+    type: normalizeNullableText(value.type),
+    status: value.isError === "1" ? "reverted" : value.isError === "0" ? "success" : "unknown",
+    provider: "etherscan",
+  };
+}
+
+export function mapEtherscanBeaconWithdrawal(
+  value: EtherscanBeaconWithdrawal,
+  chain: ChainDefinition,
+): BeaconWithdrawal {
+  return {
+    chainId: chain.chainId,
+    withdrawalIndex: canonicalDecimal(value.withdrawalIndex),
+    validatorIndex: normalizeNullableDecimal(value.validatorIndex),
+    blockNumber: canonicalDecimal(value.blockNumber),
+    timestamp: mapTimestamp(value.timestamp ?? value.timeStamp ?? value.blockTimestamp),
+    address: value.address.toLowerCase(),
+    amount: canonicalDecimal(value.amount),
+    amountDecimals: 9,
+    provider: "etherscan",
+  };
+}
+
+export function mapEtherscanTokenHolding(
+  value: EtherscanTokenHolding,
+  chain: ChainDefinition,
+  address: string,
+): Erc20TokenHolding {
+  return {
+    chainId: chain.chainId,
+    address,
+    tokenAddress: value.TokenAddress.toLowerCase(),
+    tokenName: normalizeNullableText(value.TokenName),
+    tokenSymbol: normalizeNullableText(value.TokenSymbol),
+    tokenDecimals: value.TokenDivisor === undefined || value.TokenDivisor === null || value.TokenDivisor === ''
+      ? null
+      : parseTokenDecimals(value.TokenDivisor),
+    amount: canonicalDecimal(value.TokenQuantity),
+    provider: 'etherscan',
   };
 }
 

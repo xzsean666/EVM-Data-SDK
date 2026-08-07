@@ -392,8 +392,20 @@ Alchemy does not implement `getTransactions` in v0.1. `alchemy_getAssetTransfers
 - Chain selection: provider chain slug/hex value from the registry.
 - Authentication: `X-API-Key` header.
 - Transactions: raw wallet transactions endpoint, not enriched wallet history, to align with the SDK's normal transaction semantics.
+- Transaction context: `GET /transaction/{transaction_hash}` returns the
+  transaction/receipt envelope and nested complete logs. The SDK validates the
+  whole object and maps one hash at a time inside a bounded batch. This is an
+  explicit caller operation, never an SDK background refresh or backend sync
+  hook. The public batch is capped at 20 hashes; normalized results are cached
+  for 60 seconds and identical in-flight hashes are coalesced.
 - Native balance: `GET /{address}/balance`.
 - ERC-20 transfers: `GET /{address}/erc20/transfers`.
+- ERC-20 holdings/snapshots: `GET /{address}/erc20` with `chain` and required
+  `to_block`. For current holdings, the API-chain service resolves an indexed
+  Etherscan head before issuing the Moralis request. The upstream response is an unpaged wallet-balance array. The
+  adapter validates it in full and only returns requested-contract balances;
+  it never exposes the provider's full wallet inventory through the explicit
+  historical-balance operation.
 - Pagination: provider cursor with fixed initial limit and point-in-time behavior where supported.
 - List page capacity: 1–100 records.
 - Rate behavior: request throughput over a rolling four-second window; endpoint costs and plan rules can evolve.
@@ -547,6 +559,29 @@ providers and completed-window counts.
 
 All new loops must be bounded, abortable and total-time aware. New runtime
 resources must be released by `EvmDataClient.close()`.
+
+### API-only chain metadata boundary
+
+Address range scans and chain height lookups are indexed API operations. They
+must not call `eth_*` JSON-RPC methods or provider RPC proxy endpoints.
+Finality is an application policy (`latest API height - lag`), not an SDK RPC
+tag.
+
+The API-only address extensions are deliberately scoped to indexed Etherscan
+account endpoints. `AddressService` validates the same closed range request as
+top-level transactions, then delegates to `ApiChainService`; the Etherscan
+adapter owns schemas, mapping, bounded paging and error classification. No
+trace RPC, JSON-RPC proxy, raw provider pagination or credential reaches a
+business caller.
+
+`TokenService` also delegates two non-RPC snapshot operations to
+`ApiChainService`: current `addresstokenbalance` holdings discovery and exact
+`tokenbalancehistory` reads for caller-supplied contract addresses. The
+Etherscan adapter owns their schema, canonical decimal mapping and documented
+two-request-per-second pacing. `ApiChainService` acquires the same configured
+HTTP or managed sing-box route as the rest of the client, so
+`allowDirect: false` cannot bypass VLESS for chain-height, internal-transfer,
+Beacon, holdings, or historical-balance APIs.
 
 ## 20. Rejected Draft Elements
 

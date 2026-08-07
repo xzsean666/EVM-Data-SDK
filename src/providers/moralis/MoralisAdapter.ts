@@ -1,7 +1,7 @@
 import { AxiosHttpTransport, parseHttpProxyUrl } from "../../transport/AxiosHttpTransport";
 import type { HttpTransport } from "../../transport/HttpTransport";
 import { EvmDataError } from "../../domain/errors";
-import type { Erc20Transfer, NativeBalance, Transaction } from "../../domain/models";
+import type { Erc20BalancesAtBlock, Erc20TokenHoldings, Erc20Transfer, NativeBalance, Transaction, TransactionContext } from "../../domain/models";
 import type {
   NormalizedErc20BlockRangeRequest,
   NormalizedErc20TransfersRequest,
@@ -21,11 +21,16 @@ import {
 } from "./moralisErrors";
 import {
   moralisNativeBalanceSchema,
+  moralisErc20BalanceCollectionSchema,
+  moralisTransactionContextSchema,
   moralisTokenTransferCollectionSchema,
   moralisTransactionCollectionSchema,
 } from "./moralisSchemas";
 import {
   mapMoralisNativeBalance,
+  mapMoralisErc20BalancesAtBlock,
+  mapMoralisErc20TokenHolding,
+  mapMoralisTransactionContext,
   mapMoralisTokenTransfer,
   mapMoralisTransaction,
 } from "./moralisMapper";
@@ -92,6 +97,88 @@ export class MoralisAdapter implements DataProviderAdapter {
     }
     try {
       return mapMoralisNativeBalance(parsed.data, context.chain, request.address);
+    } catch (error: unknown) {
+      throw invalidResponse(context, error);
+    }
+  }
+
+  async getTransactionContextByHash(
+    request: { readonly transactionHash: string },
+    context: ProviderAttemptContext,
+  ): Promise<TransactionContext> {
+    const body = await this.call(`/transaction/${request.transactionHash}`, {
+      chain: moralisChain(context),
+    }, context);
+    const parsed = moralisTransactionContextSchema.safeParse(body);
+    if (!parsed.success) throw invalidResponse(context);
+    try {
+      return mapMoralisTransactionContext(parsed.data, context.chain);
+    } catch (error: unknown) {
+      throw invalidResponse(context, error);
+    }
+  }
+
+  async getErc20TokenHoldings(
+    request: { readonly address: string; readonly blockNumber?: string },
+    context: ProviderAttemptContext,
+  ): Promise<Erc20TokenHoldings> {
+    if (request.blockNumber === undefined) {
+      throw new EvmDataError({
+        code: "INVALID_REQUEST",
+        message: "Moralis ERC-20 holdings require an indexed block number.",
+        retryable: false,
+        provider: this.name,
+        chainId: context.chain.chainId,
+      });
+    }
+    const body = await this.call(`/${request.address}/erc20`, {
+      chain: moralisChain(context),
+      to_block: request.blockNumber,
+    }, context);
+    const parsed = moralisErc20BalanceCollectionSchema.safeParse(body);
+    if (!parsed.success) throw invalidResponse(context);
+    try {
+      return {
+        chainId: context.chain.chainId,
+        address: request.address,
+        items: parsed.data.map((item) => mapMoralisErc20TokenHolding(item, context.chain, request.address)),
+        provider: "moralis",
+        pages: 1,
+        upstreamRequests: 1,
+      };
+    } catch (error: unknown) {
+      throw invalidResponse(context, error);
+    }
+  }
+
+  async getErc20BalancesAtBlock(
+    request: {
+      readonly address: string;
+      readonly blockNumber: string;
+      readonly tokenAddresses: readonly string[];
+    },
+    context: ProviderAttemptContext,
+  ): Promise<Erc20BalancesAtBlock> {
+    const body = await this.call(`/${request.address}/erc20`, {
+      chain: moralisChain(context),
+      to_block: request.blockNumber,
+    }, context);
+    const parsed = moralisErc20BalanceCollectionSchema.safeParse(body);
+    if (!parsed.success) throw invalidResponse(context);
+    try {
+      return {
+        chainId: context.chain.chainId,
+        address: request.address,
+        blockNumber: request.blockNumber,
+        items: mapMoralisErc20BalancesAtBlock(
+          parsed.data,
+          context.chain,
+          request.address,
+          request.blockNumber,
+          request.tokenAddresses,
+        ),
+        provider: "moralis",
+      };
     } catch (error: unknown) {
       throw invalidResponse(context, error);
     }

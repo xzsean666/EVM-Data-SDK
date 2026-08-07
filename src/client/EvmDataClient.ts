@@ -8,6 +8,7 @@ import { ProxyPool } from "../execution/ProxyPool";
 import { RequestExecutor } from "../execution/RequestExecutor";
 import { BlockRangeScanner } from "../execution/BlockRangeScanner";
 import { AddressService } from "../services/AddressService";
+import { ApiChainService } from '../services/ApiChainService';
 import { TokenService } from "../services/TokenService";
 import { EtherscanAdapter } from "../providers/etherscan/EtherscanAdapter";
 import { AlchemyAdapter } from "../providers/alchemy/AlchemyAdapter";
@@ -34,6 +35,7 @@ export interface EvmDataClientOptions {
 
 export class EvmDataClient {
   readonly address: AddressService;
+  readonly chain: ApiChainService;
   readonly token: TokenService;
 
   private readonly configuration: NormalizedClientConfiguration;
@@ -100,7 +102,15 @@ export class EvmDataClient {
           ...(observe === undefined ? {} : { observe }),
         }),
       );
-    this.address = new AddressService(executor);
+    this.chain = new ApiChainService(
+      this.configuration,
+      entries.map((entry) => entry.adapter),
+      {
+        proxyPool,
+        ...(this.advancedProxyManager === null ? {} : { advancedProxyRoute: this.advancedProxyManager }),
+      },
+    );
+    this.address = new AddressService(executor, this.chain);
     this.token = new TokenService(
       executor,
       new BlockRangeScanner({
@@ -108,6 +118,7 @@ export class EvmDataClient {
         maxRangeRecords: this.configuration.maxRangeRecords,
         maxRangeWindows: this.configuration.maxRangeWindows,
       }),
+      this.chain,
       priceAggregator,
       priceConfiguration.tokenAliases,
     );

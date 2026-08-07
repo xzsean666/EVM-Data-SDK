@@ -34,9 +34,13 @@ export type { ErrorCode, EvmDataErrorOptions } from "./domain/errors";
 export type {
   Erc20TransfersRequest,
   Erc20BlockRangeRequest,
+  Erc20BalancesAtBlockRequest,
+  Erc20TokenHoldingsRequest,
   NativeBalanceRequest,
+  TransactionContextsByHashRequest,
   OperationName,
   SortOrder,
+  TransactionsBlockRangeRequest,
   TransactionsRequest,
   TransferDirection,
 } from "./domain/operations";
@@ -58,10 +62,24 @@ export type {
   Erc20BlockRangeResult,
   Erc20BlockRangeStats,
   Erc20Transfer,
+  Erc20BalanceAtBlock,
+  Erc20BalancesAtBlock,
+  Erc20TokenHolding,
+  Erc20TokenHoldings,
+  InternalNativeTransfer,
+  InternalNativeTransferBlockRange,
+  BeaconWithdrawal,
+  BeaconWithdrawalBlockRange,
   NativeBalance,
   Page,
   Transaction,
+  TransactionContext,
+  TransactionContextsByHashResult,
+  TransactionReceipt,
+  TransactionReceiptLog,
+  TransactionBlockRange,
 } from "./domain/models";
+export { ApiChainService } from './services/ApiChainService';
 export { EvmDataClient } from "./client/EvmDataClient";
 export type { EvmDataClientOptions } from "./client/EvmDataClient";
 export { prewarmSingBox, SUPPORTED_SING_BOX_VERSION } from "./proxy/SingBoxBinaryManager";

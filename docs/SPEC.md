@@ -45,6 +45,11 @@ const prices = await client.token.getPriceHistory({
   token: "Ethereum",
   range: { kind: "latest", days: 30 },
 });
+
+const contexts = await client.address.getTransactionContextsByHash({
+  chain: "ethereum",
+  transactionHashes: ["0x..."],
+});
 ```
 
 The exact compile-ready types are an implementation deliverable. The semantic contracts in this specification are fixed unless the architecture is amended.
@@ -87,7 +92,29 @@ The router must evaluate request features, not only method names. Alchemy is eli
 
 `getErc20Transfers` returns mined ERC-20 `Transfer` events indexed for the wallet, optionally filtered to one token contract and one direction. It does not return current token balances, approvals, NFTs, or internal native transfers.
 
+`getErc20TokenHoldings` returns a current indexed holding list for one wallet.
+It is discovery metadata only, not a historical balance assertion.
+`getErc20BalancesAtBlock` then reads one exact block for an explicit,
+caller-supplied ERC-20 contract set. Etherscan reads each contract through
+`tokenbalancehistory`; Moralis reads its complete REST wallet-balance snapshot
+and projects it onto that same set. A projected Moralis omission is a zero only
+after the full snapshot was validated successfully. The SDK does not offer an
+operation that claims to enumerate every token ever held by a wallet at a
+historic block.
+
 `getPriceHistory` returns independently sourced daily OHLCV histories for a token name or symbol. The four default sources are Binance Spot, OKX Spot, Coinbase Exchange Spot, and GeckoTerminal. It is an aggregation rather than a merged consensus price: each successful source remains a separate result with its actual market and quote asset.
+
+`getTransactionContextsByHash` returns one indexed transaction context per
+requested mined hash, including receipt status, gas-used/effective-gas-price
+fields, and every receipt log with topics and data. It is a bounded batch
+operation with no provider cursor. Moralis Data API is the current API-only
+provider; Alchemy JSON-RPC and Etherscan proxy/RPC endpoints are not semantic
+fallbacks for this operation. It is explicitly caller-driven: the SDK does not
+schedule it, and the backend portfolio/onboarding synchronization path does
+not call it. A UI that needs context may obtain and parse it on demand through
+its own chosen frontend data source. Each call accepts at most 20 hashes; a
+client caches normalized mined contexts for 60 seconds and coalesces identical
+in-flight reads, without a background refresh timer.
 
 ### 2.5 Request normalization
 
@@ -189,6 +216,45 @@ interface Erc20Transfer {
 ```
 
 `amount` is the raw event integer. Transfer identity is `(chainId, transactionHash, logIndex)` when `logIndex` is available. The mapper must not invent a log index.
+
+### 3.5a ERC-20 holdings and exact historical balances
+
+```ts
+interface Erc20TokenHoldings {
+  chainId: number;
+  address: string;
+  items: readonly {
+    tokenAddress: string;
+    tokenName: string | null;
+    tokenSymbol: string | null;
+    tokenDecimals: number | null;
+    amount: string; // current raw quantity, discovery only
+  }[];
+  provider: ProviderName;
+  pages: number;
+  upstreamRequests: number;
+}
+
+interface Erc20BalancesAtBlock {
+  chainId: number;
+  address: string;
+  blockNumber: string;
+  items: readonly {
+    tokenAddress: string;
+    amount: string; // exact historical raw quantity
+    blockNumber: string;
+    provider: ProviderName;
+  }[];
+  provider: ProviderName;
+}
+```
+
+Both operations are indexed Etherscan API calls. `getErc20TokenHoldings` is
+useful for selecting contracts that are still held; callers must union that
+list with contracts observed in their own historical transfer range before
+requesting exact historical balances. Etherscan documents both endpoints as
+Standard-plan-and-above, capped at two requests per second. The SDK serializes
+these endpoint calls per Etherscan adapter and never uses RPC as a fallback.
 
 ### 3.6 Token price history
 
@@ -450,7 +516,8 @@ A caller aborts while the executor is in backoff. The wait terminates immediatel
 - Transaction signing, broadcasting, wallet custody, or nonce management
 - Pending transaction subscriptions or WebSockets
 - Internal transaction/call traces as a unified v0.1 operation
-- NFT transfers, contract events, token balances, decoded activity, or ABI services
+- NFT transfers, contract events, decoded activity, ABI services, or an
+  unbounded automatic enumeration of every historical wallet token
 - Price quote conversion, consensus/median prices, contract-address input, caching, websocket streams, or background market-health checks
 - Persistent cache, database storage, metrics exporters, automatic provider ranking, or background health checks
 - Browser proxy support
@@ -524,3 +591,38 @@ rather than truncating data.
 The upgrade does not add global chain event scanning, normal transactions from
 Alchemy asset transfers, arbitrary sing-box configuration, TUN/system routing,
 unbounded memory, or a promise to evade API quotas or network policy.
+
+### 12.4 API-only ERC-20 historical snapshots
+
+`client.token.getErc20TokenHoldings({ chain, address })` and
+`client.token.getErc20BalancesAtBlock({ chain, address, blockNumber,
+tokenAddresses })` are API-only Etherscan operations. The former returns a
+paginated current holding list solely to discover contract addresses; the
+latter requires that explicit list and returns raw balances at one exact
+canonical block. Historical token snapshots are therefore a caller-owned
+workflow, not a provider cursor or an implicit all-token scan. The fixed
+Etherscan two-request-per-second limit is enforced in the adapter.
+
+### API-only address range contracts
+
+`client.address.getTransactionsByBlockRange()` completes one inclusive,
+bounded transaction range. Provider pagination is consumed internally and is
+never exposed as a business cursor. It uses indexed HTTP APIs only; no
+JSON-RPC method or provider RPC proxy is part of this contract.
+
+`client.chain.getLatestBlockNumber()` and
+`client.chain.getBlockNumberByTimestamp()` use Etherscan's indexed block API.
+Consumers apply a configured finality lag to the API height rather than
+requesting an RPC `finalized` tag.
+
+`client.address.getInternalNativeTransfersByBlockRange()` completes an
+inclusive address/block interval through Etherscan's indexed
+`account/txlistinternal` endpoint. It exposes canonical decimal-string value,
+trace identity, status and provider provenance; provider pagination remains
+internal and is bounded.
+
+`client.address.getBeaconWithdrawalsByBlockRange()` completes an inclusive
+Ethereum address/block interval through Etherscan's indexed
+`account/txsBeaconWithdrawal` endpoint. Withdrawal amounts retain their
+provider unit explicitly (`amountDecimals: 9`, Gwei), so consumers cannot
+mistake it for wei. This endpoint is unavailable on non-Ethereum chains.

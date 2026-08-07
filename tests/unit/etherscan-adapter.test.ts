@@ -172,6 +172,54 @@ describe("EtherscanAdapter", () => {
     expect(result.items[0]?.tokenDecimals).toBeNull();
   });
 
+  it("maps address-scoped internal native transfers through the indexed account API", async () => {
+    const transport = new FixtureTransport({
+      status: "1",
+      message: "OK",
+      result: [{
+        blockNumber: "00042",
+        timeStamp: "1700000000",
+        hash: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        from: "0x2222222222222222222222222222222222222222",
+        to: "0x1111111111111111111111111111111111111111",
+        value: "000100",
+        traceId: "0_1",
+        type: "call",
+        isError: "0",
+      }],
+    });
+    const result = await new EtherscanAdapter({ transport }).getInternalNativeTransfersByBlockRange({
+      address: "0x1111111111111111111111111111111111111111",
+      startBlock: "40",
+      endBlock: "42",
+    }, context());
+    expect(result).toMatchObject({ provider: "etherscan", pages: 1, upstreamRequests: 1 });
+    expect(result.items[0]).toMatchObject({ blockNumber: "42", value: "100", traceId: "0_1", status: "success" });
+    expect(transport.requests[0]?.params).toMatchObject({ action: "txlistinternal", startblock: "40", endblock: "42", page: 1, offset: 10_000, sort: "asc" });
+  });
+
+  it("maps Ethereum Beacon withdrawals as Gwei without using an RPC endpoint", async () => {
+    const transport = new FixtureTransport({
+      status: "1",
+      message: "OK",
+      result: [{
+        withdrawalIndex: "0007",
+        validatorIndex: "42",
+        blockNumber: "123",
+        timestamp: "1700000000",
+        address: "0x1111111111111111111111111111111111111111",
+        amount: "32000000000",
+      }],
+    });
+    const result = await new EtherscanAdapter({ transport }).getBeaconWithdrawalsByBlockRange({
+      address: "0x1111111111111111111111111111111111111111",
+      startBlock: "120",
+      endBlock: "123",
+    }, context());
+    expect(result.items[0]).toMatchObject({ withdrawalIndex: "7", amount: "32000000000", amountDecimals: 9, blockNumber: "123" });
+    expect(transport.requests[0]?.params).toMatchObject({ action: "txsBeaconWithdrawal", startblock: "120", endblock: "123" });
+  });
+
   it.each([
     [etherscanInvalidKey, "AUTHENTICATION_FAILED"],
     [etherscanPlanRestricted, "PLAN_RESTRICTED"],
@@ -182,6 +230,30 @@ describe("EtherscanAdapter", () => {
       .getTransactions(parseTransactionsRequest({ chain: 1, address: "0x1111111111111111111111111111111111111111" }), context())
       .catch((error: unknown) => error);
     expect(result).toMatchObject({ code, provider: "etherscan", chainId: 1 });
+  });
+
+  it("classifies a Standard-or-higher endpoint requirement as a plan restriction", async () => {
+    const result = await new EtherscanAdapter({
+      transport: new FixtureTransport({
+        status: "0",
+        message: "NOTOK",
+        result: "This endpoint is only available to Standard plan subscribers.",
+      }),
+    })
+      .getTransactions(parseTransactionsRequest({ chain: 1, address: "0x1111111111111111111111111111111111111111" }), context())
+      .catch((error: unknown) => error);
+
+    expect(result).toMatchObject({ code: "PLAN_RESTRICTED", provider: "etherscan", chainId: 1 });
+  });
+
+  it("classifies an otherwise-unspecified holdings rejection as a plan restriction", async () => {
+    const result = await new EtherscanAdapter({
+      transport: new FixtureTransport({ status: "0", message: "NOTOK", result: "Endpoint is unavailable." }),
+    })
+      .getErc20TokenHoldings({ address: "0x1111111111111111111111111111111111111111" }, context())
+      .catch((error: unknown) => error);
+
+    expect(result).toMatchObject({ code: "PLAN_RESTRICTED", provider: "etherscan", chainId: 1 });
   });
 
   it("classifies selected HTTP failures and honors Retry-After", async () => {

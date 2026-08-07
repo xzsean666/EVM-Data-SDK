@@ -1,9 +1,12 @@
 import type { ChainDefinition } from "../../domain/chains";
-import type { Erc20Transfer, NativeBalance, Transaction } from "../../domain/models";
+import type { Erc20BalanceAtBlock, Erc20TokenHolding, Erc20Transfer, NativeBalance, Transaction, TransactionContext, TransactionReceiptLog } from "../../domain/models";
 import type {
+  MoralisErc20Balance,
   MoralisNativeBalance,
+  MoralisReceiptLog,
   MoralisTokenTransfer,
   MoralisTransaction,
+  MoralisTransactionContext,
 } from "./moralisSchemas";
 
 export function mapMoralisTransaction(
@@ -30,6 +33,57 @@ export function mapMoralisTransaction(
   };
 }
 
+export function mapMoralisTransactionContext(
+  value: MoralisTransactionContext,
+  chain: ChainDefinition,
+): TransactionContext {
+  const transaction = mapMoralisTransaction(value, chain);
+  const gasUsed = transaction.gasUsed;
+  const effectiveGasPrice = transaction.gasPrice;
+  const gasFeeWei = gasUsed === null || effectiveGasPrice === null
+    ? null
+    : (BigInt(gasUsed) * BigInt(effectiveGasPrice)).toString();
+  return {
+    chainId: chain.chainId,
+    transaction,
+    receipt: {
+      status: transaction.status,
+      gasUsed,
+      effectiveGasPrice,
+      gasFeeWei,
+      contractAddress: nullableAddress(value.receipt_contract_address),
+    },
+    logs: value.logs.map((log) => mapMoralisReceiptLog(log, chain, transaction.hash)),
+    provider: "moralis",
+  };
+}
+
+function mapMoralisReceiptLog(
+  value: MoralisReceiptLog,
+  chain: ChainDefinition,
+  transactionHash: string,
+): TransactionReceiptLog {
+  if (value.transaction_hash.toLowerCase() !== transactionHash) {
+    throw new Error("Moralis receipt log belongs to a different transaction.");
+  }
+  const topics = [value.topic0, value.topic1, value.topic2, value.topic3]
+    .filter((topic): topic is string => typeof topic === "string" && topic !== "")
+    .map((topic) => topic.toLowerCase());
+  return {
+    chainId: chain.chainId,
+    transactionHash,
+    blockNumber: canonicalQuantity(value.block_number),
+    blockHash: nullableHash(value.block_hash),
+    transactionIndex: nullableQuantity(value.transaction_index),
+    logIndex: canonicalQuantity(value.log_index),
+    address: value.address.toLowerCase(),
+    topics,
+    data: value.data.toLowerCase(),
+    removed: null,
+    provider: "moralis",
+  };
+}
+
 export function mapMoralisNativeBalance(
   value: MoralisNativeBalance,
   chain: ChainDefinition,
@@ -44,6 +98,53 @@ export function mapMoralisNativeBalance(
     blockNumber: null,
     provider: "moralis",
   };
+}
+
+export function mapMoralisErc20TokenHolding(
+  value: MoralisErc20Balance,
+  chain: ChainDefinition,
+  address: string,
+): Erc20TokenHolding {
+  return {
+    chainId: chain.chainId,
+    address,
+    tokenAddress: value.token_address.toLowerCase(),
+    tokenName: nullableText(value.name),
+    tokenSymbol: nullableText(value.symbol),
+    tokenDecimals: mapTokenDecimals(value.decimals),
+    amount: canonicalQuantity(value.balance),
+    provider: "moralis",
+  };
+}
+
+/**
+ * Moralis returns one complete wallet inventory rather than one contract per
+ * request. Duplicate contracts make the inventory ambiguous. A requested
+ * contract that is absent from that successful, validated inventory is zero.
+ */
+export function mapMoralisErc20BalancesAtBlock(
+  values: readonly MoralisErc20Balance[],
+  chain: ChainDefinition,
+  address: string,
+  blockNumber: string,
+  tokenAddresses: readonly string[],
+): readonly Erc20BalanceAtBlock[] {
+  const amounts = new Map<string, string>();
+  for (const value of values) {
+    const tokenAddress = value.token_address.toLowerCase();
+    if (amounts.has(tokenAddress)) {
+      throw new Error("Moralis returned duplicate ERC-20 balance contracts.");
+    }
+    amounts.set(tokenAddress, canonicalQuantity(value.balance));
+  }
+  return tokenAddresses.map((tokenAddress) => ({
+    chainId: chain.chainId,
+    address,
+    tokenAddress,
+    blockNumber,
+    amount: amounts.get(tokenAddress) ?? "0",
+    provider: "moralis",
+  }));
 }
 
 export function mapMoralisTokenTransfer(

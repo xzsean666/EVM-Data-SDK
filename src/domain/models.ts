@@ -28,6 +28,47 @@ export interface Transaction {
   provider: ProviderName;
 }
 
+/** One immutable receipt log returned by an indexed transaction-detail API. */
+export interface TransactionReceiptLog {
+  chainId: number;
+  transactionHash: string;
+  blockNumber: string;
+  blockHash: string | null;
+  transactionIndex: string | null;
+  logIndex: string;
+  address: string;
+  topics: readonly string[];
+  data: string;
+  /** `null` when the indexed API does not expose a removal marker. */
+  removed: boolean | null;
+  provider: ProviderName;
+}
+
+export interface TransactionReceipt {
+  status: Transaction["status"];
+  gasUsed: string | null;
+  effectiveGasPrice: string | null;
+  gasFeeWei: string | null;
+  contractAddress: string | null;
+}
+
+/** Transaction envelope plus receipt fields and all receipt logs. */
+export interface TransactionContext {
+  chainId: number;
+  transaction: Transaction;
+  receipt: TransactionReceipt;
+  logs: readonly TransactionReceiptLog[];
+  provider: ProviderName;
+}
+
+/** A complete, bounded set of transaction contexts requested by hash. */
+export interface TransactionContextsByHashResult {
+  chainId: number;
+  items: readonly TransactionContext[];
+  provider: ProviderName;
+  upstreamRequests: number;
+}
+
 export interface NativeBalance {
   chainId: number;
   address: string;
@@ -55,6 +96,51 @@ export interface Erc20Transfer {
   provider: ProviderName;
 }
 
+/** One ERC-20 contract balance at an exact canonical historical block. */
+export interface Erc20BalanceAtBlock {
+  chainId: number;
+  address: string;
+  tokenAddress: string;
+  blockNumber: string;
+  /** Raw token quantity in the contract's smallest unit. */
+  amount: string;
+  provider: ProviderName;
+}
+
+/**
+ * A caller-supplied set of ERC-20 balances at one exact block. The SDK never
+ * pretends that an explorer can enumerate every token ever held by a wallet.
+ */
+export interface Erc20BalancesAtBlock {
+  chainId: number;
+  address: string;
+  blockNumber: string;
+  items: readonly Erc20BalanceAtBlock[];
+  provider: ProviderName;
+}
+
+/** Current indexed holding metadata used only to discover contract addresses. */
+export interface Erc20TokenHolding {
+  chainId: number;
+  address: string;
+  tokenAddress: string;
+  tokenName: string | null;
+  tokenSymbol: string | null;
+  tokenDecimals: number | null;
+  /** Current raw quantity; it is not a historical balance assertion. */
+  amount: string;
+  provider: ProviderName;
+}
+
+export interface Erc20TokenHoldings {
+  chainId: number;
+  address: string;
+  items: readonly Erc20TokenHolding[];
+  provider: ProviderName;
+  pages: number;
+  upstreamRequests: number;
+}
+
 export interface BlockRange {
   readonly startBlock: string;
   readonly endBlock: string;
@@ -75,4 +161,63 @@ export interface Erc20BlockRangeResult {
   readonly items: readonly Erc20Transfer[];
   readonly providers: readonly ProviderName[];
   readonly stats: Erc20BlockRangeStats;
+}
+
+export interface TransactionBlockRange {
+  readonly chainId: number;
+  readonly address: string;
+  readonly range: BlockRange;
+  readonly items: readonly Transaction[];
+  readonly provider: ProviderName;
+  readonly pages: number;
+  readonly upstreamRequests: number;
+}
+
+/** Indexed explorer representation of one EVM internal native-value trace. */
+export interface InternalNativeTransfer {
+  readonly chainId: number;
+  readonly transactionHash: string;
+  readonly traceId: string | null;
+  readonly blockNumber: string;
+  readonly timestamp: string | null;
+  readonly from: string;
+  readonly to: string;
+  /** Native value in the chain's smallest unit (wei for Ethereum/Base). */
+  readonly value: string;
+  readonly type: string | null;
+  readonly status: "success" | "reverted" | "unknown";
+  readonly provider: ProviderName;
+}
+
+export interface InternalNativeTransferBlockRange {
+  readonly chainId: number;
+  readonly address: string;
+  readonly range: BlockRange;
+  readonly items: readonly InternalNativeTransfer[];
+  readonly provider: ProviderName;
+  readonly pages: number;
+  readonly upstreamRequests: number;
+}
+
+/** EIP-4895 withdrawal. `amount` is Gwei, as returned by the indexed API. */
+export interface BeaconWithdrawal {
+  readonly chainId: number;
+  readonly withdrawalIndex: string;
+  readonly validatorIndex: string | null;
+  readonly blockNumber: string;
+  readonly timestamp: string | null;
+  readonly address: string;
+  readonly amount: string;
+  readonly amountDecimals: 9;
+  readonly provider: ProviderName;
+}
+
+export interface BeaconWithdrawalBlockRange {
+  readonly chainId: number;
+  readonly address: string;
+  readonly range: BlockRange;
+  readonly items: readonly BeaconWithdrawal[];
+  readonly provider: ProviderName;
+  readonly pages: number;
+  readonly upstreamRequests: number;
 }

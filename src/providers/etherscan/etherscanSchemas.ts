@@ -52,6 +52,43 @@ export const etherscanTokenTransferSchema = z
   })
   .passthrough();
 
+export const etherscanInternalTransactionSchema = z
+  .object({
+    blockNumber: decimalString,
+    timeStamp: optionalDecimalString,
+    hash,
+    from: address,
+    to: address,
+    value: decimalString,
+    traceId: nullableString,
+    type: nullableString,
+    isError: nullableString,
+  })
+  .passthrough();
+
+export const etherscanBeaconWithdrawalSchema = z
+  .object({
+    withdrawalIndex: decimalString,
+    validatorIndex: optionalDecimalString,
+    blockNumber: decimalString,
+    timestamp: optionalDecimalString,
+    timeStamp: optionalDecimalString,
+    blockTimestamp: optionalDecimalString,
+    address,
+    amount: decimalString,
+  })
+  .passthrough();
+
+export const etherscanTokenHoldingSchema = z
+  .object({
+    TokenAddress: address,
+    TokenName: nullableString,
+    TokenSymbol: nullableString,
+    TokenQuantity: decimalString,
+    TokenDivisor: optionalDecimalString,
+  })
+  .passthrough();
+
 export const etherscanTransactionListEnvelopeSchema = etherscanEnvelopeSchema.extend({
   result: z.union([z.array(etherscanTransactionSchema), z.string()]),
 });
@@ -64,6 +101,21 @@ export const etherscanBalanceEnvelopeSchema = etherscanEnvelopeSchema.extend({
   result: z.unknown(),
 });
 
+export const etherscanInternalTransactionEnvelopeSchema = etherscanEnvelopeSchema.extend({
+  result: z.union([z.array(etherscanInternalTransactionSchema), z.string()]),
+});
+
+export const etherscanBeaconWithdrawalEnvelopeSchema = etherscanEnvelopeSchema.extend({
+  result: z.union([z.array(etherscanBeaconWithdrawalSchema), z.string()]),
+});
+
+export const etherscanTokenHoldingEnvelopeSchema = etherscanEnvelopeSchema.extend({
+  result: z.union([z.array(etherscanTokenHoldingSchema), z.string()]),
+});
+
 export type EtherscanEnvelope = z.infer<typeof etherscanEnvelopeSchema>;
 export type EtherscanTransaction = z.infer<typeof etherscanTransactionSchema>;
 export type EtherscanTokenTransfer = z.infer<typeof etherscanTokenTransferSchema>;
+export type EtherscanInternalTransaction = z.infer<typeof etherscanInternalTransactionSchema>;
+export type EtherscanBeaconWithdrawal = z.infer<typeof etherscanBeaconWithdrawalSchema>;
+export type EtherscanTokenHolding = z.infer<typeof etherscanTokenHoldingSchema>;

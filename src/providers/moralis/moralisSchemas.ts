@@ -11,6 +11,8 @@ const hash = z.string().regex(/^0x[0-9a-fA-F]+$/);
 const optionalAddress = z.union([address, z.literal(""), z.null()]).optional();
 const optionalHash = z.union([hash, z.literal(""), z.null()]).optional();
 const optionalText = z.string().nullable().optional();
+const hexadecimalData = z.string().regex(/^0x[0-9a-fA-F]*$/);
+const optionalTopic = z.union([hexadecimalData, z.literal(""), z.null()]).optional();
 
 export const moralisTransactionSchema = z
   .object({
@@ -32,6 +34,26 @@ export const moralisTransactionSchema = z
   })
   .passthrough();
 
+export const moralisReceiptLogSchema = z
+  .object({
+    address,
+    block_number: quantity,
+    block_hash: optionalHash,
+    transaction_hash: hash,
+    transaction_index: optionalQuantity,
+    log_index: quantity,
+    topic0: optionalTopic,
+    topic1: optionalTopic,
+    topic2: optionalTopic,
+    topic3: optionalTopic,
+    data: hexadecimalData,
+  })
+  .passthrough();
+
+export const moralisTransactionContextSchema = moralisTransactionSchema.extend({
+  logs: z.array(moralisReceiptLogSchema),
+});
+
 export const moralisTransactionCollectionSchema = z
   .object({
     result: z.array(moralisTransactionSchema),
@@ -48,6 +70,19 @@ export const moralisNativeBalanceSchema = z
     symbol: z.string().nullable().optional(),
   })
   .passthrough();
+
+/** `GET /{address}/erc20` returns an unpaged wallet-balance array. */
+export const moralisErc20BalanceSchema = z
+  .object({
+    token_address: address,
+    balance: quantity,
+    decimals: optionalQuantity,
+    name: optionalText,
+    symbol: optionalText,
+  })
+  .passthrough();
+
+export const moralisErc20BalanceCollectionSchema = z.array(moralisErc20BalanceSchema);
 
 export const moralisTokenTransferSchema = z
   .object({
@@ -83,5 +118,8 @@ export const moralisTokenTransferCollectionSchema = z
   .passthrough();
 
 export type MoralisTransaction = z.infer<typeof moralisTransactionSchema>;
+export type MoralisReceiptLog = z.infer<typeof moralisReceiptLogSchema>;
+export type MoralisTransactionContext = z.infer<typeof moralisTransactionContextSchema>;
 export type MoralisNativeBalance = z.infer<typeof moralisNativeBalanceSchema>;
+export type MoralisErc20Balance = z.infer<typeof moralisErc20BalanceSchema>;
 export type MoralisTokenTransfer = z.infer<typeof moralisTokenTransferSchema>;

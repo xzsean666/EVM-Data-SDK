@@ -14,20 +14,27 @@ import type {
 } from "../../domain/operations";
 import { MAX_PAGE_SIZE } from "../../domain/operations";
 import type { ProviderPageResult } from "../../domain/pagination";
-import type { Erc20Transfer, NativeBalance, Transaction } from "../../domain/models";
+import type { BeaconWithdrawal, BeaconWithdrawalBlockRange, Erc20BalanceAtBlock, Erc20TokenHolding, Erc20TokenHoldings, Erc20Transfer, InternalNativeTransfer, InternalNativeTransferBlockRange, NativeBalance, Transaction } from "../../domain/models";
 import { EvmDataError } from "../../domain/errors";
 import {
   classifyEtherscanEnvelopeError,
+  classifyEtherscanStandardEndpointError,
   classifyEtherscanHttpResponse,
   normalizeEtherscanTransportError,
 } from "./etherscanErrors";
 import {
   etherscanBalanceEnvelopeSchema,
+  etherscanBeaconWithdrawalEnvelopeSchema,
+  etherscanInternalTransactionEnvelopeSchema,
+  etherscanTokenHoldingEnvelopeSchema,
   etherscanTokenTransferEnvelopeSchema,
   etherscanTransactionListEnvelopeSchema,
 } from "./etherscanSchemas";
 import {
   mapEtherscanBalance,
+  mapEtherscanBeaconWithdrawal,
+  mapEtherscanInternalTransaction,
+  mapEtherscanTokenHolding,
   mapEtherscanTokenTransfer,
   mapEtherscanTransaction,
 } from "./etherscanMapper";
@@ -50,6 +57,8 @@ export class EtherscanAdapter implements DataProviderAdapter {
 
   private readonly transport: HttpTransport;
   private readonly baseUrl: string;
+  /** Etherscan caps historical/holding PRO endpoints at two requests/second. */
+  private historicalBalanceNextAt = 0;
 
   constructor(options: EtherscanAdapterOptions = {}) {
     this.transport = options.transport ?? new AxiosHttpTransport();
@@ -195,8 +204,268 @@ export class EtherscanAdapter implements DataProviderAdapter {
     }
   }
 
+  /**
+   * Etherscan's indexed historical token-balance endpoint. This deliberately
+   * accepts one explicit token contract at a time; it never expands a wallet
+   * into a provider-owned token catalogue and never calls `eth_call`.
+   */
+  async getErc20BalanceAtBlock(
+    request: { readonly address: string; readonly tokenAddress: string; readonly blockNumber: string },
+    context: ProviderAttemptContext,
+  ): Promise<Erc20BalanceAtBlock> {
+    await this.throttleHistoricalBalanceApi(context.signal);
+    const body = await this.call("tokenbalancehistory", {
+      address: request.address,
+      contractaddress: request.tokenAddress,
+      blockno: request.blockNumber,
+    }, context);
+    const envelope = etherscanBalanceEnvelopeSchema.safeParse(body);
+    if (!envelope.success) throw invalidResponse(context);
+    if (envelope.data.status === "0") {
+      throw classifyEtherscanStandardEndpointError(envelope.data.message, envelope.data.result, context.chain.chainId);
+    }
+    if (typeof envelope.data.result !== "string" || !/^[0-9]+$/.test(envelope.data.result)) {
+      throw invalidResponse(context);
+    }
+    return {
+      chainId: context.chain.chainId,
+      address: request.address,
+      tokenAddress: request.tokenAddress,
+      blockNumber: BigInt(request.blockNumber).toString(),
+      amount: BigInt(envelope.data.result).toString(),
+      provider: this.name,
+    };
+  }
+
+  /**
+   * Current indexed holdings provide a contract set only. Callers must still
+   * use `getErc20BalanceAtBlock` for any historical balance assertion.
+   */
+  async getErc20TokenHoldings(
+    request: { readonly address: string },
+    context: ProviderAttemptContext,
+  ): Promise<Erc20TokenHoldings> {
+    const items: Erc20TokenHolding[] = [];
+    const seen = new Set<string>();
+    let page = 1;
+    for (; page <= 1_000; page += 1) {
+      await this.throttleHistoricalBalanceApi(context.signal);
+      const body = await this.call('addresstokenbalance', {
+        address: request.address,
+        page,
+        offset: 100,
+      }, context);
+      const envelope = etherscanTokenHoldingEnvelopeSchema.safeParse(body);
+      if (!envelope.success) throw invalidResponse(context);
+      if (envelope.data.status === '0') {
+        if (isEmptyMessage(envelope.data.message, envelope.data.result, 'transfers')) break;
+        throw classifyEtherscanStandardEndpointError(envelope.data.message, envelope.data.result, context.chain.chainId);
+      }
+      if (!Array.isArray(envelope.data.result)) throw invalidResponse(context);
+      try {
+        for (const raw of envelope.data.result) {
+          const item = mapEtherscanTokenHolding(raw, context.chain, request.address);
+          if (seen.has(item.tokenAddress)) continue;
+          seen.add(item.tokenAddress);
+          items.push(item);
+        }
+      } catch (error: unknown) {
+        throw invalidResponse(context, error);
+      }
+      if (envelope.data.result.length < 100) break;
+      if (items.length > 100_000) {
+        throw new EvmDataError({ code: 'INVALID_PROVIDER_RESPONSE', message: 'Etherscan token holdings exceeded the SDK record limit.', retryable: false, provider: this.name, chainId: context.chain.chainId });
+      }
+    }
+    if (page > 1_000) {
+      throw new EvmDataError({ code: 'INVALID_PROVIDER_RESPONSE', message: 'Etherscan token holdings exceeded the SDK page limit.', retryable: false, provider: this.name, chainId: context.chain.chainId });
+    }
+    return {
+      chainId: context.chain.chainId,
+      address: request.address,
+      items,
+      provider: this.name,
+      pages: page,
+      upstreamRequests: page,
+    };
+  }
+
+  /**
+   * Indexed explorer API only (`account/txlistinternal`); never uses trace or
+   * JSON-RPC endpoints. The provider pagination stays inside the SDK.
+   */
+  async getInternalNativeTransfersByBlockRange(
+    request: { readonly address: string; readonly startBlock: string; readonly endBlock: string },
+    context: ProviderAttemptContext,
+  ): Promise<InternalNativeTransferBlockRange> {
+    const items: InternalNativeTransfer[] = [];
+    const seen = new Set<string>();
+    let page = 1;
+    for (; page <= 1_000; page += 1) {
+      const body = await this.call("txlistinternal", {
+        address: request.address,
+        page,
+        offset: ETHERSCAN_MAX_PAGE_SIZE,
+        sort: "asc",
+        startblock: request.startBlock,
+        endblock: request.endBlock,
+      }, context);
+      const envelope = etherscanInternalTransactionEnvelopeSchema.safeParse(body);
+      if (!envelope.success) throw invalidResponse(context);
+      if (envelope.data.status === "0") {
+        if (isEmptyMessage(envelope.data.message, envelope.data.result, "internal transfers")) break;
+        throw classifyEtherscanEnvelopeError(envelope.data.message, envelope.data.result, context.chain.chainId);
+      }
+      if (!Array.isArray(envelope.data.result)) throw invalidResponse(context);
+      try {
+        for (const raw of envelope.data.result) {
+          const item = mapEtherscanInternalTransaction(raw, context.chain);
+          if (item.from !== request.address && item.to !== request.address) continue;
+          const key = `${item.transactionHash}:${item.traceId ?? ""}:${item.from}:${item.to}:${item.value}:${item.blockNumber}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            items.push(item);
+          }
+        }
+      } catch (error: unknown) {
+        throw invalidResponse(context, error);
+      }
+      if (envelope.data.result.length < ETHERSCAN_MAX_PAGE_SIZE) break;
+      if (items.length > 100_000) {
+        throw new EvmDataError({ code: "INVALID_PROVIDER_RESPONSE", message: "Etherscan internal range exceeded the SDK record limit.", retryable: false, provider: this.name, chainId: context.chain.chainId });
+      }
+    }
+    if (page > 1_000) {
+      throw new EvmDataError({ code: "INVALID_PROVIDER_RESPONSE", message: "Etherscan internal range exceeded the SDK page limit.", retryable: false, provider: this.name, chainId: context.chain.chainId });
+    }
+    return {
+      chainId: context.chain.chainId,
+      address: request.address,
+      range: { startBlock: request.startBlock, endBlock: request.endBlock },
+      items,
+      provider: this.name,
+      pages: page,
+      upstreamRequests: page,
+    };
+  }
+
+  /** EIP-4895 withdrawal history from Etherscan's indexed account endpoint. */
+  async getBeaconWithdrawalsByBlockRange(
+    request: { readonly address: string; readonly startBlock: string; readonly endBlock: string },
+    context: ProviderAttemptContext,
+  ): Promise<BeaconWithdrawalBlockRange> {
+    if (context.chain.chainId !== 1) {
+      throw new EvmDataError({ code: "UNSUPPORTED_CHAIN", message: "Beacon withdrawals are only available on Ethereum.", retryable: false, provider: this.name, chainId: context.chain.chainId });
+    }
+    const items: BeaconWithdrawal[] = [];
+    const seen = new Set<string>();
+    let page = 1;
+    for (; page <= 1_000; page += 1) {
+      const body = await this.call("txsBeaconWithdrawal", {
+        address: request.address,
+        page,
+        offset: ETHERSCAN_MAX_PAGE_SIZE,
+        sort: "asc",
+        startblock: request.startBlock,
+        endblock: request.endBlock,
+      }, context);
+      const envelope = etherscanBeaconWithdrawalEnvelopeSchema.safeParse(body);
+      if (!envelope.success) throw invalidResponse(context);
+      if (envelope.data.status === "0") {
+        if (isEmptyMessage(envelope.data.message, envelope.data.result, "beacon withdrawals")) break;
+        throw classifyEtherscanEnvelopeError(envelope.data.message, envelope.data.result, context.chain.chainId);
+      }
+      if (!Array.isArray(envelope.data.result)) throw invalidResponse(context);
+      try {
+        for (const raw of envelope.data.result) {
+          const item = mapEtherscanBeaconWithdrawal(raw, context.chain);
+          if (item.address !== request.address || seen.has(item.withdrawalIndex)) continue;
+          seen.add(item.withdrawalIndex);
+          items.push(item);
+        }
+      } catch (error: unknown) {
+        throw invalidResponse(context, error);
+      }
+      if (envelope.data.result.length < ETHERSCAN_MAX_PAGE_SIZE) break;
+      if (items.length > 100_000) {
+        throw new EvmDataError({ code: "INVALID_PROVIDER_RESPONSE", message: "Etherscan beacon range exceeded the SDK record limit.", retryable: false, provider: this.name, chainId: context.chain.chainId });
+      }
+    }
+    if (page > 1_000) {
+      throw new EvmDataError({ code: "INVALID_PROVIDER_RESPONSE", message: "Etherscan beacon range exceeded the SDK page limit.", retryable: false, provider: this.name, chainId: context.chain.chainId });
+    }
+    return {
+      chainId: context.chain.chainId,
+      address: request.address,
+      range: { startBlock: request.startBlock, endBlock: request.endBlock },
+      items,
+      provider: this.name,
+      pages: page,
+      upstreamRequests: page,
+    };
+  }
+
+  /**
+   * Explorer API lookup; this is intentionally not an RPC/proxy call.
+   * Etherscan returns the closest canonical block at or before the supplied
+   * Unix timestamp, which callers can combine with a configured finality lag.
+   */
+  async getBlockNumberByTimestamp(
+    timestamp: string,
+    context: ProviderAttemptContext,
+  ): Promise<string> {
+    if (!/^\d+$/.test(timestamp)) {
+      throw new EvmDataError({
+        code: 'INVALID_REQUEST',
+        message: 'Timestamp must be a decimal Unix timestamp.',
+        retryable: false,
+        provider: this.name,
+        chainId: context.chain.chainId,
+      })
+    }
+    const route = context.chain.routes.etherscan
+    if (route === undefined) {
+      throw new EvmDataError({ code: 'UNSUPPORTED_CHAIN', message: 'Etherscan does not support this chain.', retryable: false, provider: this.name, chainId: context.chain.chainId })
+    }
+    if (context.credential === null) {
+      throw new EvmDataError({ code: 'AUTHENTICATION_FAILED', message: 'Etherscan requires an API key.', retryable: false, provider: this.name, chainId: context.chain.chainId })
+    }
+    let response
+    try {
+      response = await this.transport.request({
+        method: 'GET',
+        url: this.baseUrl,
+        params: {
+          module: 'block',
+          action: 'getblocknobytime',
+          timestamp,
+          closest: 'before',
+          chainid: route.chainId,
+          apikey: context.credential.value,
+        },
+        timeoutMs: context.timeoutMs,
+        ...(context.signal === undefined ? {} : { signal: context.signal }),
+        proxy: context.proxy === null ? null : parseHttpProxyUrl(context.proxy.url),
+      })
+    } catch (error: unknown) {
+      const normalized = normalizeEtherscanTransportError(error, context.chain.chainId)
+      if (normalized !== null) throw normalized
+      throw new EvmDataError({ code: 'PROVIDER_UNAVAILABLE', message: 'Etherscan block lookup failed.', retryable: true, provider: this.name, chainId: context.chain.chainId })
+    }
+    const httpError = classifyEtherscanHttpResponse(response, context.chain.chainId)
+    if (httpError !== null) throw httpError
+    const body = response.body as { status?: unknown; message?: unknown; result?: unknown }
+    if (body?.status === '0') {
+      throw classifyEtherscanEnvelopeError(String(body.message ?? ''), body.result, context.chain.chainId)
+    }
+    if (typeof body?.result !== 'string' || !/^\d+$/.test(body.result)) {
+      throw invalidResponse(context)
+    }
+    return BigInt(body.result).toString()
+  }
+
   private async call(
-    action: "txlist" | "balance" | "tokentx",
+    action: "txlist" | "balance" | "tokentx" | "tokenbalancehistory" | "addresstokenbalance" | "txlistinternal" | "txsBeaconWithdrawal",
     params: Record<string, string | number | undefined>,
     context: ProviderAttemptContext,
   ): Promise<unknown> {
@@ -253,6 +522,29 @@ export class EtherscanAdapter implements DataProviderAdapter {
       throw httpError;
     }
     return response.body;
+  }
+
+  private async throttleHistoricalBalanceApi(signal: AbortSignal | undefined): Promise<void> {
+    if (signal?.aborted === true) {
+      throw new EvmDataError({ code: 'REQUEST_ABORTED', message: 'Request was aborted.', retryable: false, provider: this.name });
+    }
+    const now = Date.now();
+    const dueAt = Math.max(now, this.historicalBalanceNextAt);
+    this.historicalBalanceNextAt = dueAt + 500;
+    const waitMs = dueAt - now;
+    if (waitMs <= 0) return;
+    await new Promise<void>((resolvePromise, reject) => {
+      const timeout = setTimeout(() => {
+        signal?.removeEventListener('abort', abort);
+        resolvePromise();
+      }, waitMs);
+      const abort = () => {
+        clearTimeout(timeout);
+        signal?.removeEventListener('abort', abort);
+        reject(new EvmDataError({ code: 'REQUEST_ABORTED', message: 'Request was aborted.', retryable: false, provider: this.name }));
+      };
+      signal?.addEventListener('abort', abort, { once: true });
+    });
   }
 }
 
@@ -324,9 +616,9 @@ function invalidResponse(context: ProviderAttemptContext, cause?: unknown): EvmD
   });
 }
 
-function isEmptyMessage(message: string, result: unknown, kind: "transactions" | "transfers"): boolean {
+function isEmptyMessage(message: string, result: unknown, kind: "transactions" | "transfers" | "internal transfers" | "beacon withdrawals"): boolean {
   const normalized = `${message} ${typeof result === "string" ? result : ""}`.toLowerCase();
   return kind === "transactions"
     ? /no transactions found|no transaction found/.test(normalized)
-    : /no transactions found|no token transfers found|no transfers found/.test(normalized);
+    : /no transactions found|no token transfers found|no transfers found|no records found/.test(normalized);
 }

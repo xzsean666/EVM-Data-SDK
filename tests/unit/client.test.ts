@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { EvmDataClient } from "../../src/client/EvmDataClient";
 import { EvmDataError } from "../../src/domain/errors";
@@ -68,6 +68,225 @@ describe("EvmDataClient", () => {
     expect(transport.requests[0]?.params).toMatchObject({ offset: 10_000, apikey: "etherscan-key" });
   });
 
+  it("completes a transaction block range without exposing its provider cursor", async () => {
+    const transport = new SequenceTransport([{
+      status: "1", message: "OK", result: [{
+        blockNumber: "10", timeStamp: "1700000000", hash: "0xaaa", nonce: "0", blockHash: "0xbbb", transactionIndex: "0", from: address, to: "0x2222222222222222222222222222222222222222", value: "1", gas: "21000", gasPrice: "1", gasUsed: "21000", input: "0x", isError: "0", txreceipt_status: "1",
+      }],
+    }]);
+    const client = new EvmDataClient({ providers: [{ kind: "etherscan", apiKeys: ["key"] }], requestPolicy: { maxTotalAttempts: 1 } }, { transport });
+    const result = await client.address.getTransactionsByBlockRange({ chain: 1, address, startBlock: "1", endBlock: "10" });
+    expect(result).toMatchObject({ address, range: { startBlock: "1", endBlock: "10" }, provider: "etherscan", pages: 1, upstreamRequests: 1 });
+    expect(transport.requests[0]?.params).toMatchObject({ action: "txlist", startblock: "1", endblock: "10", offset: 10_000 });
+    expect(result).not.toHaveProperty("nextCursor");
+  });
+
+  it("maps latest height through the explorer API instead of an RPC endpoint", async () => {
+    const transport = new SequenceTransport([{ status: "1", message: "OK", result: "12345" }]);
+    const client = new EvmDataClient({ providers: [{ kind: "etherscan", apiKeys: ["key"] }] }, { transport });
+    const result = await client.chain.getLatestBlockNumber({ chain: "ethereum", now: new Date("2026-08-06T00:00:00.000Z") });
+    expect(result).toEqual({ chainId: 1, blockNumber: "12345", provider: "etherscan" });
+    expect(transport.requests[0]?.params).toMatchObject({ module: "block", action: "getblocknobytime", closest: "before" });
+    expect(transport.requests[0]?.params).not.toHaveProperty("tag");
+  });
+
+  it("reads explicit ERC-20 historical balances through Etherscan without RPC", async () => {
+    const firstToken = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const secondToken = "0x3333333333333333333333333333333333333333";
+    const transport = new SequenceTransport([
+      { status: "1", message: "OK", result: "1000000" },
+      { status: "1", message: "OK", result: "0" },
+    ]);
+    const client = new EvmDataClient({
+      providers: [{ kind: "etherscan", apiKeys: ["key"] }],
+      requestPolicy: { maxTotalAttempts: 1 },
+    }, { transport });
+
+    const result = await client.token.getErc20BalancesAtBlock({
+      chain: "ethereum",
+      address,
+      blockNumber: "000123",
+      tokenAddresses: [firstToken, secondToken, `0x${firstToken.slice(2).toUpperCase()}`],
+    });
+
+    expect(result).toMatchObject({
+      chainId: 1,
+      address,
+      blockNumber: "123",
+      provider: "etherscan",
+      items: [
+        { tokenAddress: firstToken, blockNumber: "123", amount: "1000000" },
+        { tokenAddress: secondToken, blockNumber: "123", amount: "0" },
+      ],
+    });
+    expect(transport.requests).toHaveLength(2);
+    expect(transport.requests[0]?.params).toMatchObject({
+      module: "account",
+      action: "tokenbalancehistory",
+      address,
+      contractaddress: firstToken,
+      blockno: "123",
+    });
+    expect(transport.requests[0]?.url).toBe("https://api.etherscan.io/v2/api");
+  });
+
+  it("lists current ERC-20 holdings only to discover the historic contract set", async () => {
+    const token = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const transport = new SequenceTransport([{
+      status: "1",
+      message: "OK",
+      result: [{
+        TokenAddress: token,
+        TokenName: "Fixture Token",
+        TokenSymbol: "FIX",
+        TokenQuantity: "123456",
+        TokenDivisor: "6",
+      }],
+    }]);
+    const client = new EvmDataClient({
+      providers: [{ kind: "etherscan", apiKeys: ["key"] }],
+      requestPolicy: { maxTotalAttempts: 1 },
+    }, { transport });
+
+    const result = await client.token.getErc20TokenHoldings({ chain: "ethereum", address });
+
+    expect(result).toMatchObject({
+      chainId: 1,
+      address,
+      provider: "etherscan",
+      items: [{ tokenAddress: token, tokenSymbol: "FIX", tokenDecimals: 6, amount: "123456" }],
+    });
+    expect(transport.requests[0]?.params).toMatchObject({
+      module: "account",
+      action: "addresstokenbalance",
+      address,
+      page: 1,
+      offset: 100,
+    });
+  });
+
+  it("tries a later configured Etherscan key after a plan restriction", async () => {
+    const transport = new SequenceTransport([
+      { status: "0", message: "NOTOK", result: "This endpoint is only available to Standard plan subscribers." },
+      {
+        status: "1",
+        message: "OK",
+        result: [{
+          TokenAddress: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          TokenName: "Fixture Token",
+          TokenSymbol: "FIX",
+          TokenQuantity: "123456",
+          TokenDivisor: "6",
+        }],
+      },
+    ]);
+    const client = new EvmDataClient({
+      providers: [{ kind: "etherscan", apiKeys: ["restricted-key", "standard-key"] }],
+    }, { transport });
+
+    await expect(client.token.getErc20TokenHoldings({ chain: "ethereum", address })).resolves.toMatchObject({
+      items: [{ tokenSymbol: "FIX" }],
+    });
+    expect(transport.requests).toHaveLength(2);
+    expect(transport.requests.map((request) => request.params?.apikey)).toEqual(["restricted-key", "standard-key"]);
+  });
+
+  it("falls back from Standard+ Etherscan history to the Moralis REST snapshot without using JSON-RPC", async () => {
+    const token = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const missing = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const transport = new SequenceTransport([
+      { status: "0", message: "NOTOK", result: "This endpoint is only available to Standard plan subscribers." },
+      [{ token_address: token, balance: "42", decimals: 18, name: "Fixture", symbol: "FIX" }],
+    ]);
+    const client = new EvmDataClient({
+      providers: [
+        { kind: "etherscan", apiKeys: ["restricted-key"] },
+        { kind: "moralis", apiKeys: ["moralis-key"] },
+      ],
+      requestPolicy: { maxTotalAttempts: 1 },
+    }, { transport });
+
+    await expect(client.token.getErc20BalancesAtBlock({
+      chain: "ethereum",
+      address,
+      blockNumber: "20000000",
+      tokenAddresses: [token, missing],
+    })).resolves.toMatchObject({
+      provider: "moralis",
+      items: [
+        { tokenAddress: token, amount: "42" },
+        { tokenAddress: missing, amount: "0" },
+      ],
+    });
+    expect(transport.requests).toHaveLength(2);
+    expect(transport.requests[0]?.params).toMatchObject({ action: "tokenbalancehistory", blockno: "20000000" });
+    expect(transport.requests[1]).toMatchObject({
+      method: "GET",
+      url: `https://deep-index.moralis.io/api/v2.2/${address}/erc20`,
+      params: { chain: "0x1", to_block: "20000000" },
+    });
+  });
+
+  it("falls back to a Moralis current-holdings snapshot at an indexed API head", async () => {
+    const token = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const transport = new SequenceTransport([
+      { status: "0", message: "NOTOK", result: "This endpoint is only available to Standard plan subscribers." },
+      { status: "1", message: "OK", result: "20000000" },
+      [{ token_address: token, balance: "42", decimals: 18, name: "Fixture", symbol: "FIX" }],
+    ]);
+    const client = new EvmDataClient({
+      providers: [
+        { kind: "etherscan", apiKeys: ["restricted-key"] },
+        { kind: "moralis", apiKeys: ["moralis-key"] },
+      ],
+      requestPolicy: { maxTotalAttempts: 1 },
+    }, { transport });
+
+    await expect(client.token.getErc20TokenHoldings({ chain: "ethereum", address })).resolves.toMatchObject({
+      provider: "moralis",
+      items: [{ tokenAddress: token, amount: "42" }],
+    });
+    expect(transport.requests).toHaveLength(3);
+    expect(transport.requests[1]?.params).toMatchObject({ action: "getblocknobytime" });
+    expect(transport.requests[2]).toMatchObject({
+      method: "GET",
+      url: `https://deep-index.moralis.io/api/v2.2/${address}/erc20`,
+      params: { chain: "0x1", to_block: "20000000" },
+    });
+  });
+
+  it("routes API-chain endpoints through the configured managed VLESS proxy", async () => {
+    const transport = new SequenceTransport([{ status: "1", message: "OK", result: "12345" }]);
+    const advancedProxyManager = {
+      assertReady: vi.fn(),
+      acquire: vi.fn().mockResolvedValue({ id: "sing-box-loopback", url: "http://127.0.0.1:3128" }),
+      report: vi.fn(),
+      initialize: vi.fn(),
+      close: vi.fn(),
+    };
+    const client = new EvmDataClient({
+      providers: [{ kind: "etherscan", apiKeys: ["key"] }],
+      requestPolicy: { allowDirect: false, maxTotalAttempts: 1 },
+      advancedProxy: {
+        kind: "sing-box",
+        urls: ["vless://11111111-1111-4111-8111-111111111111@proxy.example:443?security=tls&type=tcp&sni=proxy.example"],
+      },
+    }, { transport, advancedProxyManager: advancedProxyManager as never });
+
+    await client.chain.getLatestBlockNumber({
+      chain: "ethereum",
+      now: new Date("2026-08-06T00:00:00.000Z"),
+    });
+
+    expect(advancedProxyManager.assertReady).toHaveBeenCalledTimes(1);
+    expect(advancedProxyManager.acquire).toHaveBeenCalledTimes(1);
+    expect(transport.requests[0]?.proxy).toMatchObject({
+      protocol: "http",
+      host: "127.0.0.1",
+      port: 3128,
+    });
+  });
+
   it("executes a both-direction transfer through Alchemy's two provider streams", async () => {
     const transport = new SequenceTransport([{ jsonrpc: "2.0", id: 1, result: { transfers: [], pageKey: null } }]);
     const client = new EvmDataClient({ providers: [{ kind: "alchemy", apiKeys: ["key"] }] }, { transport });
@@ -103,9 +322,9 @@ describe("EvmDataClient", () => {
   });
 
   it("passes proxy-only routing to the transport", async () => {
-    const transport = new SequenceTransport([{ jsonrpc: "2.0", id: 1, result: "0x1" }]);
+    const transport = new SequenceTransport([{ status: "1", message: "OK", result: "1" }]);
     const client = new EvmDataClient({
-      providers: [{ kind: "alchemy", apiKeys: ["key"] }],
+      providers: [{ kind: "etherscan", apiKeys: ["key"] }],
       requestPolicy: { allowDirect: false, maxTotalAttempts: 1 },
       proxies: [{ url: "http://proxy-user:proxy-pass@example.test:8080" }],
     }, { transport });
@@ -114,9 +333,9 @@ describe("EvmDataClient", () => {
   });
 
   it("honors explicit insecure HTTP opt-in for custom provider gateways", async () => {
-    const transport = new SequenceTransport([{ jsonrpc: "2.0", id: 1, result: "0x1" }]);
+    const transport = new SequenceTransport([{ status: "1", message: "OK", result: "1" }]);
     const client = new EvmDataClient({
-      providers: [{ kind: "alchemy", apiKeys: ["key"], baseUrl: "http://gateway.example/v2", allowInsecureHttp: true }],
+      providers: [{ kind: "etherscan", apiKeys: ["key"], baseUrl: "http://gateway.example/v2", allowInsecureHttp: true }],
       requestPolicy: { maxTotalAttempts: 1 },
     }, { transport });
     await client.address.getNativeBalance({ chain: 1, address });

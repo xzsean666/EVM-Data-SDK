@@ -74,6 +74,8 @@ Important notes: Name-only input is resolved from search-pool relationships with
 - Transactions: https://docs.etherscan.io/api-reference/endpoint/txlist
 - Native balance: https://docs.etherscan.io/api-reference/endpoint/balance
 - ERC-20 transfers: https://docs.etherscan.io/api-reference/endpoint/tokentx
+- Current ERC-20 holdings: https://docs.etherscan.io/api-reference/endpoint/addresstokenbalance
+- Historical ERC-20 balance: https://docs.etherscan.io/api-reference/endpoint/tokenbalancehistory
 
 **Purpose in the SDK:** normal address transactions, latest native balance, and ERC-20 transfers.
 
@@ -94,6 +96,7 @@ Important notes: Name-only input is resolved from search-pool relationships with
 - The V2 endpoint describes `offset` as records per page. SDK capability tests and the owner-requested live verification use the conservative 1–10,000 range; requests above 10,000 are rejected before network work. A 10,000-record page is still a page, not an all-history response.
 - The SDK adapter sends `page`, `offset`, `sort`, and optional `startblock`/`endblock` on every list attempt; continuation state contains only the next page number.
 - ERC-20 direction filtering is applied after the provider page is mapped. Provider page fullness, rather than filtered item count, determines whether another page is requested.
+- `addresstokenbalance` is current-holding discovery only; it is not treated as a historic state assertion. `tokenbalancehistory` reads one explicit contract at one exact block. Both are Standard-plan-and-above PRO endpoints and Etherscan documents a fixed two-requests-per-second cap, which the adapter serializes.
 - Successful payloads are validated with provider-local schemas. Missing optional fields map to `null`; decimal quantities are canonicalized and timestamps are converted from Unix seconds to ISO UTC.
 - Logical errors are classified without including the authenticated request URL: invalid keys, plan restrictions, unsupported chains, rate limits, and provider busy/timeout responses remain distinct.
 - The supported-chain page announced Moonbeam, Moonriver, and Moonbase API deprecation effective 2026-07-31. They are not v0.1 built-ins. Gnosis free access was announced to move to paid plans on 2026-09-01.
@@ -135,6 +138,7 @@ Important notes: Name-only input is resolved from search-pool relationships with
 - Alchemy recommends HTTPS for request/response methods and batches below 50. v0.1 does not batch provider calls.
 - Authorization headers and any legacy URL key form must be redacted.
 - The adapter sends JSON-RPC requests to the registry's network-specific `/v2` endpoint with `Authorization: Bearer`; API keys never enter endpoint URLs. It maps `eth_getBalance` hexadecimal wei values and `alchemy_getAssetTransfers` ERC-20 pages with one single-stream or two both-direction `pageKey` continuations.
+- Alchemy's currently integrated balance and transfer methods are JSON-RPC. They are deliberately excluded from API-only backend current-holdings and historical ERC-20 snapshot fallback; adding a REST semantic equivalent would require a separate documented contract and approval.
 
 ## 3. Moralis
 
@@ -149,11 +153,13 @@ Important notes: Name-only input is resolved from search-pool relationships with
 - Raw wallet transactions: https://docs.moralis.com/data-api/evm/wallet/wallet-transactions
 - Native balance: https://docs.moralis.com/data-api/evm/wallet/native-balance
 - ERC-20 transfers: https://docs.moralis.com/data-api/evm/wallet/token-transfers
+- Transaction details: https://docs.moralis.com/data-api/evm/transaction/transaction-details
+- Verbose transaction details: https://docs.moralis.com/data-api/evm/transaction/transaction-verbose
 - Pagination: https://docs.moralis.com/data-api/resources/pagination
 - Rate limits: https://docs.moralis.com/data-api/resources/rate-limits
 - Response codes: https://docs.moralis.com/data-api/resources/response-codes
 
-**Purpose in the SDK:** normal address transactions, latest native balance, and ERC-20 transfers.
+**Purpose in the SDK:** normal address transactions, latest native balance, ERC-20 transfers, wallet balance snapshots, and transaction context for action parsing.
 
 **Base endpoint:** `https://deep-index.moralis.io/api/v2.2`
 
@@ -166,11 +172,14 @@ Important notes: Name-only input is resolved from search-pool relationships with
 - Native balance is `GET /{address}/balance`; ERC-20 wallet transfers are `GET /{address}/erc20/transfers`.
 - Moralis list endpoints use cursor pagination. Documentation states that limit is set on the initial request and cannot change mid-pagination, and that cursors represent a stable snapshot where supported.
 - Wallet transaction and ERC-20 transfer `limit` values are limited by the SDK to 1–100. Larger public list pages are made ineligible before a Moralis request is attempted.
+- Transaction context uses `GET /transaction/{transaction_hash}` with `chain`. The verified response is one object containing transaction/receipt fields and a nested `logs` array; each log includes its contract address, block/transaction/log indexes, topics, and data. The SDK fetches one hash per bounded batch, validates every log, and never substitutes the `/logs` subpath (which returned HTTP 404 in the live check).
+- Wallet ERC-20 balances use `GET /{address}/erc20` with `chain` and required `to_block`. This is a REST Data API endpoint, not a JSON-RPC call. A proxy-only live check on 2026-08-06 returned an unpaged JSON array containing `token_address`, `balance`, and `decimals`; a request without `to_block` and a malformed `to_block` each returned HTTP 400. For current-holdings discovery, the SDK first resolves an indexed Etherscan head and passes it as `to_block`. The SDK does not send spam or verification exclusion filters, because doing so would make a requested contract set incomplete.
+- The observed wallet-balance response has no cursor and does not honor the normal list `limit`. The adapter validates the complete array, rejects duplicate contract entries, and projects it only onto the caller-supplied contract set. An omitted requested contract is zero only after that full successful response; an error or malformed response never fabricates zeroes.
 - At verification time, rate limits used a rolling four-second window. Published request throughput was 40 requests/s for Free and Starter, 80 for Pro, 200 for Business, and custom for Enterprise. Plans and endpoint compute costs may change and are not hardcoded defaults.
 - HTTP 400, 401, 404, 425, 429, and 500 have conventional meanings, but 404 must be interpreted per endpoint rather than globally converted to an empty result. Moralis 425 responses are treated as transient provider unavailability and remain retryable.
 - Prefer raw integer fields over formatted decimal fields when mapping public amounts.
 - Redact `X-API-Key` and provider cursor values from observations.
-- The adapter uses the raw transaction endpoint, native balance endpoint, and ERC-20 transfer endpoint with provider-local schemas. Its cursor is wrapped in the SDK cursor and is never exposed directly.
+- The adapter uses the raw transaction endpoint, native balance endpoint, ERC-20 transfer endpoint, and wallet ERC-20 balance endpoint with provider-local schemas. Its cursor is wrapped in the SDK cursor and is never exposed directly.
 - For the proposed v0.3 block-range operation, Moralis is a planned peer candidate with Etherscan and Alchemy. Before source enablement, fixture tests must establish the exact `from_block`/`to_block` inclusive-boundary and terminal-response semantics; the scanner will use fresh range windows rather than carrying a Moralis cursor between windows.
 
 ## 4. Axios

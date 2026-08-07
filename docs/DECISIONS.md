@@ -350,6 +350,79 @@ The owner approved the architecture baseline in the 2026-08-05 implementation re
 
 **Trade-offs:** A successful call may make more requests because overflowing windows are re-read after splitting, and it holds all records in memory. An explicit `maxRangeRecords` and maximum-window safety limit must fail rather than truncate or loop; a future async iterator can address very large ranges. Results can have multiple sources, so every transfer retains its provider and the aggregate exposes providers plus completed-window counts. Provider-specific support remains capability-gated: all three planned range adapters require fixture-backed boundary and terminal semantics before enablement.
 
+### ADR-023: API-only chain data
+
+**Status:** Accepted
+
+**Decision:** The SDK and backend synchronization path use indexed provider
+APIs only. Standard JSON-RPC methods, RPC URLs, and provider RPC proxy modules
+are out of scope for user data. Transaction range pagination remains internal
+to the SDK; finality lag is applied by the backend after an API height lookup.
+
+**Reason:** Portfolio truth must be reproducible from the configured API data
+source and must not create frequent backend RPC traffic. If a UI needs an
+RPC-only field, the UI may read it separately without changing PostgreSQL
+business truth.
+
+**Trade-off:** Provider capability gaps must be solved with an indexed API
+provider or explicit unavailable readiness state; the SDK must not silently
+fall back to RPC.
+
+### ADR-025: Historical ERC-20 snapshots use an explicit discovery set
+
+**Status:** Accepted
+
+**Date:** 2026-08-06
+
+**Decision:** Use an indexed current-holdings result only to discover contracts
+still held by a wallet. Union it with the caller's transfer-range contracts,
+then request each exact opening-block value through an indexed API. Etherscan
+uses one `tokenbalancehistory` read per contract; Moralis uses its REST wallet
+ERC-20 balance endpoint with `to_block` and projects the complete response
+onto the same explicit contract set. The public historical-balance operation
+never claims to enumerate all historic wallet assets.
+
+**Reason:** A wallet may have a nonzero opening balance without a transfer in
+the chosen window, while a token sold to zero will not be present in current
+holdings. The union covers both under standard ERC-20 transfer semantics while
+remaining API-only and avoiding a product-wide token-catalog scan.
+
+**Trade-off:** The documented Etherscan endpoints require Standard-or-higher
+access and are capped at two calls per second. The API client serializes those
+requests. If Etherscan is plan-restricted, the client may fall back to the
+semantically compatible Moralis REST endpoint when configured; it never falls
+back to Alchemy JSON-RPC or a node RPC endpoint. Moralis requires `to_block`
+for current-holdings discovery, so the current implementation also requires an
+available Etherscan indexed-height query to resolve that block.
+
+### ADR-026: API-only transaction context uses Moralis nested logs
+
+**Status:** Accepted
+
+**Date:** 2026-08-06
+
+**Decision:** The SDK exposes transaction context through Moralis Data API
+`GET /transaction/{hash}` as an explicit caller operation. The normalized SDK
+result contains the transaction envelope, receipt gas/status fields, and every
+nested log. It accepts a bounded list of hashes and performs one validated
+request per hash; it has no provider continuation cursor. The backend
+portfolio/onboarding/action-parser path does not call this operation; a UI may
+obtain and parse context on demand through its own frontend data source.
+The public batch is capped at 20 hashes, and each client caches normalized
+results for 60 seconds with in-flight coalescing; no refresh timer exists.
+
+**Reason:** The endpoint is an indexed REST response with the exact log topics
+and data required by protocol action parsing while preserving a useful SDK
+capability for explicit callers. Alchemy balance/receipt methods and Etherscan
+proxy endpoints are JSON-RPC semantics and violate the backend API-only
+boundary.
+
+**Trade-off:** Moralis is currently the only built-in provider with a verified
+semantic match. If it is unavailable or plan-restricted, context remains
+explicitly unavailable; the SDK does not silently use RPC or fabricate an
+empty log list. The backend gives up automatic action-context enrichment in
+exchange for avoiding high-volume server-side provider requests.
+
 ## Open Decisions Requiring Owner Input
 
 These are not architecture blockers for writing code until their named milestone, but they block release where noted:

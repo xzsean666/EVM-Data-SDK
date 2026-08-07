@@ -9,7 +9,7 @@ import type {
   OperationName,
 } from "../domain/operations";
 import type { ProviderPageResult } from "../domain/pagination";
-import type { Erc20Transfer, NativeBalance, Transaction } from "../domain/models";
+import type { Erc20BalanceAtBlock, Erc20TokenHoldings, Erc20Transfer, NativeBalance, Transaction, TransactionContext } from "../domain/models";
 
 export interface CredentialLease {
   readonly id: string;
@@ -90,6 +90,38 @@ export interface DataProviderAdapter {
     request: NormalizedErc20BlockRangeRequest,
     context: ProviderAttemptContext,
   ): Promise<ProviderBlockRangeWindowResult>;
+
+  /** Indexed API only: one contract's balance at an exact historical block. */
+  getErc20BalanceAtBlock?(
+    request: {
+      readonly address: string;
+      readonly tokenAddress: string;
+      readonly blockNumber: string;
+    },
+    context: ProviderAttemptContext,
+  ): Promise<Erc20BalanceAtBlock>;
+
+  /** Indexed API only: paginated current ERC-20 holdings for token discovery. */
+  getErc20TokenHoldings?(
+    request: { readonly address: string; readonly blockNumber?: string },
+    context: ProviderAttemptContext,
+  ): Promise<Erc20TokenHoldings>;
+
+  /** Indexed API only: an explicit contract set at one historical block. */
+  getErc20BalancesAtBlock?(
+    request: {
+      readonly address: string;
+      readonly blockNumber: string;
+      readonly tokenAddresses: readonly string[];
+    },
+    context: ProviderAttemptContext,
+  ): Promise<import("../domain/models").Erc20BalancesAtBlock>;
+
+  /** Indexed REST API only: one transaction envelope, receipt, and all logs. */
+  getTransactionContextByHash?(
+    request: { readonly transactionHash: string },
+    context: ProviderAttemptContext,
+  ): Promise<TransactionContext>;
 }
 
 export type ProviderAdapterFailure = EvmDataError;

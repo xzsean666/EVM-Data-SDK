@@ -30,9 +30,27 @@ export interface TransactionsRequest {
   readonly signal?: AbortSignal;
 }
 
+export interface TransactionsBlockRangeRequest extends Omit<TransactionsRequest, 'startBlock' | 'endBlock' | 'cursor' | 'pageSize' | 'fullData'> {
+  readonly startBlock: string;
+  readonly endBlock: string;
+}
+
 export interface NativeBalanceRequest {
   readonly chain: ChainReference;
   readonly address: string;
+  readonly signal?: AbortSignal;
+}
+
+/** Complete receipt/log context for a bounded explicit transaction-hash set. */
+export interface TransactionContextsByHashRequest {
+  readonly chain: ChainReference;
+  readonly transactionHashes: readonly string[];
+  readonly signal?: AbortSignal;
+}
+
+export interface NormalizedTransactionContextsByHashRequest {
+  readonly chain: ChainReference;
+  readonly transactionHashes: readonly string[];
   readonly signal?: AbortSignal;
 }
 
@@ -61,6 +79,38 @@ export interface Erc20BlockRangeRequest {
   readonly endBlock: string;
   readonly tokenAddress?: string;
   readonly direction?: TransferDirection;
+  readonly signal?: AbortSignal;
+}
+
+/**
+ * Historical balances for an explicit contract set. `tokenAddresses` is
+ * caller-owned discovery input; it is not a request to enumerate a wallet.
+ */
+export interface Erc20BalancesAtBlockRequest {
+  readonly chain: ChainReference;
+  readonly address: string;
+  readonly blockNumber: string;
+  readonly tokenAddresses: readonly string[];
+  readonly signal?: AbortSignal;
+}
+
+export interface Erc20TokenHoldingsRequest {
+  readonly chain: ChainReference;
+  readonly address: string;
+  readonly signal?: AbortSignal;
+}
+
+export interface NormalizedErc20TokenHoldingsRequest {
+  readonly chain: ChainReference;
+  readonly address: string;
+  readonly signal?: AbortSignal;
+}
+
+export interface NormalizedErc20BalancesAtBlockRequest {
+  readonly chain: ChainReference;
+  readonly address: string;
+  readonly blockNumber: string;
+  readonly tokenAddresses: readonly string[];
   readonly signal?: AbortSignal;
 }
 
@@ -111,6 +161,7 @@ export interface NormalizedErc20BlockRangeRequest {
 }
 
 const addressSchema = z.string().regex(/^0x[0-9a-fA-F]{40}$/);
+const transactionHashSchema = z.string().regex(/^0x[0-9a-fA-F]{64}$/);
 const chainReferenceSchema = z.union([
   z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   z.string().trim().min(1).max(128),
@@ -148,6 +199,14 @@ const nativeBalanceRequestSchema = z
   })
   .strict();
 
+const transactionContextsByHashRequestSchema = z
+  .object({
+    chain: chainReferenceSchema,
+    transactionHashes: z.array(transactionHashSchema.transform((value) => value.toLowerCase())).min(1).max(20),
+    signal: z.custom<AbortSignal>((value) => value instanceof AbortSignal).optional(),
+  })
+  .strict();
+
 const erc20TransfersRequestSchema = z
   .object({
     chain: chainReferenceSchema,
@@ -180,6 +239,24 @@ const erc20BlockRangeRequestSchema = z
   })
   .strict();
 
+const erc20BalancesAtBlockRequestSchema = z
+  .object({
+    chain: chainReferenceSchema,
+    address: addressSchema.transform((value) => value.toLowerCase()),
+    blockNumber: decimalQuantitySchema,
+    tokenAddresses: z.array(addressSchema.transform((value) => value.toLowerCase())).min(1).max(512),
+    signal: z.custom<AbortSignal>((value) => value instanceof AbortSignal).optional(),
+  })
+  .strict();
+
+const erc20TokenHoldingsRequestSchema = z
+  .object({
+    chain: chainReferenceSchema,
+    address: addressSchema.transform((value) => value.toLowerCase()),
+    signal: z.custom<AbortSignal>((value) => value instanceof AbortSignal).optional(),
+  })
+  .strict();
+
 export function parseTransactionsRequest(input: unknown): NormalizedTransactionsRequest {
   const parsed = parseSchema(transactionsRequestSchema, input, "transactions request");
   validateBlockRange(parsed.startBlock, parsed.endBlock);
@@ -203,6 +280,19 @@ export function parseNativeBalanceRequest(input: unknown): NormalizedNativeBalan
     operation: "getNativeBalance",
     chain: normalizeChainReference(parsed.chain),
     address: parsed.address,
+    ...(parsed.signal === undefined ? {} : { signal: parsed.signal }),
+  };
+}
+
+export function parseTransactionContextsByHashRequest(input: unknown): NormalizedTransactionContextsByHashRequest {
+  const parsed = parseSchema(
+    transactionContextsByHashRequestSchema,
+    input,
+    "transaction-contexts-by-hash request",
+  );
+  return {
+    chain: normalizeChainReference(parsed.chain),
+    transactionHashes: Object.freeze([...new Set(parsed.transactionHashes)]),
     ...(parsed.signal === undefined ? {} : { signal: parsed.signal }),
   };
 }
@@ -246,10 +336,42 @@ export function parseErc20BlockRangeRequest(input: unknown): NormalizedErc20Bloc
   };
 }
 
+export function parseErc20BalancesAtBlockRequest(input: unknown): NormalizedErc20BalancesAtBlockRequest {
+  const parsed = parseSchema(
+    erc20BalancesAtBlockRequestSchema,
+    input,
+    "ERC-20 balances-at-block request",
+  );
+  const tokenAddresses = [...new Set(parsed.tokenAddresses)];
+  return {
+    chain: normalizeChainReference(parsed.chain),
+    address: parsed.address,
+    blockNumber: parsed.blockNumber,
+    tokenAddresses: Object.freeze(tokenAddresses),
+    ...(parsed.signal === undefined ? {} : { signal: parsed.signal }),
+  };
+}
+
+export function parseErc20TokenHoldingsRequest(input: unknown): NormalizedErc20TokenHoldingsRequest {
+  const parsed = parseSchema(
+    erc20TokenHoldingsRequestSchema,
+    input,
+    'ERC-20 token holdings request',
+  );
+  return {
+    chain: normalizeChainReference(parsed.chain),
+    address: parsed.address,
+    ...(parsed.signal === undefined ? {} : { signal: parsed.signal }),
+  };
+}
+
 export const normalizeTransactionsRequest = parseTransactionsRequest;
 export const normalizeNativeBalanceRequest = parseNativeBalanceRequest;
+export const normalizeTransactionContextsByHashRequest = parseTransactionContextsByHashRequest;
 export const normalizeErc20TransfersRequest = parseErc20TransfersRequest;
 export const normalizeErc20BlockRangeRequest = parseErc20BlockRangeRequest;
+export const normalizeErc20BalancesAtBlockRequest = parseErc20BalancesAtBlockRequest;
+export const normalizeErc20TokenHoldingsRequest = parseErc20TokenHoldingsRequest;
 
 export function normalizeChainReference(value: ChainReference): ChainReference {
   if (typeof value === "number") {

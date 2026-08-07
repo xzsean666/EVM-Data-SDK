@@ -8,6 +8,7 @@ import type { ProviderAttemptContext } from "../../src/providers/DataProviderAda
 import { MoralisAdapter } from "../../src/providers/moralis/MoralisAdapter";
 import {
   moralisBalance,
+  moralisErc20Balances,
   moralisRateLimited,
   moralisTokenTransfers,
   moralisTransactionsLastPage,
@@ -100,6 +101,57 @@ describe("MoralisAdapter", () => {
     const result = await new MoralisAdapter({ transport: new FixtureTransport(moralisBalance) })
       .getNativeBalance(parseNativeBalanceRequest({ chain: 1, address: "0x1111111111111111111111111111111111111111" }), context());
     expect(result).toMatchObject({ amount: "123", decimals: 18, symbol: "ETH", blockNumber: null, provider: "moralis" });
+  });
+
+  it("maps current holdings and projects a complete historical REST inventory onto explicit contracts", async () => {
+    const token = "0x5555555555555555555555555555555555555555";
+    const missing = "0x6666666666666666666666666666666666666666";
+    const holdingsTransport = new FixtureTransport(moralisErc20Balances);
+    const holdings = await new MoralisAdapter({ transport: holdingsTransport })
+      .getErc20TokenHoldings({ address: "0x1111111111111111111111111111111111111111", blockNumber: "20000000" }, context());
+    expect(holdings).toMatchObject({
+      provider: "moralis",
+      pages: 1,
+      upstreamRequests: 1,
+      items: [{ tokenAddress: token, amount: "123456", tokenDecimals: 6, tokenSymbol: "FIX" }],
+    });
+    expect(holdingsTransport.requests[0]?.params).toEqual({ chain: "0x1", to_block: "20000000" });
+
+    const snapshotTransport = new FixtureTransport(moralisErc20Balances);
+    const balances = await new MoralisAdapter({ transport: snapshotTransport }).getErc20BalancesAtBlock({
+      address: "0x1111111111111111111111111111111111111111",
+      blockNumber: "20000000",
+      tokenAddresses: [token, missing],
+    }, context());
+    expect(balances).toMatchObject({
+      provider: "moralis",
+      blockNumber: "20000000",
+      items: [
+        { tokenAddress: token, amount: "123456" },
+        { tokenAddress: missing, amount: "0" },
+      ],
+    });
+    expect(snapshotTransport.requests[0]?.params).toEqual({ chain: "0x1", to_block: "20000000" });
+  });
+
+  it("does not issue a malformed current-holdings request without the required indexed block", async () => {
+    const transport = new FixtureTransport(moralisErc20Balances);
+    const result = await new MoralisAdapter({ transport })
+      .getErc20TokenHoldings({ address: "0x1111111111111111111111111111111111111111" }, context())
+      .catch((error: unknown) => error);
+    expect(result).toMatchObject({ code: "INVALID_REQUEST", provider: "moralis", chainId: 1 });
+    expect(transport.requests).toHaveLength(0);
+  });
+
+  it("rejects a duplicate balance contract instead of silently choosing one amount", async () => {
+    const result = await new MoralisAdapter({
+      transport: new FixtureTransport([...moralisErc20Balances, { ...moralisErc20Balances[0], balance: "1" }]),
+    }).getErc20BalancesAtBlock({
+      address: "0x1111111111111111111111111111111111111111",
+      blockNumber: "20000000",
+      tokenAddresses: ["0x5555555555555555555555555555555555555555"],
+    }, context()).catch((error: unknown) => error);
+    expect(result).toMatchObject({ code: "INVALID_PROVIDER_RESPONSE", provider: "moralis", chainId: 1 });
   });
 
   it("filters ERC-20 transfers by direction after mapping and retains provider pagination", async () => {
