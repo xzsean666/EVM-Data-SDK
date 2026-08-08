@@ -1,10 +1,10 @@
 # EVM Data SDK Architecture
 
-Version: 0.2.0
+Version: 0.4.0
 
-Status: v0.1 accepted; v0.2 token price aggregation implemented
+Status: v0.1/v0.2/v0.3 accepted; v0.4 Chainlink Archive RPC snapshot approved 2026-08-07
 
-Last verified: 2026-08-06
+Last verified: 2026-08-07
 
 ## 1. Architecture Goals
 
@@ -603,6 +603,87 @@ Beacon, holdings, or historical-balance APIs.
 - `number` for blockchain quantities: replaced with decimal strings.
 - Alchemy asset transfers as full transactions: rejected because the semantics are not equivalent.
 
+## 20a. v0.4 Extension: Chainlink Archive RPC and Multicall3 (accepted; implementation in progress)
+
+The full design is in
+[`CHAINLINK_ETHEREUM_ARCHIVE_RPC_MULTICALL3_UPGRADE.md`](./CHAINLINK_ETHEREUM_ARCHIVE_RPC_MULTICALL3_UPGRADE.md),
+accepted by the owner on 2026-08-07. It adds a parallel, direct-only JSON-RPC
+subsystem that does not participate in the existing credential/proxy
+execution path.
+
+```text
+chainlink.getTokenPricesAtBlock()
+       |
+       v
+ChainlinkService --------------------> ethereumMainnetPriceFeeds.generated.ts
+       |
+       v
+RpcService.multicallAtBlock()  <---- public, Chainlink-agnostic
+       |
+       v
+EthereumArchiveRpcExecutor  (endpoint pin, restart-on-failure, block reorg check)
+       |
+       v
+EthereumArchiveRpcPool      (initialize() probes, passive health, random permutation)
+       |
+       v
+ArchiveRpcTransport  ---- direct-only, proxy: null, never ProxyPool/sing-box
+       |
+       v
+builtinEthereumArchiveRpcs.ts + caller-supplied chainlink.rpcEndpoints
+```
+
+`EthereumMulticall3Codec` is extracted from the private `aggregate3`
+encoder/decoder previously embedded in `AlchemyAdapter`. It is pure
+(no network, no Chainlink knowledge) and is reused, not duplicated, by both
+Alchemy's ERC-20 balance batching and the new `RpcService`.
+
+### Module boundaries
+
+| Module | Owns | Must not own |
+| --- | --- | --- |
+| `ArchiveRpcTransport` | direct JSON-RPC HTTP mechanics, envelope validation | proxy leases, endpoint retry, Chainlink ABI |
+| `EthereumArchiveRpcPool` | `initialize()` probes, passive health, random healthy snapshots | HTTP proxy, Chainlink mapping, background timers |
+| `EthereumArchiveRpcExecutor` | endpoint pinning, total budget, restart-on-endpoint-failure, reorg check | ABI decoding, provider fallback |
+| `EthereumMulticall3Codec` | pure `aggregate3` ABI encode/decode | network, feed knowledge, retries |
+| `RpcService` | public Multicall validation and result mapping | Chainlink interpretation |
+| `ChainlinkService` | manifest query, feed batching, partial success, normalized prices | endpoint URLs, proxy selection |
+| generated feed manifest | stable feed identity, reviewed metadata | runtime fetch, health state |
+
+### Direct-only boundary (non-negotiable)
+
+`ArchiveRpcTransport` never receives a `ProxyPool` lease, `SingBoxProxyManager`
+route, or `requestPolicy.allowDirect` value. It always passes `proxy: null` to
+`AxiosHttpTransport`/`HttpTransport` so Axios environment proxy discovery
+(`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`) is disabled
+unconditionally, independent of how the rest of the client is configured.
+This is enforced structurally: the module has no constructor parameter that
+could carry a proxy lease, not merely a default that could be overridden.
+
+### Dependency direction addition
+
+```text
+client/services
+      |
+      v
+domain contracts (rpcModels, chainlinkModels) <----- rpc/ , chainlink/
+      ^                                                  |
+      |                                                  v
+ChainlinkService -> RpcService -> EthereumArchiveRpcExecutor -> ArchiveRpcTransport
+                                                                        |
+                                                                        v
+                                                          Axios implementation (proxy: null only)
+```
+
+`chainlink/` depends on `rpc/` and the generated manifest; `rpc/` has no
+dependency on `chainlink/`, so the public `client.rpc.multicallAtBlock()`
+module remains usable without Chainlink enabled. Neither module imports
+`ProxyPool`, `SingBoxProxyManager`, `CredentialPool`, or `RequestExecutor`.
+
 ## 21. Approval Gate
 
-Implementation is authorized for the accepted v0.3 architecture. Any future material design change must be applied consistently to `SPEC.md`, this file, `DECISIONS.md`, and `NEXT_SESSION.md` before creating source for that change.
+Implementation is authorized for the accepted v0.3 architecture and, as of
+2026-08-07, the accepted v0.4 Chainlink Archive RPC/Multicall3 extension. Any
+future material design change must be applied consistently to `SPEC.md`,
+this file, `DECISIONS.md`, and `NEXT_SESSION.md` before creating source for
+that change.

@@ -1,10 +1,10 @@
 # EVM Data SDK Specification
 
-Version: 0.2.0
+Version: 0.4.0
 
-Status: v0.1 accepted; v0.2 token price aggregation implemented
+Status: v0.1/v0.2/v0.3 accepted; v0.4 Chainlink Archive RPC snapshot approved 2026-08-07
 
-Last verified: 2026-08-06
+Last verified: 2026-08-07
 
 ## 1. Purpose
 
@@ -637,3 +637,112 @@ Ethereum address/block interval through Etherscan's indexed
 `account/txsBeaconWithdrawal` endpoint. Withdrawal amounts retain their
 provider unit explicitly (`amountDecimals: 9`, Gwei), so consumers cannot
 mistake it for wei. This endpoint is unavailable on non-Ethereum chains.
+
+## 13. v0.4 Upgrade: Chainlink Historical Prices via Ethereum Archive RPC and Multicall3
+
+Version 0.4 is accepted by the owner on 2026-08-07. The full design,
+verification evidence, algorithms, and implementation queue are in
+[CHAINLINK_ETHEREUM_ARCHIVE_RPC_MULTICALL3_UPGRADE.md](./CHAINLINK_ETHEREUM_ARCHIVE_RPC_MULTICALL3_UPGRADE.md),
+with endpoint/feed maintenance procedure in
+[CHAINLINK_ETHEREUM_ARCHIVE_RPC_MAINTENANCE.md](./CHAINLINK_ETHEREUM_ARCHIVE_RPC_MAINTENANCE.md).
+
+### 13.1 Product contract
+
+`client.chainlink.getTokenPricesAtBlock({ blockNumber, signal })` is an
+opt-in, direct-JSON-RPC operation, distinct from and never merged into
+`client.token.getPriceHistory()`. It accepts one canonical non-negative
+decimal-string Ethereum Mainnet block number and no token selector. It always
+evaluates every enabled entry in a committed, versioned built-in Chainlink
+Ethereum Mainnet feed manifest and returns the historical
+`latestRoundData()` snapshot the Chainlink proxy considered latest as of that
+exact block.
+
+This is a Chainlink oracle-state read, not a market candle, trade price,
+TWAP, or cross-provider consensus price. `updatedAt` can be earlier than the
+requested block's timestamp because Chainlink feeds update on heartbeat and
+deviation thresholds, not every block.
+
+At least one successful feed read returns a result containing every feed
+failure. Zero successful feeds rejects with
+`CHAINLINK_PRICE_DATA_UNAVAILABLE`. Invalid input, no healthy RPC endpoint,
+caller cancellation, and Multicall3 deployment-boundary violations reject the
+whole operation; they are not reported as per-feed failures.
+
+A companion public, provider-neutral operation
+`client.rpc.multicallAtBlock({ chain, blockNumber, calls, signal })` exposes
+the underlying exact-block Multicall3 `aggregate3` primitive independently of
+Chainlink. It validates call target/data/id, batches deterministically under
+a configured maximum, and returns per-call success/return data plus block and
+endpoint provenance. It has no Chainlink-specific knowledge.
+
+### 13.2 Configuration
+
+`chainlink.enabled` opts into the feature; the SDK never contacts a public
+Archive RPC unless a caller sets this. `chainlink.useBuiltinEthereumArchiveRpcs`
+(default `true` when enabled) includes the maintained public endpoint
+registry; `chainlink.rpcEndpoints` appends caller-supplied endpoints with
+unique IDs. A Chainlink-only client configuration (no `providers`, no
+`price`) is valid. Endpoint URLs, including caller-supplied ones, never
+appear in errors, telemetry, or results; only the stable configured `id`
+does.
+
+### 13.3 Initialization and endpoint health
+
+Client construction remains side-effect free. When Chainlink is enabled,
+`await client.initialize(signal)` concurrently probes every configured
+endpoint with a bound: `eth_chainId == 0x1`, a historical block header exists
+at the configured probe block, and a historical Multicall3 `getBlockNumber()`
+call decodes exactly that block. There is no background health timer; health
+changes only through `initialize()` and passive real-request outcomes.
+
+### 13.4 Endpoint selection, pinning, and reorg detection
+
+Each `getTokenPricesAtBlock` or `multicallAtBlock` call builds an unbiased
+random permutation of currently healthy endpoints through an injected random
+source, pins the entire operation to the first endpoint in that permutation,
+and never repeats an endpoint within one operation. A retryable
+endpoint/archive failure discards all partial batch results and restarts the
+whole operation on the next endpoint, bounded by `maxRpcAttempts` and
+`totalTimeoutMs`. The requested block's header is read before and after all
+Multicall batches; a changed hash discards the result as
+`RPC_BLOCK_REORG_DETECTED` rather than returning inconsistent per-feed data.
+
+### 13.5 Direct-only network boundary
+
+Every JSON-RPC request this feature introduces is direct-only. It must never
+use `ProxyPool`, the managed sing-box runtime, a configured HTTP(S) proxy, or
+`requestPolicy.allowDirect`; Axios environment proxy discovery is explicitly
+disabled at the transport boundary regardless of other client configuration.
+Existing indexed REST and market-data proxy behavior is unaffected.
+
+### 13.6 Feed registry
+
+The built-in feed manifest is generated and committed, never fetched at
+runtime. It includes only standard (non-SVR, non-shared-SVR) Ethereum
+Mainnet Crypto/USD Reference Price feeds with a non-empty proxy address,
+excluding hidden, deprecating (`shutdownDate` set), calculated,
+exchange-rate-only, market-cap, Proof of Reserve, FX, commodity, equity,
+rate, MVR, and Data Streams entries. `scripts/update-chainlink-ethereum-feeds.mjs`
+is the only supported way to regenerate it; runtime code never fetches or
+mutates it.
+
+### 13.7 Acceptance criteria for v0.4
+
+- A Chainlink-only client configuration is valid and makes no network call
+  before `initialize()`.
+- `initialize()` probes every configured endpoint concurrently, direct-only,
+  even when HTTP/sing-box proxies and `allowDirect: false` are configured for
+  unrelated operations.
+- Random endpoint selection is unbiased, never repeats an endpoint per
+  operation, and restarts entirely (not resumes) after an endpoint failure.
+- A block below the verified Multicall3 deployment block
+  (`14,353,601`) fails as `MULTICALL_NOT_DEPLOYED_AT_BLOCK` without an RPC
+  call to that contract.
+- `latestRoundData()` decoding enforces `answer > 0`, `updatedAt > 0`,
+  `startedAt <= updatedAt <= blockTimestamp`, `answeredInRound >= roundId`,
+  and a runtime/manifest `decimals()` match; violations are per-feed failures,
+  never fabricated prices.
+- At least one feed success returns a result with every failure reported;
+  zero successes rejects with `CHAINLINK_PRICE_DATA_UNAVAILABLE`.
+- No test in the default suite performs network I/O; live verification is
+  opt-in and prints no endpoint URL, calldata, return data, or price.

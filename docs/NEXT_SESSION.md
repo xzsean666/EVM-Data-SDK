@@ -4,6 +4,73 @@ Last updated: 2026-08-06
 
 Workflow state: Step 5 review complete for Work Packages 1 through 9 and Price-0 through Price-5; release decisions and Git identity remain outside implementation scope.
 
+## 2026-08-07 v0.4 Proposal: Chainlink Historical Prices via Ethereum Archive RPC and Multicall3
+
+**Status:** Approved by the owner on 2026-08-07. Source implementation is
+authorized within the accepted v0.4 architecture in
+`docs/CHAINLINK_ETHEREUM_ARCHIVE_RPC_MULTICALL3_UPGRADE.md`. P0 verification is
+complete; see `docs/DECISIONS.md` ADR-028/ADR-029 and `docs/INTEGRATIONS.md`
+sections 15-17 for recorded evidence. Work proceeds P1 through P6 as bounded
+packages.
+
+**Design source:**
+`docs/CHAINLINK_ETHEREUM_ARCHIVE_RPC_MULTICALL3_UPGRADE.md`
+
+**Claude Sonnet 5 handoff:**
+`docs/CLAUDE_SONNET_5_CHAINLINK_ETHEREUM_ARCHIVE_RPC_MULTICALL3_IMPLEMENTATION_PROMPT.md`
+
+**RPC/feed maintenance:**
+`docs/CHAINLINK_ETHEREUM_ARCHIVE_RPC_MAINTENANCE.md`
+
+The proposal adds an opt-in Ethereum Mainnet Chainlink namespace that accepts
+one block number and reads every enabled standard Crypto/USD feed in a
+versioned built-in manifest. It extracts the existing private Multicall3 codec
+into a reusable public exact-block module, probes multiple Archive RPCs during
+explicit asynchronous client initialization, randomly pins each operation to
+one healthy endpoint, and restarts the complete operation on another endpoint
+after a retryable RPC/archive failure.
+
+All JSON-RPC traffic introduced by this proposal is direct-only: it must never
+use `ProxyPool`, managed sing-box, configured HTTP proxies, or environment
+proxy discovery. Existing indexed REST and market API proxy behavior is not
+changed. A new accepted ADR is required because the current backend integration
+is deliberately API-only; the proposed oracle snapshot must remain an explicit
+optional SDK feature and must not replace that backend truth.
+
+Five unauthenticated candidates answered an Ethereum historical Multicall3
+`eth_call` at block `18,000,000` on 2026-08-07: dRPC, BlastAPI, MEV Blocker,
+Nodies, and Tenderly. This is only a verification snapshot.
+
+**P0 verification completed 2026-08-07:**
+
+- Multicall3's Ethereum Mainnet deployment block is `14,353,601`, confirmed
+  from the contract's creation transaction (`0x00d9fcb7848f6f6b0aae4fb709c133d69262b902156c85a473ef23faa60760bd`)
+  via a public block explorer API. Recorded in `INTEGRATIONS.md` section 15.
+- `AggregatorV3Interface.decimals()` and `.latestRoundData()` signatures and
+  tuple ordering were confirmed against the official Chainlink API reference
+  and match the proposal exactly.
+- `feeds-mainnet.json` (290 entries, SHA-256 recorded in `INTEGRATIONS.md`
+  section 17) was fetched and filtered by the exact v0.4 selection rule
+  (`productTypeCode == "RefPrice"`, `docs.quoteAsset == "USD"`,
+  `docs.assetClass == "Crypto"`, no `secondaryProxyAddress`, not
+  `docs.hidden`, no `docs.shutdownDate`). This yields 72 standard Crypto/USD
+  feeds with zero duplicate addresses or names; the six core mappings in the
+  proposal's sample table (ETH/USD, BTC/USD, LINK/USD, USDC/USD, USDT/USD,
+  DAI/USD) match exactly.
+- A live `aggregate3` call encoding `latestRoundData()` + `decimals()` for the
+  ETH/USD proxy at block 18,000,000 decoded identically to a direct
+  `latestRoundData()` call, confirming selector `0x82ad56cb` and the tuple
+  layout end-to-end.
+- Endpoint re-probe: `blastapi-public`, `mevblocker-public`, `nodies-public`,
+  and `tenderly-public` passed cleanly (chainId `0x1`, historical
+  `getBlockNumber()` == 18,000,000). `drpc-public` was rate-limited on its
+  first of three attempts and passed on the next two; this is recorded as an
+  observed instability rather than a disqualification, per the maintenance
+  doc's repeat-probe rule.
+- A new ADR exception (ADR-028) was added because this feature is direct
+  JSON-RPC, which the existing ADR-023 (API-only chain data) otherwise
+  excludes; ADR-029 records the RPC pool/random-endpoint-selection design.
+
 ## 2026-08-06 API-only Backend Integration Update
 
 The backend integration now consumes the following SDK API-only operations:

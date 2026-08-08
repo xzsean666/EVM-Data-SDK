@@ -1,10 +1,10 @@
 # External Integrations
 
-Version: 0.2.0
+Version: 0.4.0
 
-Status: v0.1 accepted; v0.2 price integrations verified
+Status: v0.1/v0.2/v0.3 accepted; v0.4 Chainlink Archive RPC integrations verified
 
-Last verified against official sources: 2026-08-06
+Last verified against official sources: 2026-08-07
 
 External APIs and package behavior change independently of this SDK. Before changing an adapter or upgrading a major dependency, recheck the linked official documentation and update this file first.
 
@@ -347,3 +347,159 @@ Important notes: Name-only input is resolved from search-pool relationships with
 **Purpose in the SDK:** Type declarations for Node.js APIs used by build configuration, package smoke tests, and later transport code.
 
 **Important notes:** Keep this aligned with the Node.js 24 development baseline. It is a development-only dependency and is excluded from the package tarball.
+
+## 15. Multicall3 (v0.4)
+
+**External project:** Multicall3 (mds1/multicall3)
+
+**Selected version:** the canonical deployed bytecode at
+`0xcA11bde05977b3631167028862bE2a173976CA11` on Ethereum Mainnet; no source
+dependency is added, only the ABI selectors used by hand-encoded calldata.
+
+**Official documentation:**
+
+- Repository and ABI: https://github.com/mds1/multicall3
+- Deployment address: https://multicall3.com
+
+**Purpose in the SDK:** batch `latestRoundData()`/`decimals()` reads for many
+Chainlink feeds in a bounded number of `eth_call` requests, and the
+public, Chainlink-agnostic `client.rpc.multicallAtBlock()` primitive.
+
+**Verified Ethereum Mainnet deployment block:** `14,353,601`.
+
+**Verification method (2026-08-07):** Resolved the contract's creation
+transaction hash
+(`0x00d9fcb7848f6f6b0aae4fb709c133d69262b902156c85a473ef23faa60760bd`) through
+a public block-explorer API (Blockscout `addresses/{address}` endpoint,
+`creation_transaction_hash`), then read that transaction's `block_number`
+(`14353601`) directly. The Etherscan legacy V1 endpoint used in the same
+check returned a deprecation notice (`"switch to Etherscan API V2"`), which is
+independent corroboration that V1 hosts must not be used elsewhere in this
+SDK either, consistent with ADR-004.
+
+**Important notes:**
+
+- `aggregate3((address target, bool allowFailure, bytes callData)[])` has
+  selector `0x82ad56cb` and returns `(bool success, bytes returnData)[]` in
+  input order.
+- A request for a block below `14,353,601` must fail as
+  `MULTICALL_NOT_DEPLOYED_AT_BLOCK` before any `eth_call`; the contract does
+  not exist at an earlier state and calling it would return misleading empty
+  returndata rather than a clear error.
+- A live `aggregate3` call at block `18,000,000` batching
+  `latestRoundData()` + `decimals()` for the ETH/USD proxy
+  (`0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419`) decoded identically to a
+  direct `latestRoundData()` call at the same block, confirming selector and
+  tuple-offset encoding end-to-end against a live public endpoint.
+- The existing private encoder/decoder in `src/providers/alchemy/AlchemyAdapter.ts`
+  hardcodes `allowFailure: true` and only understands `balanceOf`-shaped
+  calls; v0.4 extracts the generic `aggregate3` ABI logic into
+  `EthereumMulticall3Codec` and both call sites (Alchemy balances, the new
+  `RpcService`) reuse it. Provider-specific error mapping and network access
+  remain outside the codec.
+
+## 16. Chainlink Data Feeds (v0.4)
+
+**External project:** Chainlink Data Feeds
+
+**Selected version:** `AggregatorV3Interface` (stable interface; no version
+number is published for the interface itself), plus the feed metadata JSON
+referenced by Chainlink's own documentation repository.
+
+**Official documentation:**
+
+- Price feed addresses: https://docs.chain.link/data-feeds/price-feeds/addresses
+- API reference (`AggregatorV3Interface`): https://docs.chain.link/data-feeds/api-reference
+- Documentation network metadata source: https://github.com/smartcontractkit/documentation/blob/main/src/features/data/chains.ts
+
+**Feed metadata endpoint used by the manifest generator:**
+`https://reference-data-directory.vercel.app/feeds-mainnet.json`
+
+**Purpose in the SDK:** source data for the committed, generated Ethereum
+Mainnet Crypto/USD feed manifest, and the ABI contract the SDK decodes
+against every configured feed proxy.
+
+**Verified interface (2026-08-07, from the official API reference):**
+
+- `decimals() external view returns (uint8)`
+- `latestRoundData() external view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)`
+- The documentation explicitly marks `answeredInRound` as deprecated but does
+  not itself assert monotonicity or the `startedAt <= updatedAt` invariant;
+  those are SDK-side validation rules the v0.4 upgrade adds defensively, not
+  a documented Chainlink guarantee. The SDK treats a violation as a per-feed
+  `FEED_ANSWER_INVALID` failure rather than a fabricated price.
+- Chainlink's own best practice is to call the proxy address through
+  `AggregatorV3Interface` rather than the underlying aggregator directly,
+  which the SDK follows: the generated manifest stores only `proxyAddress`.
+
+**Feed metadata verification (2026-08-07):**
+
+- Fetched `feeds-mainnet.json`: 290 entries, recorded SHA-256
+  `bf7d6f90360ab0e8eec597668506119f273cc02551298ab01acb771c42c6e6ae`.
+- Confirmed top-level and `docs.*` fields actually present in the payload:
+  `productType`, `productTypeCode`, `productSubType`, `docs.assetClass`,
+  `docs.quoteAsset`, `docs.hidden`, `docs.shutdownDate`,
+  `secondaryProxyAddress` (present only on SVR/shared-SVR feeds).
+- Applying the exact v0.4 selection rule (`productTypeCode == "RefPrice"`,
+  `docs.quoteAsset == "USD"`, `docs.assetClass == "Crypto"`, no
+  `secondaryProxyAddress`, `docs.hidden` not true, no `docs.shutdownDate`)
+  yields 72 standard feeds with zero duplicate `proxyAddress` or `name`
+  values. The six core mappings in the upgrade proposal (ETH/USD, BTC/USD,
+  LINK/USD, USDC/USD, USDT/USD, DAI/USD) match this filtered set exactly.
+- SVR/shared-SVR feeds (for example a EUR/USD entry carrying
+  `secondaryProxyAddress`) and hidden/deprecating feeds (for example a
+  BAT/USD entry with `docs.hidden: true` and a `docs.shutdownDate`) are
+  confirmed present in the source data, so the exclusion rules are exercised
+  against real records, not only a hypothetical schema.
+
+**Important notes:**
+
+- The generator (`scripts/update-chainlink-ethereum-feeds.mjs`) is the only
+  supported way to refresh the manifest. Runtime code never fetches this URL.
+- `decimals()` is read live at call time and compared against the manifest's
+  `expectedDecimals`; a mismatch is a feed-level failure and a maintenance
+  signal, never a silently reformatted price.
+
+## 17. Ethereum JSON-RPC and Archive RPC endpoints (v0.4)
+
+**External project:** Ethereum JSON-RPC (execution API) plus five
+independently operated unauthenticated public endpoints.
+
+**Official documentation:**
+
+- `eth_call`: https://ethereum.org/developers/apis/json-rpc/#eth_call
+- `eth_chainId`, `eth_getBlockByNumber`: same JSON-RPC reference
+
+**Selected built-in candidates and 2026-08-07 verification:**
+
+| Stable ID | Endpoint | `eth_chainId` | Historical Multicall3 `getBlockNumber()` at block 18,000,000 |
+| --- | --- | --- | --- |
+| `drpc-public` | `https://eth.drpc.org` | `0x1` | passed on 2 of 3 attempts; rate-limited (`code 15`) on the first attempt only |
+| `blastapi-public` | `https://eth-mainnet.public.blastapi.io` | `0x1` | passed |
+| `mevblocker-public` | `https://rpc.mevblocker.io` | `0x1` | passed |
+| `nodies-public` | `https://eth-pokt.nodies.app` | `0x1` | passed |
+| `tenderly-public` | `https://mainnet.gateway.tenderly.co` | `0x1` | passed |
+
+**Purpose in the SDK:** built-in candidate pool for `EthereumArchiveRpcPool`,
+probed only when a caller enables `chainlink.enabled` and calls
+`client.initialize()`.
+
+**Important notes:**
+
+- `drpc-public`'s single rate-limited attempt is recorded here as an
+  observed instability, not a disqualification, consistent with the repeated
+  three-probe rule in `CHAINLINK_ETHEREUM_ARCHIVE_RPC_MAINTENANCE.md`. The
+  passive health model already treats a transient endpoint failure as a
+  retryable condition that triggers restart-on-another-endpoint rather than
+  operation failure, so an occasionally rate-limited public endpoint remains
+  a reasonable built-in as long as at least one other healthy endpoint
+  exists per operation.
+- All requests to these endpoints are direct-only: no proxy, no environment
+  proxy variable is read, and the transport passes `proxy: null`
+  unconditionally. This is independent of `requestPolicy.allowDirect`,
+  `proxies`, and `advancedProxy`, which remain scoped to the existing
+  credential-based execution and price paths.
+- These are unauthenticated public services. Passing a point-in-time check
+  is not a rate-limit, retention, or terms guarantee; see
+  `CHAINLINK_ETHEREUM_ARCHIVE_RPC_MAINTENANCE.md` for the update procedure
+  and rejected-candidate history.

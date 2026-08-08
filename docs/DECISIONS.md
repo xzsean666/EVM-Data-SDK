@@ -1,8 +1,8 @@
 # Architecture Decisions
 
-Version: 0.2.0
+Version: 0.4.0
 
-The owner approved the architecture baseline in the 2026-08-05 implementation request. Decisions below are accepted for v0.1; ADR-018 through ADR-020 govern the implemented v0.2 price upgrade.
+The owner approved the architecture baseline in the 2026-08-05 implementation request. Decisions below are accepted for v0.1; ADR-018 through ADR-020 govern the implemented v0.2 price upgrade; ADR-023/ADR-024 govern v0.3; ADR-028/ADR-029 govern the v0.4 Chainlink Archive RPC/Multicall3 upgrade accepted 2026-08-07.
 
 ## ADR-001: Node.js-first v0.1 runtime
 
@@ -444,6 +444,95 @@ semantic match. If it is unavailable or plan-restricted, context remains
 explicitly unavailable; the SDK does not silently use RPC or fabricate an
 empty log list. The backend gives up automatic action-context enrichment in
 exchange for avoiding high-volume server-side provider requests.
+
+### ADR-028: Chainlink Archive RPC snapshot is an explicit, opt-in exception to API-only chain data
+
+**Status:** Accepted by owner on 2026-08-07
+
+**Date:** 2026-08-07
+
+**Decision:** Add an opt-in `client.chainlink.getTokenPricesAtBlock()` and a
+provider-neutral `client.rpc.multicallAtBlock()` that use direct Ethereum
+JSON-RPC (`eth_call`, `eth_chainId`, `eth_getBlockByNumber`) against public or
+caller-supplied Archive RPC endpoints. This is a scoped exception to ADR-023
+("API-only chain data"), not a repeal of it: the backend portfolio
+synchronization path continues to use indexed provider APIs exclusively, and
+this feature is never wired into that path. It exists only for callers who
+explicitly enable `chainlink.enabled` and explicitly call
+`client.initialize()` and `client.chainlink.getTokenPricesAtBlock()`.
+
+**Reason:** Chainlink's canonical historical price at an exact past block is
+not available through any indexed REST API the SDK already integrates;
+`latestRoundData()` at a specific block is fundamentally a JSON-RPC read
+against the feed's on-chain state. Refusing to add it would mean the SDK
+could never expose historical oracle snapshots at all, which is a real,
+distinct use case from wallet/portfolio synchronization.
+
+**Alternatives considered:**
+
+- Extend `getPriceHistory()` to include Chainlink: rejected because Chainlink
+  round data is an oracle-state read, not a market candle/TWAP, and merging
+  the two would blur ADR-019's provider-identity/no-consensus contract.
+- Route through an indexed Chainlink API product instead of RPC: rejected
+  because no such indexed historical-round endpoint was found to exist as an
+  unauthenticated public API; the proposal's P0 review found only direct RPC
+  as a viable historical read path.
+- Silently reuse `ProxyPool`/managed sing-box for these requests: rejected to
+  keep this feature's network surface auditably separate from the existing
+  proxy-routed execution/price paths, per the non-negotiable direct-only
+  boundary in the upgrade proposal.
+
+**Trade-off:** The SDK now has one narrow, clearly bounded path that performs
+direct outbound requests to public third-party RPC endpoints when explicitly
+enabled. This must never become implicit; `chainlink.enabled` defaults to
+unset/false and construction alone never triggers a network request.
+
+### ADR-029: Direct-only Archive RPC pool with random-pinned endpoint selection
+
+**Status:** Accepted by owner on 2026-08-07
+
+**Date:** 2026-08-07
+
+**Decision:** Implement `EthereumArchiveRpcPool` and
+`EthereumArchiveRpcExecutor` as modules structurally incapable of using a
+proxy: `ArchiveRpcTransport` has no constructor parameter for a proxy lease
+and always passes `proxy: null`. `initialize(signal)` concurrently probes
+every configured endpoint (`eth_chainId == 0x1`, historical block header,
+historical Multicall3 `getBlockNumber()`) with a bound and no background
+timer. Each operation builds an unbiased random permutation of currently
+healthy endpoints through an injected `RandomSource`, pins the whole
+operation (block header read plus every Multicall batch) to the first
+endpoint, never repeats an endpoint within one operation, and on a retryable
+failure discards all partial results and restarts entirely on the next
+endpoint. The requested block header is read before and after all batches;
+a changed hash discards the result as `RPC_BLOCK_REORG_DETECTED`.
+
+**Reason:** Public RPC endpoints vary in reliability (confirmed live: one of
+five candidates was transiently rate-limited during verification), so
+request-time distribution across several independently operated endpoints is
+necessary. Pinning one whole operation to one endpoint (rather than allowing
+per-batch endpoint switching) guarantees a returned snapshot never silently
+mixes state observations from two different nodes, which could otherwise
+produce internally inconsistent round data across feeds.
+
+**Alternatives considered:**
+
+- Round-robin/priority-ordered endpoints like `ProviderRouter`: rejected
+  because these are functionally identical unauthenticated public services,
+  not capability-differentiated providers; deterministic priority would
+  concentrate load on one public endpoint rather than distributing it.
+- Allow per-batch endpoint switching on failure: rejected because different
+  nodes can have (rarely) different views during a reorg window, and mixing
+  per-feed answers from different endpoint observations within one result
+  would be worse than a clear restart-from-scratch.
+- Background periodic health checks: rejected for the same reason as
+  ADR-011 — no timers, passive/explicit health only.
+
+**Trade-off:** An operation can make more total RPC requests than the
+minimum (up to `maxRpcAttempts` full restarts), and test determinism requires
+an injected random source. This is accepted in exchange for auditable
+direct-only isolation and avoiding cross-endpoint data mixing within one
+snapshot.
 
 ## Open Decisions Requiring Owner Input
 
