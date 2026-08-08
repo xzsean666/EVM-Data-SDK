@@ -7,6 +7,8 @@ import { ProviderRouter } from "../execution/ProviderRouter";
 import { ProxyPool } from "../execution/ProxyPool";
 import { RequestExecutor } from "../execution/RequestExecutor";
 import { BlockRangeScanner } from "../execution/BlockRangeScanner";
+import type { RandomSource } from "../execution/clock";
+import { systemRandom } from "../execution/clock";
 import { AddressService } from "../services/AddressService";
 import { ApiChainService } from '../services/ApiChainService';
 import { TokenService } from "../services/TokenService";
@@ -24,6 +26,14 @@ import { TokenPriceAggregator } from "../price/TokenPriceAggregator";
 import type { TokenPriceProviderAdapter } from "../price/TokenPriceProviderAdapter";
 import type { HttpTransport } from "../transport/HttpTransport";
 import { SingBoxProxyManager } from "../proxy/SingBoxProxyManager";
+import { BUILTIN_ETHEREUM_ARCHIVE_RPCS } from "../rpc/builtinEthereumArchiveRpcs";
+import { BUILTIN_BASE_ARCHIVE_RPCS } from "../rpc/builtinBaseArchiveRpcs";
+import { EthereumArchiveRpcPool, type EthereumArchiveRpcEndpoint } from "../rpc/EthereumArchiveRpcPool";
+import { EthereumArchiveRpcExecutor } from "../rpc/EthereumArchiveRpcExecutor";
+import { RpcService } from "../rpc/RpcService";
+import { ChainlinkService } from "../chainlink/ChainlinkService";
+import { DeFiExchangeRateService } from "../defi/DeFiExchangeRateService";
+import { MULTICALL3_ADDRESS, MULTICALL3_BASE_MAINNET_DEPLOYMENT_BLOCK, MULTICALL3_ETHEREUM_MAINNET_DEPLOYMENT_BLOCK } from "../rpc/EthereumMulticall3Codec";
 
 export interface EvmDataClientOptions {
   readonly transport?: HttpTransport;
@@ -31,15 +41,33 @@ export interface EvmDataClientOptions {
   readonly priceAdapters?: Partial<Record<"binance" | "okx" | "coinbase" | "geckoterminal", TokenPriceProviderAdapter>>;
   /** Test seam for the optional managed proxy; it never changes public configuration. */
   readonly advancedProxyManager?: SingBoxProxyManager;
+  /** Test seam for deterministic Archive RPC endpoint selection; defaults to `systemRandom`. */
+  readonly archiveRpcRandomSource?: RandomSource;
+  /** Test seam for the Archive RPC pool used by `chainlink`/`rpc`. */
+  readonly archiveRpcPool?: EthereumArchiveRpcPool;
+  /** Test seams for DeFi chain-specific Archive RPC pools. */
+  readonly defiArchiveRpcPools?: Partial<Record<"ethereum" | "base", EthereumArchiveRpcPool>>;
 }
 
 export class EvmDataClient {
   readonly address: AddressService;
   readonly chain: ApiChainService;
   readonly token: TokenService;
+  readonly rpc: RpcService | null;
+  readonly chainlink: ChainlinkService | null;
+  readonly defi: DeFiExchangeRateService | null;
 
   private readonly configuration: NormalizedClientConfiguration;
   private readonly advancedProxyManager: SingBoxProxyManager | null;
+  private readonly archiveRpcPool: EthereumArchiveRpcPool | null;
+  private readonly defiArchiveRpcPools: readonly EthereumArchiveRpcPool[];
+  /**
+   * Per-chain Archive RPC executors, keyed by chain, reused to serve
+   * `getBlockNumberByTimestamp` via pure public RPC binary search. Populated
+   * only for chains where `defi` is enabled (the same executors already
+   * built for DeFi exchange-rate reads); there is no separate pool.
+   */
+  private readonly chainRpcExecutors = new Map<"ethereum" | "base", EthereumArchiveRpcExecutor>();
 
   constructor(configuration: ClientConfiguration, options: EvmDataClientOptions = {}) {
     this.configuration = parseClientConfiguration(configuration);
@@ -125,16 +153,148 @@ export class EvmDataClient {
       priceAggregator,
       priceConfiguration.tokenAliases,
     );
+
+    const chainlinkConfiguration = this.configuration.chainlink;
+    const defiConfiguration = this.configuration.defi;
+    const defiRpcServices = new Map<1 | 8453, RpcService>();
+    const defiPools: EthereumArchiveRpcPool[] = [];
+    if (chainlinkConfiguration.enabled) {
+      const builtinEndpoints: readonly EthereumArchiveRpcEndpoint[] = chainlinkConfiguration.useBuiltinEthereumArchiveRpcs
+        ? BUILTIN_ETHEREUM_ARCHIVE_RPCS
+        : [];
+      const customEndpoints: readonly EthereumArchiveRpcEndpoint[] = chainlinkConfiguration.rpcEndpoints
+        .filter((endpoint) => endpoint.enabled)
+        .map((endpoint) => ({ id: endpoint.id, url: endpoint.url }));
+      const defiEthereumEndpoints: readonly EthereumArchiveRpcEndpoint[] = defiConfiguration.enabled && defiConfiguration.chains.includes("ethereum")
+        ? defiConfiguration.rpcEndpoints.ethereum.filter((endpoint) => endpoint.enabled).map((endpoint) => ({ id: endpoint.id, url: endpoint.url }))
+        : [];
+      const endpoints = mergeArchiveRpcEndpoints([...builtinEndpoints, ...customEndpoints, ...defiEthereumEndpoints]);
+
+      this.archiveRpcPool = options.archiveRpcPool ?? new EthereumArchiveRpcPool({
+        endpoints,
+        healthCheckTimeoutMs: chainlinkConfiguration.healthCheckTimeoutMs,
+      });
+      const archiveRpcExecutor = new EthereumArchiveRpcExecutor({
+        pool: this.archiveRpcPool,
+        randomSource: options.archiveRpcRandomSource ?? systemRandom,
+        attemptTimeoutMs: chainlinkConfiguration.attemptTimeoutMs,
+        totalTimeoutMs: chainlinkConfiguration.totalTimeoutMs,
+        maxRpcAttempts: chainlinkConfiguration.maxRpcAttempts,
+      });
+      this.rpc = new RpcService({
+        executor: archiveRpcExecutor,
+        maxCallsPerMulticall: chainlinkConfiguration.maxCallsPerMulticall,
+      });
+      this.chainlink = new ChainlinkService({ rpcService: this.rpc });
+    } else {
+      this.archiveRpcPool = null;
+      this.rpc = null;
+      this.chainlink = null;
+    }
+    for (const chain of defiConfiguration.enabled ? defiConfiguration.chains : []) {
+      const chainId = chain === "ethereum" ? 1 : 8453;
+      let pool: EthereumArchiveRpcPool;
+      if (chainId === 1 && this.archiveRpcPool !== null) {
+        pool = this.archiveRpcPool;
+      } else {
+        const builtins: readonly EthereumArchiveRpcEndpoint[] = defiConfiguration.useBuiltinArchiveRpcs ? (chainId === 1 ? BUILTIN_ETHEREUM_ARCHIVE_RPCS : BUILTIN_BASE_ARCHIVE_RPCS) : [];
+        const custom = defiConfiguration.rpcEndpoints[chain].filter((endpoint) => endpoint.enabled).map((endpoint) => ({ id: endpoint.id, url: endpoint.url }));
+        pool = options.defiArchiveRpcPools?.[chain] ?? new EthereumArchiveRpcPool({
+          endpoints: [...builtins, ...custom],
+          healthCheckTimeoutMs: defiConfiguration.healthCheckTimeoutMs,
+          expectedChainId: chainId,
+          multicall3Address: MULTICALL3_ADDRESS,
+          multicall3DeploymentBlock: (chainId === 1 ? MULTICALL3_ETHEREUM_MAINNET_DEPLOYMENT_BLOCK : MULTICALL3_BASE_MAINNET_DEPLOYMENT_BLOCK).toString(),
+        });
+      }
+      const executor = new EthereumArchiveRpcExecutor({ pool, randomSource: options.archiveRpcRandomSource ?? systemRandom, attemptTimeoutMs: defiConfiguration.attemptTimeoutMs, totalTimeoutMs: defiConfiguration.totalTimeoutMs, maxRpcAttempts: defiConfiguration.maxRpcAttempts });
+      defiRpcServices.set(chainId, new RpcService({ executor, maxCallsPerMulticall: defiConfiguration.maxCallsPerMulticall, chainId, multicall3Address: MULTICALL3_ADDRESS, multicall3DeploymentBlock: (chainId === 1 ? MULTICALL3_ETHEREUM_MAINNET_DEPLOYMENT_BLOCK : MULTICALL3_BASE_MAINNET_DEPLOYMENT_BLOCK).toString() }));
+      this.chainRpcExecutors.set(chain, executor);
+      if (pool !== this.archiveRpcPool) defiPools.push(pool);
+    }
+    this.defiArchiveRpcPools = Object.freeze(defiPools);
+    this.defi = defiConfiguration.enabled ? new DeFiExchangeRateService({ rpcServices: defiRpcServices }) : null;
+  }
+
+  /**
+   * Finds the highest block whose timestamp is less than or equal to
+   * `timestamp`, using pure public Archive RPC binary search — no indexed
+   * API provider (Etherscan/Alchemy/Moralis) or API key is used. Requires
+   * `defi` (or `chainlink` for `"ethereum"`) to have been enabled for
+   * `chain`, since that is what provisions the Archive RPC pool this reuses.
+   */
+  async getBlockNumberByTimestamp(input: {
+    readonly chain: "ethereum" | "base";
+    readonly timestamp: string;
+    readonly signal?: AbortSignal;
+  }): Promise<{ readonly chainId: number; readonly blockNumber: string; readonly provider: "archive-rpc" }> {
+    const rpcExecutor = this.chainRpcExecutors.get(input.chain);
+    if (rpcExecutor === undefined) {
+      throw invalidConfiguration(
+        `Archive RPC is not enabled for chain "${input.chain}"; cannot resolve a block by timestamp via RPC.`,
+      );
+    }
+    const chainId = input.chain === "ethereum" ? 1 : 8453;
+    const deploymentBlock = BigInt(
+      chainId === 1 ? MULTICALL3_ETHEREUM_MAINNET_DEPLOYMENT_BLOCK : MULTICALL3_BASE_MAINNET_DEPLOYMENT_BLOCK,
+    );
+    const result = await rpcExecutor.findBlockNumberByTimestamp(
+      BigInt(input.timestamp),
+      deploymentBlock,
+      input.signal,
+    );
+    return { chainId, blockNumber: result.blockNumber, provider: "archive-rpc" };
+  }
+
+  /**
+   * Reads the current chain head via pure public Archive RPC — no indexed
+   * API provider (Etherscan/Alchemy/Moralis) or API key is used. Requires
+   * `defi` (or `chainlink` for `"ethereum"`) to have been enabled for
+   * `chain`, since that is what provisions the Archive RPC pool this reuses.
+   */
+  async getLatestBlockNumber(input: {
+    readonly chain: "ethereum" | "base";
+    readonly signal?: AbortSignal;
+  }): Promise<{ readonly chainId: number; readonly blockNumber: string; readonly provider: "archive-rpc" }> {
+    const rpcExecutor = this.chainRpcExecutors.get(input.chain);
+    if (rpcExecutor === undefined) {
+      throw invalidConfiguration(
+        `Archive RPC is not enabled for chain "${input.chain}"; cannot resolve the latest block via RPC.`,
+      );
+    }
+    const chainId = input.chain === "ethereum" ? 1 : 8453;
+    const result = await rpcExecutor.findLatestBlockNumber(input.signal);
+    return { chainId, blockNumber: result.blockNumber, provider: "archive-rpc" };
   }
 
   async initialize(signal?: AbortSignal): Promise<void> {
-    if (this.advancedProxyManager === null) return;
-    await this.advancedProxyManager.initialize(signal);
+    const tasks: Promise<void>[] = [];
+    if (this.advancedProxyManager !== null) {
+      tasks.push(this.advancedProxyManager.initialize(signal));
+    }
+    if (this.archiveRpcPool !== null) {
+      tasks.push(this.archiveRpcPool.initialize(signal));
+    }
+    for (const pool of this.defiArchiveRpcPools) tasks.push(pool.initialize(signal));
+    await Promise.all(tasks);
   }
 
   async close(): Promise<void> {
     await this.advancedProxyManager?.close();
   }
+}
+
+function mergeArchiveRpcEndpoints(endpoints: readonly EthereumArchiveRpcEndpoint[]): readonly EthereumArchiveRpcEndpoint[] {
+  const ids = new Set<string>();
+  const urls = new Set<string>();
+  const result: EthereumArchiveRpcEndpoint[] = [];
+  for (const endpoint of endpoints) {
+    if (ids.has(endpoint.id) || urls.has(endpoint.url)) continue;
+    ids.add(endpoint.id);
+    urls.add(endpoint.url);
+    result.push(endpoint);
+  }
+  return result;
 }
 
 function createPriceAdapter(

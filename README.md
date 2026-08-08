@@ -53,11 +53,99 @@ The default source order is Binance, OKX, Coinbase, then GeckoTerminal. Each sou
 
 Price sources do not require an API key. Price routing defaults to `direct`, which explicitly uses the local route. Set `price.routeMode` to `"proxy-only"` to use only explicitly configured HTTP(S) proxies; it never falls back to direct, and an unavailable route returns `PROXY_ERROR`. Successful sources are returned independently with explicit `failures`; if all enabled sources fail, the operation rejects with `PRICE_DATA_UNAVAILABLE`.
 
-## Planned v0.3 upgrades
+## Chainlink historical prices via Ethereum Archive RPC
 
-The design proposal for opt-in VLESS/SS proxy URLs through a managed sing-box
-runtime and for page-size-free ERC-20 reads over an inclusive block range is in
-[`docs/PROXY_AND_BLOCK_RANGE_UPGRADE.md`](./docs/PROXY_AND_BLOCK_RANGE_UPGRADE.md).
-It is not part of the accepted v0.2 API yet. A staged implementation prompt for
-gpt-terra is in
+`client.chainlink.getTokenPricesAtBlock()` reads every configured Chainlink
+Ethereum Mainnet Crypto/USD price feed's `latestRoundData()` as of a specific
+historical block, in one batched `Multicall3.aggregate3` call. This is an
+opt-in feature, off by default:
+
+```ts
+import { EvmDataClient } from "evm-data-sdk";
+
+const client = new EvmDataClient({
+  chainlink: { enabled: true },
+});
+
+const result = await client.chainlink.getTokenPricesAtBlock({
+  blockNumber: "18000000",
+});
+
+for (const price of result.prices) {
+  console.log(price.asset.symbol, price.price, price.isStale);
+}
+```
+
+With `chainlink.enabled: true` and no other configuration, the SDK selects a
+random built-in public Ethereum Archive RPC endpoint per call from
+`src/rpc/builtinEthereumArchiveRpcs.ts` (see
+[`docs/CHAINLINK_ETHEREUM_ARCHIVE_RPC_MAINTENANCE.md`](./docs/CHAINLINK_ETHEREUM_ARCHIVE_RPC_MAINTENANCE.md)
+for how that registry is maintained and verified). Supply your own endpoint(s)
+instead with `chainlink.rpcEndpoints` and `chainlink.useBuiltinEthereumArchiveRpcs: false`:
+
+```ts
+const client = new EvmDataClient({
+  chainlink: {
+    enabled: true,
+    useBuiltinEthereumArchiveRpcs: false,
+    rpcEndpoints: [{ id: "company-archive-1", url: process.env.ETH_RPC_URL! }],
+  },
+});
+```
+
+Archive RPC requests are always direct HTTPS: this feature never reads
+`HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` and never routes through the
+configured proxy pool. Each feed's result reports its own success or a
+`ChainlinkFeedFailure`, so a single unavailable or reverting feed does not
+fail the whole call; `result.summary.partial` is `true` whenever at least one
+feed failed while others succeeded. The underlying public primitive,
+`client.rpc.multicallAtBlock()`, is also exported for callers who need raw
+Multicall3 batching without the Chainlink decoding layer.
+
+To add another chain (for example Base) to this Chainlink/Archive RPC/Multicall3
+feature, start from
+[`docs/CHAINLINK_ARCHIVE_RPC_MULTICALL3_ADD_CHAIN_HANDOFF.md`](./docs/CHAINLINK_ARCHIVE_RPC_MULTICALL3_ADD_CHAIN_HANDOFF.md)
+instead of exploring the codebase from scratch — it maps every Ethereum-specific
+file and decision point that must be revisited.
+
+## DeFi exchange-rate snapshots
+
+`client.defi.getExchangeRatesAtBlock()` returns committed DeFi token-to-
+underlying exchange rates at one exact Ethereum Mainnet or Base Mainnet block.
+It is opt-in, initializes direct-only Archive RPC pools explicitly, and never
+uses `latest`, a proxy route, market prices, or runtime token discovery.
+
+```ts
+const client = new EvmDataClient({
+  defi: {
+    enabled: true,
+    chains: ["ethereum", "base"],
+    rpcEndpoints: {
+      base: [{ id: "company-base-archive", url: process.env.BASE_ARCHIVE_RPC! }],
+    },
+  },
+});
+await client.initialize();
+
+const snapshot = await client.defi.getExchangeRatesAtBlock({
+  chain: "base",
+  blockNumber: "25000000",
+});
+```
+
+Set `defi.useBuiltinArchiveRpcs: false` to use only explicit per-chain
+`rpcEndpoints`; construction rejects an enabled chain with no remaining
+endpoint candidate.
+
+All amounts are decimal strings. Each successful token has one or more
+`underlyings`; LP tokens deliberately retain separate reserve legs. Protocol
+reverts and malformed data are per-token failures, while an endpoint/archive
+failure restarts the complete request on another healthy endpoint. Endpoint
+URLs are never returned; only the stable endpoint ID appears in a snapshot.
+See [`docs/DEFI_EXCHANGE_RATE_SNAPSHOT/UPGRADE.md`](./docs/DEFI_EXCHANGE_RATE_SNAPSHOT/UPGRADE.md)
+for the full contract and extension procedure.
+
+## Planned upgrades
+
+A staged implementation prompt for gpt-terra is in
 [`docs/GPT_TERRA_IMPLEMENTATION_PROMPT.md`](./docs/GPT_TERRA_IMPLEMENTATION_PROMPT.md).

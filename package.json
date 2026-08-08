@@ -32,6 +32,8 @@
     "build": "tsup && tsc --project tsconfig.build.json",
     "prepack": "pnpm build",
     "test:package": "node tests/package/smoke.mjs",
+    "update:chainlink-feeds": "node scripts/update-chainlink-ethereum-feeds.mjs",
+    "probe:ethereum-archive-rpcs": "node scripts/probe-ethereum-archive-rpcs.mjs",
     "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm build && pnpm test:package",
     "changeset": "changeset",
     "clean": "node -e \"for (const path of ['dist','coverage']) { require('node:fs').rmSync(path, { recursive: true, force: true }); }\""

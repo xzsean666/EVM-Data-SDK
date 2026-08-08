@@ -401,3 +401,98 @@ describe("EvmDataClient", () => {
     await expect(client.address.getNativeBalance({ chain: 1, address })).resolves.toMatchObject({ provider: "moralis", amount: "1" });
   });
 });
+
+describe("EvmDataClient chainlink/Archive RPC composition (v0.4)", () => {
+  it("exposes rpc and chainlink as null when chainlink is not enabled", () => {
+    const transport = new SequenceTransport([]);
+    const client = new EvmDataClient({ providers: [{ kind: "etherscan", apiKeys: ["key"] }] }, { transport });
+
+    expect(client.rpc).toBeNull();
+    expect(client.chainlink).toBeNull();
+  });
+
+  it("exposes non-null rpc and chainlink services when chainlink is enabled, without any provider configured", () => {
+    const transport = new SequenceTransport([]);
+    const client = new EvmDataClient({ chainlink: { enabled: true } }, { transport });
+
+    expect(client.rpc).not.toBeNull();
+    expect(client.chainlink).not.toBeNull();
+  });
+
+  it("never makes a network call while constructing a chainlink-enabled client", () => {
+    const transport = new SequenceTransport([]);
+    new EvmDataClient({ chainlink: { enabled: true } }, { transport });
+
+    expect(transport.requests).toHaveLength(0);
+  });
+
+  it("initializes the managed proxy and the Archive RPC pool concurrently", async () => {
+    const advancedProxyManager = {
+      assertReady: vi.fn(),
+      acquire: vi.fn(),
+      report: vi.fn(),
+      initialize: vi.fn().mockResolvedValue(undefined),
+      close: vi.fn(),
+    };
+    const archiveRpcPool = {
+      initialize: vi.fn().mockResolvedValue(undefined),
+      healthySnapshot: vi.fn().mockReturnValue([]),
+      reportOutcome: vi.fn(),
+      isHealthy: vi.fn().mockReturnValue(false),
+    };
+    const client = new EvmDataClient({
+      providers: [{ kind: "etherscan", apiKeys: ["key"] }],
+      advancedProxy: {
+        kind: "sing-box",
+        urls: ["vless://11111111-1111-4111-8111-111111111111@proxy.example:443?security=tls&type=tcp&sni=proxy.example"],
+      },
+      chainlink: { enabled: true },
+    }, {
+      advancedProxyManager: advancedProxyManager as never,
+      archiveRpcPool: archiveRpcPool as never,
+    });
+
+    await client.initialize();
+
+    expect(advancedProxyManager.initialize).toHaveBeenCalledTimes(1);
+    expect(archiveRpcPool.initialize).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not initialize an Archive RPC pool when chainlink is disabled, even if one is injected", async () => {
+    const archiveRpcPool = {
+      initialize: vi.fn().mockResolvedValue(undefined),
+      healthySnapshot: vi.fn().mockReturnValue([]),
+      reportOutcome: vi.fn(),
+      isHealthy: vi.fn().mockReturnValue(false),
+    };
+    const client = new EvmDataClient({
+      providers: [{ kind: "etherscan", apiKeys: ["key"] }],
+    }, { archiveRpcPool: archiveRpcPool as never });
+
+    await client.initialize();
+
+    expect(archiveRpcPool.initialize).not.toHaveBeenCalled();
+  });
+});
+
+describe("EvmDataClient DeFi composition (v0.5)", () => {
+  it("exposes DeFi without an indexed provider and initializes its selected chain pool", async () => {
+    const basePool = {
+      initialize: vi.fn().mockResolvedValue(undefined),
+      healthySnapshot: vi.fn().mockReturnValue([]),
+      reportOutcome: vi.fn(),
+      isHealthy: vi.fn().mockReturnValue(false),
+    };
+    const client = new EvmDataClient({ defi: { enabled: true, chains: ["base"] } }, {
+      defiArchiveRpcPools: { base: basePool as never },
+    });
+    expect(client.defi).not.toBeNull();
+    expect(client.chainlink).toBeNull();
+    await client.initialize();
+    expect(basePool.initialize).toHaveBeenCalledTimes(1);
+  });
+
+  it("requires an explicit endpoint when built-in DeFi RPCs are disabled", () => {
+    expect(() => new EvmDataClient({ defi: { enabled: true, chains: ["base"], useBuiltinArchiveRpcs: false } })).toThrow(/no Archive RPC endpoint/i);
+  });
+});

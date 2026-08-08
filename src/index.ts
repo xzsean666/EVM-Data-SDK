@@ -5,8 +5,11 @@ export {
 
 export type {
   AlchemyConfiguration,
+  ChainlinkConfiguration,
+  DeFiConfiguration,
   ClientConfiguration,
   EtherscanConfiguration,
+  EthereumArchiveRpcEndpointConfiguration,
   MoralisConfiguration,
   ObservationCallback,
   PriceConfiguration,
@@ -19,6 +22,28 @@ export type {
   SingBoxRuntimeConfiguration,
   TelemetryEvent,
 } from "./domain/configuration";
+export type {
+  DeFiExchangeRate,
+  DeFiExchangeRateFailure,
+  DeFiExchangeRateFailureCode,
+  DeFiExchangeRateSnapshot,
+  DeFiExchangeRateSnapshotRequest,
+  DeFiTokenKind,
+  DeFiUnderlyingRate,
+} from "./domain/defiExchangeRateModels";
+export type {
+  ChainlinkFeedFailure,
+  ChainlinkFeedFailureCode,
+  ChainlinkPriceAtBlock,
+  ChainlinkTokenPricesAtBlockRequest,
+  ChainlinkTokenPricesAtBlockResult,
+} from "./domain/chainlinkModels";
+export type {
+  MulticallAtBlockCall,
+  MulticallAtBlockCallResult,
+  MulticallAtBlockRequest,
+  MulticallAtBlockResult,
+} from "./domain/rpcModels";
 export type {
   AlchemyRoute,
   BuiltinProviderName,
@@ -92,3 +117,19 @@ export type {
   PriceProxyLease,
   TokenPriceProviderAdapter,
 } from "./price/TokenPriceProviderAdapter";
+export { RpcService } from "./rpc/RpcService";
+export type { ArchiveRpcMulticallExecutor, RpcServiceOptions } from "./rpc/RpcService";
+export { ChainlinkService } from "./chainlink/ChainlinkService";
+export type { ChainlinkMulticallService, ChainlinkServiceOptions } from "./chainlink/ChainlinkService";
+export type { ChainlinkFeedDefinition } from "./chainlink/ChainlinkFeedDefinition";
+export { ETHEREUM_MAINNET_CHAINLINK_PRICE_FEEDS } from "./chainlink/ethereumMainnetPriceFeeds.generated";
+export { BUILTIN_ETHEREUM_ARCHIVE_RPCS } from "./rpc/builtinEthereumArchiveRpcs";
+export type { BuiltinEthereumArchiveRpcCandidate } from "./rpc/builtinEthereumArchiveRpcs";
+export { BUILTIN_BASE_ARCHIVE_RPCS } from "./rpc/builtinBaseArchiveRpcs";
+export type { BuiltinBaseArchiveRpcCandidate } from "./rpc/builtinBaseArchiveRpcs";
+export { DeFiExchangeRateService } from "./defi/DeFiExchangeRateService";
+export type { DeFiMulticallService, DeFiExchangeRateServiceOptions } from "./defi/DeFiExchangeRateService";
+export { DEFI_TOKEN_REGISTRY } from "./defi/defiTokenRegistry";
+export { DEFI_PROTOCOL_SCOPE } from "./defi/defiProtocolScope";
+export type { DeFiProtocolScopeChain } from "./defi/defiProtocolScope";
+export type { DeFiTokenDefinition, DeFiUnderlyingDefinition, DeFiAdapterKind } from "./defi/DeFiTokenDefinition";

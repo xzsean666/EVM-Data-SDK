@@ -746,3 +746,35 @@ mutates it.
   zero successes rejects with `CHAINLINK_PRICE_DATA_UNAVAILABLE`.
 - No test in the default suite performs network I/O; live verification is
   opt-in and prints no endpoint URL, calldata, return data, or price.
+
+## 14. v0.5 Upgrade: DeFi Exchange Rate Historical Snapshots
+
+The v0.5 module adds `client.defi.getExchangeRatesAtBlock()`. It is an
+explicit, read-only Archive RPC operation for Ethereum Mainnet (chain ID 1)
+and Base Mainnet (chain ID 8453). A request selects one exact canonical block
+and, by default, evaluates the committed built-in DeFi token registry for the
+selected chain. A caller may pass a bounded `tokenIds` subset for targeted
+reads.
+
+The operation uses the existing direct-only Archive RPC + Multicall3 path. All
+protocol calls for one request are encoded deterministically and sent with the
+requested block as `blockTag`; endpoint selection is random among initialized
+healthy public/caller endpoints, the whole operation is pinned to one endpoint,
+and a retryable endpoint failure discards partial data and restarts on the next
+untried endpoint. No proxy or environment proxy is used.
+
+Each result is a Token -> one or more underlying-asset legs. A Uniswap-V2-like
+LP token therefore returns both reserves as legs; it is never flattened into a
+fake single price. All token and asset quantities, block numbers, rates, and
+LP reserve values are decimal strings. A protocol call that reverts, is not yet
+deployed at the requested block, or returns malformed data becomes a per-token
+failure. At least one success returns a partial result; zero successes rejects
+with `DEFI_EXCHANGE_RATE_DATA_UNAVAILABLE`.
+
+The initial registry includes reviewed LST, lending, ERC-4626 vault, Compound
+V2 lending, and Uniswap-V2-like LP adapters on Ethereum, plus Aave lending,
+ERC-4626 vault, and LST/lending mappings on Base. The registry is committed
+source, never fetched at runtime. Adding a protocol or chain requires a new
+adapter/manifest entry, official-address and ABI verification, deterministic
+fixtures, and the handoff procedure in
+`docs/DEFI_EXCHANGE_RATE_SNAPSHOT/AI_CONTEXT.md`.

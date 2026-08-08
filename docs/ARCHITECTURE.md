@@ -603,7 +603,7 @@ Beacon, holdings, or historical-balance APIs.
 - `number` for blockchain quantities: replaced with decimal strings.
 - Alchemy asset transfers as full transactions: rejected because the semantics are not equivalent.
 
-## 20a. v0.4 Extension: Chainlink Archive RPC and Multicall3 (accepted; implementation in progress)
+## 20a. v0.4 Extension: Chainlink Archive RPC and Multicall3 (accepted; implemented)
 
 The full design is in
 [`CHAINLINK_ETHEREUM_ARCHIVE_RPC_MULTICALL3_UPGRADE.md`](./CHAINLINK_ETHEREUM_ARCHIVE_RPC_MULTICALL3_UPGRADE.md),
@@ -679,6 +679,43 @@ ChainlinkService -> RpcService -> EthereumArchiveRpcExecutor -> ArchiveRpcTransp
 dependency on `chainlink/`, so the public `client.rpc.multicallAtBlock()`
 module remains usable without Chainlink enabled. Neither module imports
 `ProxyPool`, `SingBoxProxyManager`, `CredentialPool`, or `RequestExecutor`.
+
+## 21. v0.5 DeFi Exchange Rate Snapshot Extension
+
+The DeFi feature is a sibling of Chainlink, not a provider adapter and not a
+market-price source:
+
+```text
+client.defi.getExchangeRatesAtBlock()
+       -> DeFiExchangeRateService
+       -> committed chain/token registry
+       -> protocol adapter call plans/decoders
+       -> chain-selected RpcService
+       -> ArchiveRpcPool + ArchiveRpcExecutor
+       -> direct Archive RPC eth_call(Multicall3, blockTag)
+```
+
+Protocol adapters are pure call-plan and return-data mapping modules. They do
+not perform network calls, retries, endpoint selection, or cross-protocol
+fallback. The service owns deterministic call IDs, maps results back to token
+definitions, and reports per-token failures. `fixed-ratio` mappings are used
+only where the protocol contract guarantees a one-to-one unit conversion;
+dynamic adapters read the exchange-rate function at the requested block.
+
+The existing Archive RPC pool/executor is parameterized by expected chain ID,
+Multicall3 address, and verified deployment block. Ethereum and Base each have
+their own built-in public endpoint registry. The endpoint pool probes
+`eth_chainId`, an exact historical block header, and Multicall3
+`getBlockNumber()` during explicit `initialize()`. It marks failed endpoints
+unhealthy, shuffles healthy candidates for every operation, pins the complete
+batch sequence to one endpoint, and restarts from scratch on another endpoint
+after retryable failure. The direct-only transport boundary is unchanged.
+
+The public DeFi model allows multiple `underlyings` per token so LP tokens can
+be represented losslessly. A result contains block hash/timestamp, endpoint ID,
+registry version, Multicall batch count, successful rates, failures, and a
+partial summary. No cache, background health timer, floating-point arithmetic,
+or implicit token discovery is introduced.
 
 ## 21. Approval Gate
 

@@ -8,6 +8,7 @@ import type { CapabilityRequest, DataProviderAdapter, ProviderBlockRangeWindowRe
 import { classifyAlchemyHttpResponse, classifyAlchemyJsonRpcError, normalizeAlchemyTransportError } from "./alchemyErrors";
 import { alchemyJsonRpcResponseSchema, alchemyTransfersResultSchema, type AlchemyTransfer } from "./alchemySchemas";
 import { mapAlchemyTransfer } from "./alchemyMapper";
+import { decodeAggregate3Result, encodeAggregate3, MULTICALL3_ADDRESS } from "../../rpc/EthereumMulticall3Codec";
 
 export interface AlchemyAdapterOptions {
   readonly transport?: HttpTransport;
@@ -22,11 +23,10 @@ export const ALCHEMY_MAX_PAGE_SIZE = 1_000;
 export const ALCHEMY_MULTICALL_MAX_BATCH_SIZE = 50;
 
 const MULTICALL3_BY_CHAIN_ID: Readonly<Record<number, string>> = {
-  1: "0xcA11bde05977b3631167028862bE2a173976CA11",
-  8453: "0xcA11bde05977b3631167028862bE2a173976CA11",
+  1: MULTICALL3_ADDRESS,
+  8453: MULTICALL3_ADDRESS,
 };
 const ERC20_BALANCE_OF_SELECTOR = "70a08231";
-const MULTICALL3_AGGREGATE3_SELECTOR = "82ad56cb";
 
 type AlchemyStreamDirection = Exclude<TransferDirection, "both">;
 
@@ -141,9 +141,13 @@ export class AlchemyAdapter implements DataProviderAdapter {
     const tokenAddresses = uniqueAddresses(request.tokenAddresses, context);
     const items: Erc20BalanceAtBlock[] = [];
     for (const tokens of chunk(tokenAddresses, ALCHEMY_MULTICALL_MAX_BATCH_SIZE)) {
+      const callData = `0x${ERC20_BALANCE_OF_SELECTOR}${wordAddress(request.address)}`;
+      const encoded = encodeAggregate3(
+        tokens.map((token) => ({ target: token, allowFailure: true, callData })),
+      );
       const body = await this.call(
         "eth_call",
-        [{ to: multicall3, data: encodeAggregate3(tokens, request.address) }, decimalToHex(request.blockNumber)],
+        [{ to: multicall3, data: encoded }, decimalToHex(request.blockNumber)],
         context,
       );
       const result = parseResult(body, context);
@@ -412,45 +416,22 @@ function chunk<T>(values: readonly T[], size: number): T[][] {
   return batches;
 }
 
-function encodeAggregate3(tokenAddresses: readonly string[], owner: string): string {
-  if (!/^0x[0-9a-fA-F]{40}$/.test(owner)) throw new Error("Invalid ERC-20 owner address.");
-  const calls = tokenAddresses.map((token) => {
-    const callData = `${ERC20_BALANCE_OF_SELECTOR}${wordAddress(owner)}`;
-    return `${wordAddress(token)}${wordUint(1n)}${wordUint(96n)}${wordUint(BigInt(callData.length / 2))}${padRight(callData)}`;
-  });
-  const offsets: string[] = [];
-  // Dynamic-array element offsets are relative to the element-offset table
-  // (immediately after the array length), not to the beginning of the array.
-  let offset = BigInt(tokenAddresses.length * 32);
-  for (const call of calls) {
-    offsets.push(wordUint(offset));
-    offset += BigInt(call.length / 2);
-  }
-  return `0x${MULTICALL3_AGGREGATE3_SELECTOR}${wordUint(32n)}${wordUint(BigInt(tokenAddresses.length))}${offsets.join("")}${calls.join("")}`;
-}
-
+/**
+ * Decodes each `aggregate3` tuple (via the shared pure Multicall3 codec) into
+ * an ERC-20 balance. `allowFailure: true` still surfaces a per-token revert
+ * as an explicit error rather than a fabricated balance; only a genuinely
+ * empty return (undeployed contract at this historical block) is zero.
+ */
 function decodeAggregate3Balances(value: unknown, tokenAddresses: readonly string[], context: ProviderAttemptContext): bigint[] {
-  if (typeof value !== "string" || !/^0x(?:[0-9a-fA-F]{2})*$/.test(value)) throw invalidResponse(context);
-  const hex = value.slice(2);
-  const word = (offset: number) => {
-    const valueAtOffset = hex.slice(offset * 2, (offset + 32) * 2);
-    if (valueAtOffset.length !== 64) throw invalidResponse(context);
-    return BigInt(`0x${valueAtOffset}`);
-  };
-  const arrayOffset = Number(word(0));
-  if (!Number.isSafeInteger(arrayOffset) || arrayOffset < 32 || arrayOffset % 32 !== 0) throw invalidResponse(context);
-  const length = Number(word(arrayOffset));
-  if (length !== tokenAddresses.length) throw invalidResponse(context);
-  const tupleBase = arrayOffset + 32;
-  const balances: bigint[] = [];
-  for (let index = 0; index < length; index += 1) {
-    const tupleOffset = Number(word(tupleBase + index * 32));
-    const tupleStart = tupleBase + tupleOffset;
-    if (!Number.isSafeInteger(tupleOffset) || tupleOffset < length * 32 || tupleStart % 32 !== 0) {
-      throw invalidResponse(context);
-    }
-    const success = word(tupleStart);
-    if (success === 0n) {
+  if (typeof value !== "string") throw invalidResponse(context);
+  let results;
+  try {
+    results = decodeAggregate3Result(value, tokenAddresses.length);
+  } catch (error: unknown) {
+    throw invalidResponse(context, error);
+  }
+  return results.map((result, index) => {
+    if (!result.success) {
       throw new EvmDataError({
         code: "INVALID_PROVIDER_RESPONSE",
         message: `Alchemy Multicall balanceOf reverted for ${tokenAddresses[index]}.`,
@@ -459,36 +440,18 @@ function decodeAggregate3Balances(value: unknown, tokenAddresses: readonly strin
         chainId: context.chain.chainId,
       });
     }
-    if (success !== 1n) throw invalidResponse(context);
-    const dataOffset = Number(word(tupleStart + 32));
-    const dataStart = tupleStart + dataOffset;
-    const dataLength = Number(word(dataStart));
-    if (!Number.isSafeInteger(dataOffset) || !Number.isSafeInteger(dataLength) || dataOffset !== 64) throw invalidResponse(context);
     // An eth_call to an address without code succeeds and returns 0x. At the
     // requested historical block that means this contract was not deployed,
     // so its ERC-20 balance is deterministically zero.
-    if (dataLength === 0) {
-      balances.push(0n);
-      continue;
-    }
-    if (dataLength !== 32) throw invalidResponse(context);
-    balances.push(word(dataStart + 32));
-  }
-  return balances;
-}
-
-function wordUint(value: bigint): string {
-  if (value < 0n || value >= 1n << 256n) throw new Error("ABI uint256 out of range.");
-  return value.toString(16).padStart(64, "0");
+    if (result.returnData === "0x") return 0n;
+    if (!/^0x[0-9a-fA-F]{64}$/.test(result.returnData)) throw invalidResponse(context);
+    return BigInt(result.returnData);
+  });
 }
 
 function wordAddress(value: string): string {
   if (!/^0x[0-9a-fA-F]{40}$/.test(value)) throw new Error("Invalid ABI address.");
   return value.slice(2).toLowerCase().padStart(64, "0");
-}
-
-function padRight(value: string): string {
-  return value.padEnd(Math.ceil(value.length / 64) * 64, "0");
 }
 
 /** Alchemy JSON-RPC authenticates with the key in the `/v2/<key>` path. */

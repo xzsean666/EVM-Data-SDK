@@ -31,7 +31,17 @@ export type ErrorCode =
   | "SING_BOX_START_TIMEOUT"
   | "SING_BOX_EXITED"
   | "SING_BOX_CONFIG_INVALID"
-  | "PROXY_NOT_READY";
+  | "PROXY_NOT_READY"
+  | "ARCHIVE_RPC_UNAVAILABLE"
+  | "ARCHIVE_RPC_WRONG_CHAIN"
+  | "ARCHIVE_STATE_UNAVAILABLE"
+  | "RPC_BLOCK_NOT_FOUND"
+  | "RPC_BLOCK_REORG_DETECTED"
+  | "RPC_RESPONSE_INVALID"
+  | "MULTICALL_NOT_DEPLOYED_AT_BLOCK"
+  | "MULTICALL_RESPONSE_INVALID"
+  | "CHAINLINK_PRICE_DATA_UNAVAILABLE"
+  | "DEFI_EXCHANGE_RATE_DATA_UNAVAILABLE";
 
 export interface EvmDataErrorOptions {
   readonly code: ErrorCode;
@@ -156,5 +166,102 @@ export function unsupportedOperation(
     message,
     retryable: false,
     chainId: chainId ?? null,
+  });
+}
+
+export function archiveRpcUnavailable(message: string, cause?: unknown): EvmDataError {
+  return new EvmDataError({
+    code: "ARCHIVE_RPC_UNAVAILABLE",
+    message,
+    retryable: true,
+    chainId: 1,
+    ...(cause === undefined ? {} : { cause }),
+  });
+}
+
+export function multicallNotDeployedAtBlock(message: string): EvmDataError {
+  return new EvmDataError({
+    code: "MULTICALL_NOT_DEPLOYED_AT_BLOCK",
+    message,
+    retryable: false,
+    chainId: 1,
+  });
+}
+
+export function chainlinkPriceDataUnavailable(message: string, cause?: unknown): EvmDataError {
+  return new EvmDataError({
+    code: "CHAINLINK_PRICE_DATA_UNAVAILABLE",
+    message,
+    retryable: false,
+    chainId: 1,
+    ...(cause === undefined ? {} : { cause }),
+  });
+}
+
+export function defiExchangeRateDataUnavailable(message: string, cause?: unknown): EvmDataError {
+  return new EvmDataError({
+    code: "DEFI_EXCHANGE_RATE_DATA_UNAVAILABLE",
+    message,
+    retryable: false,
+    ...(cause === undefined ? {} : { cause }),
+  });
+}
+
+export function archiveRpcWrongChain(message: string, cause?: unknown): EvmDataError {
+  return new EvmDataError({
+    code: "ARCHIVE_RPC_WRONG_CHAIN",
+    message,
+    retryable: false,
+    chainId: 1,
+    ...(cause === undefined ? {} : { cause }),
+  });
+}
+
+export function archiveStateUnavailable(message: string, cause?: unknown): EvmDataError {
+  return new EvmDataError({
+    code: "ARCHIVE_STATE_UNAVAILABLE",
+    message,
+    retryable: true,
+    chainId: 1,
+    ...(cause === undefined ? {} : { cause }),
+  });
+}
+
+export function rpcBlockNotFound(message: string, cause?: unknown): EvmDataError {
+  return new EvmDataError({
+    code: "RPC_BLOCK_NOT_FOUND",
+    message,
+    retryable: true,
+    chainId: 1,
+    ...(cause === undefined ? {} : { cause }),
+  });
+}
+
+export function rpcBlockReorgDetected(message: string): EvmDataError {
+  return new EvmDataError({
+    code: "RPC_BLOCK_REORG_DETECTED",
+    message,
+    retryable: true,
+    chainId: 1,
+  });
+}
+
+export function rpcResponseInvalid(message: string, cause?: unknown): EvmDataError {
+  return new EvmDataError({
+    code: "RPC_RESPONSE_INVALID",
+    message,
+    retryable: false,
+    chainId: 1,
+    ...(cause === undefined ? {} : { cause }),
+  });
+}
+
+export function multicallResponseInvalid(message: string, cause?: unknown): EvmDataError {
+  return new EvmDataError({
+    code: "MULTICALL_RESPONSE_INVALID",
+    message,
+    retryable: false,
+    chainId: 1,
+    ...(cause === undefined ? {} : { cause }),
   });
 }

@@ -151,6 +151,76 @@ type NormalizedProviderConfiguration =
   | NormalizedAlchemyConfiguration
   | NormalizedMoralisConfiguration;
 
+/**
+ * One direct-only Ethereum Archive RPC endpoint used exclusively by the
+ * opt-in Chainlink Archive RPC feature (see ADR-028/ADR-029). Never routed
+ * through `ProxyPool` or `SingBoxProxyManager`.
+ */
+export interface EthereumArchiveRpcEndpointConfiguration {
+  /** Unique redaction-safe identifier used in status and telemetry. */
+  readonly id: string;
+  /** HTTPS JSON-RPC URL. It may contain a caller-owned token and is secret. */
+  readonly url: string;
+  readonly enabled?: boolean;
+}
+
+export interface ChainlinkConfiguration {
+  readonly enabled?: boolean;
+  /** Defaults to true when chainlink.enabled is true. */
+  readonly useBuiltinEthereumArchiveRpcs?: boolean;
+  /** Appended to built-ins; IDs and normalized URLs must be unique. */
+  readonly rpcEndpoints?: readonly EthereumArchiveRpcEndpointConfiguration[];
+  readonly healthCheckTimeoutMs?: number;
+  readonly attemptTimeoutMs?: number;
+  readonly totalTimeoutMs?: number;
+  readonly maxCallsPerMulticall?: number;
+  readonly maxRpcAttempts?: number;
+}
+
+export interface NormalizedEthereumArchiveRpcEndpointConfiguration {
+  readonly id: string;
+  readonly url: string;
+  readonly enabled: boolean;
+}
+
+export interface NormalizedChainlinkConfiguration {
+  readonly enabled: boolean;
+  readonly useBuiltinEthereumArchiveRpcs: boolean;
+  readonly rpcEndpoints: readonly NormalizedEthereumArchiveRpcEndpointConfiguration[];
+  readonly healthCheckTimeoutMs: number;
+  readonly attemptTimeoutMs: number;
+  readonly totalTimeoutMs: number;
+  readonly maxCallsPerMulticall: number;
+  readonly maxRpcAttempts: number;
+}
+
+export interface DeFiConfiguration {
+  readonly enabled?: boolean;
+  /** Defaults to both supported chains when DeFi is enabled. */
+  readonly chains?: readonly ("ethereum" | "base")[];
+  /** Defaults to true when DeFi is enabled. */
+  readonly useBuiltinArchiveRpcs?: boolean;
+  /** Explicit endpoint lists are appended to the corresponding built-in pool. */
+  readonly rpcEndpoints?: Partial<Record<"ethereum" | "base", readonly EthereumArchiveRpcEndpointConfiguration[]>>;
+  readonly healthCheckTimeoutMs?: number;
+  readonly attemptTimeoutMs?: number;
+  readonly totalTimeoutMs?: number;
+  readonly maxCallsPerMulticall?: number;
+  readonly maxRpcAttempts?: number;
+}
+
+export interface NormalizedDeFiConfiguration {
+  readonly enabled: boolean;
+  readonly chains: readonly ("ethereum" | "base")[];
+  readonly useBuiltinArchiveRpcs: boolean;
+  readonly rpcEndpoints: Readonly<Record<"ethereum" | "base", readonly NormalizedEthereumArchiveRpcEndpointConfiguration[]>>;
+  readonly healthCheckTimeoutMs: number;
+  readonly attemptTimeoutMs: number;
+  readonly totalTimeoutMs: number;
+  readonly maxCallsPerMulticall: number;
+  readonly maxRpcAttempts: number;
+}
+
 export interface ClientConfiguration {
   readonly providers?: readonly ProviderConfiguration[];
   readonly price?: PriceConfiguration;
@@ -162,6 +232,10 @@ export interface ClientConfiguration {
   readonly maxRangeRecords?: number;
   /** Explicit progress bound for adaptive closed-range splitting. */
   readonly maxRangeWindows?: number;
+  /** Opt-in Chainlink Archive RPC snapshot feature (v0.4, ADR-028). */
+  readonly chainlink?: ChainlinkConfiguration;
+  /** Opt-in exact-block DeFi exchange-rate snapshot feature (v0.5). */
+  readonly defi?: DeFiConfiguration;
   readonly logger?: ObservationCallback;
   readonly telemetry?: ObservationCallback;
 }
@@ -175,6 +249,8 @@ export interface NormalizedClientConfiguration {
   readonly maxRangeRecords: number;
   readonly maxRangeWindows: number;
   readonly price?: NormalizedPriceConfiguration;
+  readonly chainlink: NormalizedChainlinkConfiguration;
+  readonly defi: NormalizedDeFiConfiguration;
   readonly logger?: ObservationCallback;
   readonly telemetry?: ObservationCallback;
 }
@@ -230,6 +306,39 @@ const priceSchema = z.object({
   tokenAliases: z.record(z.string().trim().min(1).max(128), z.string().trim().min(1).max(128)).optional().default({}),
   geckoNetworks: z.array(z.string().trim().min(1).max(128)).min(1).max(64).optional().default(["eth", "bsc", "polygon_pos", "arbitrum", "base", "optimism"]),
 }).strict();
+const archiveRpcEndpointSchema = z
+  .object({
+    id: z.string().trim().min(1).max(128),
+    url: z.string().trim().min(1).max(8192),
+    enabled: z.boolean().optional().default(true),
+  })
+  .strict();
+const chainlinkSchema = z
+  .object({
+    enabled: z.boolean().optional().default(false),
+    useBuiltinEthereumArchiveRpcs: z.boolean().optional(),
+    rpcEndpoints: z.array(archiveRpcEndpointSchema).max(64).optional().default([]),
+    healthCheckTimeoutMs: z.number().int().positive().max(86_400_000).default(DEFAULT_ATTEMPT_TIMEOUT_MS),
+    attemptTimeoutMs: z.number().int().positive().max(86_400_000).default(DEFAULT_ATTEMPT_TIMEOUT_MS),
+    totalTimeoutMs: z.number().int().positive().max(86_400_000).default(DEFAULT_TOTAL_TIMEOUT_MS),
+    maxCallsPerMulticall: z.number().int().min(1).max(1000).default(100),
+    maxRpcAttempts: z.number().int().min(1).max(20).default(5),
+  })
+  .strict();
+const defiSchema = z.object({
+  enabled: z.boolean().optional().default(false),
+  chains: z.array(z.enum(["ethereum", "base"])).min(1).max(2).optional(),
+  useBuiltinArchiveRpcs: z.boolean().optional(),
+  rpcEndpoints: z.object({
+    ethereum: z.array(archiveRpcEndpointSchema).max(64).optional().default([]),
+    base: z.array(archiveRpcEndpointSchema).max(64).optional().default([]),
+  }).strict().optional().default({ ethereum: [], base: [] }),
+  healthCheckTimeoutMs: z.number().int().positive().max(86_400_000).default(DEFAULT_ATTEMPT_TIMEOUT_MS),
+  attemptTimeoutMs: z.number().int().positive().max(86_400_000).default(DEFAULT_ATTEMPT_TIMEOUT_MS),
+  totalTimeoutMs: z.number().int().positive().max(86_400_000).default(DEFAULT_TOTAL_TIMEOUT_MS),
+  maxCallsPerMulticall: z.number().int().min(1).max(1000).default(100),
+  maxRpcAttempts: z.number().int().min(1).max(20).default(5),
+}).strict();
 const clientShapeSchema = z
   .object({
     providers: z.array(providerSchema).max(32).optional().default([]),
@@ -240,6 +349,8 @@ const clientShapeSchema = z
     advancedProxy: advancedProxySchema.optional(),
     maxRangeRecords: z.number().int().positive().max(10_000_000).default(DEFAULT_MAX_RANGE_RECORDS),
     maxRangeWindows: z.number().int().positive().max(1_000_000).default(DEFAULT_MAX_RANGE_WINDOWS),
+    chainlink: chainlinkSchema.optional(),
+    defi: defiSchema.optional(),
     logger: z.custom<ObservationCallback>((value) => typeof value === "function").optional(),
     telemetry: z.custom<ObservationCallback>((value) => typeof value === "function").optional(),
   })
@@ -252,9 +363,19 @@ export function parseClientConfiguration(input: unknown): NormalizedClientConfig
   }
 
   const providers = parsed.data.providers.map((provider) => normalizeProvider(provider));
-  if (parsed.data.providers.length === 0 && parsed.data.price === undefined) {
-    throw invalidConfiguration("Configure at least one blockchain or price provider.");
-  }
+  const chainlink = normalizeChainlinkConfiguration(
+    parsed.data.chainlink ?? {
+      enabled: false,
+      rpcEndpoints: [],
+      healthCheckTimeoutMs: DEFAULT_ATTEMPT_TIMEOUT_MS,
+      attemptTimeoutMs: DEFAULT_ATTEMPT_TIMEOUT_MS,
+      totalTimeoutMs: DEFAULT_TOTAL_TIMEOUT_MS,
+      maxCallsPerMulticall: 100,
+      maxRpcAttempts: 5,
+    },
+  );
+  const defi = normalizeDeFiConfiguration(parsed.data.defi ?? { enabled: false, rpcEndpoints: { ethereum: [], base: [] }, healthCheckTimeoutMs: DEFAULT_ATTEMPT_TIMEOUT_MS, attemptTimeoutMs: DEFAULT_ATTEMPT_TIMEOUT_MS, totalTimeoutMs: DEFAULT_TOTAL_TIMEOUT_MS, maxCallsPerMulticall: 100, maxRpcAttempts: 5 });
+  if (parsed.data.providers.length === 0 && parsed.data.price === undefined && !chainlink.enabled && !defi.enabled) throw invalidConfiguration("Configure at least one blockchain or price provider, or enable Chainlink or DeFi.");
   const price = normalizePriceConfiguration(parsed.data.price ?? {
     routeMode: "direct",
     attemptTimeoutMs: DEFAULT_ATTEMPT_TIMEOUT_MS,
@@ -263,9 +384,7 @@ export function parseClientConfiguration(input: unknown): NormalizedClientConfig
     tokenAliases: {},
     geckoNetworks: ["eth", "bsc", "polygon_pos", "arbitrum", "base", "optimism"],
   });
-  if (providers.length === 0 && price.providers.length === 0) {
-    throw invalidConfiguration("Configure at least one blockchain or price provider.");
-  }
+  if (providers.length === 0 && price.providers.length === 0 && !chainlink.enabled && !defi.enabled) throw invalidConfiguration("Configure at least one blockchain or price provider, or enable Chainlink or DeFi.");
   const chains = parsed.data.chains.map((chain) => parseChainDefinition(chain));
   const requestPolicy = normalizeRequestPolicy(parsed.data.requestPolicy ?? {});
   const proxies = parsed.data.proxies.map((proxy) => normalizeProxy(proxy));
@@ -282,11 +401,96 @@ export function parseClientConfiguration(input: unknown): NormalizedClientConfig
     maxRangeRecords: parsed.data.maxRangeRecords,
     maxRangeWindows: parsed.data.maxRangeWindows,
     price,
+    chainlink,
+    defi,
     ...(parsed.data.logger === undefined ? {} : { logger: parsed.data.logger }),
     ...(parsed.data.telemetry === undefined ? {} : { telemetry: parsed.data.telemetry }),
   };
 
   return Object.freeze(configuration);
+}
+
+function normalizeDeFiConfiguration(value: z.output<typeof defiSchema>): NormalizedDeFiConfiguration {
+  if (value.totalTimeoutMs < value.attemptTimeoutMs) throw invalidConfiguration("defi.totalTimeoutMs must be at least defi.attemptTimeoutMs.");
+  const chains = value.chains ?? ["ethereum", "base"];
+  const useBuiltinArchiveRpcs = value.useBuiltinArchiveRpcs ?? value.enabled;
+  if (new Set(chains).size !== chains.length) throw invalidConfiguration("defi.chains must not contain duplicates.");
+  const normalizeEndpoints = (chain: "ethereum" | "base"): readonly NormalizedEthereumArchiveRpcEndpointConfiguration[] => {
+    const ids = new Set<string>(); const urls = new Set<string>();
+    return Object.freeze(value.rpcEndpoints[chain].map((endpoint) => {
+      const id = endpoint.id.trim();
+      if (ids.has(id)) throw invalidConfiguration(`defi.rpcEndpoints.${chain} ids must be unique.`);
+      ids.add(id);
+      let url: URL; try { url = new URL(endpoint.url); } catch { throw invalidConfiguration(`defi.rpcEndpoints.${chain} urls must be valid HTTPS URLs.`); }
+      if (url.protocol !== "https:" || urls.has(url.toString())) throw invalidConfiguration(`defi.rpcEndpoints.${chain} urls must be unique HTTPS URLs.`);
+      urls.add(url.toString());
+      return Object.freeze({ id, url: endpoint.url.trim(), enabled: endpoint.enabled });
+    }));
+  };
+  const rpcEndpoints = Object.freeze({ ethereum: normalizeEndpoints("ethereum"), base: normalizeEndpoints("base") });
+  if (value.enabled && !useBuiltinArchiveRpcs) {
+    for (const chain of chains) if (rpcEndpoints[chain].every((endpoint) => !endpoint.enabled)) throw invalidConfiguration(`defi is enabled for ${chain} but no Archive RPC endpoint is configured.`);
+  }
+  return Object.freeze({ enabled: value.enabled, chains: Object.freeze(chains), useBuiltinArchiveRpcs, rpcEndpoints, healthCheckTimeoutMs: value.healthCheckTimeoutMs, attemptTimeoutMs: value.attemptTimeoutMs, totalTimeoutMs: value.totalTimeoutMs, maxCallsPerMulticall: value.maxCallsPerMulticall, maxRpcAttempts: value.maxRpcAttempts });
+}
+
+function normalizeChainlinkConfiguration(
+  value: z.output<typeof chainlinkSchema>,
+): NormalizedChainlinkConfiguration {
+  const enabled = value.enabled;
+  const useBuiltinEthereumArchiveRpcs = value.useBuiltinEthereumArchiveRpcs ?? enabled;
+
+  if (value.totalTimeoutMs < value.attemptTimeoutMs) {
+    throw invalidConfiguration("chainlink.totalTimeoutMs must be at least chainlink.attemptTimeoutMs.");
+  }
+
+  const seenIds = new Set<string>();
+  const seenUrls = new Set<string>();
+  const rpcEndpoints = value.rpcEndpoints.map((endpoint) => {
+    const id = endpoint.id.trim();
+    if (id.length === 0 || seenIds.has(id)) {
+      throw invalidConfiguration("chainlink.rpcEndpoints ids must be unique and non-empty.");
+    }
+    seenIds.add(id);
+
+    let normalizedUrl: URL;
+    try {
+      normalizedUrl = new URL(endpoint.url);
+    } catch {
+      throw invalidConfiguration("chainlink.rpcEndpoints urls must be valid HTTPS URLs.");
+    }
+    if (normalizedUrl.protocol !== "https:") {
+      throw invalidConfiguration("chainlink.rpcEndpoints urls must use HTTPS.");
+    }
+    const dedupeKey = normalizedUrl.toString();
+    if (seenUrls.has(dedupeKey)) {
+      throw invalidConfiguration("chainlink.rpcEndpoints urls must be unique.");
+    }
+    seenUrls.add(dedupeKey);
+
+    return Object.freeze({
+      id,
+      url: endpoint.url.trim(),
+      enabled: endpoint.enabled,
+    });
+  });
+
+  if (enabled && !useBuiltinEthereumArchiveRpcs && rpcEndpoints.filter((endpoint) => endpoint.enabled).length === 0) {
+    throw invalidConfiguration(
+      "chainlink is enabled but no Archive RPC endpoint is configured: enable useBuiltinEthereumArchiveRpcs or supply rpcEndpoints.",
+    );
+  }
+
+  return Object.freeze({
+    enabled,
+    useBuiltinEthereumArchiveRpcs,
+    rpcEndpoints: Object.freeze(rpcEndpoints),
+    healthCheckTimeoutMs: value.healthCheckTimeoutMs,
+    attemptTimeoutMs: value.attemptTimeoutMs,
+    totalTimeoutMs: value.totalTimeoutMs,
+    maxCallsPerMulticall: value.maxCallsPerMulticall,
+    maxRpcAttempts: value.maxRpcAttempts,
+  });
 }
 
 function normalizeAdvancedProxy(

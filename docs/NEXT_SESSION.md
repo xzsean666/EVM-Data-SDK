@@ -1,17 +1,93 @@
 # Current Progress
 
-Last updated: 2026-08-06
+Last updated: 2026-08-08
 
-Workflow state: Step 5 review complete for Work Packages 1 through 9 and Price-0 through Price-5; release decisions and Git identity remain outside implementation scope.
+Workflow state: Step 4/5 v0.5 DeFi Exchange Rate Snapshot implementation in progress after v0.4 Chainlink Archive RPC/Multicall3; release decisions and Git identity remain outside implementation scope.
+
+## 2026-08-08 v0.5 DeFi Exchange Rate Snapshot
+
+The owner requested an exact-block DeFi Token -> Underlying exchange-rate
+module for Ethereum Mainnet and Base Mainnet. The design and handoff package
+is under `docs/DEFI_EXCHANGE_RATE_SNAPSHOT/`. Source implementation is the
+current work package; no live claim is made until bounded public RPC smoke
+checks pass.
+
+Planned bounded packages:
+
+1. Parameterize Archive RPC pool/executor/RpcService for chain ID and
+   per-chain Multicall3 deployment boundaries; add Base public endpoint pool.
+2. Add DeFi domain contracts, committed Ethereum/Base token manifests, and
+   pure protocol adapters (LST, fixed lending, ERC-4626, Compound V2, LP).
+3. Compose `client.defi`, initialize all enabled chain pools, and export the
+   public models/configuration.
+4. Add fixture tests, endpoint fallback tests, package checks, and record live
+   verification evidence.
+
+Completed implementation record (2026-08-08):
+
+- Added chain-scoped Archive RPC support to `RpcService`, including Base's
+  Multicall3 deployment boundary and committed Base public candidate pool.
+  Existing Ethereum/Chainlink behavior remains covered by the deterministic
+  suite.
+- Added `src/domain/defiExchangeRateModels.ts`, committed Ethereum/Base DeFi
+  registry definitions, pure fixed-ratio/wstETH/rETH/ERC-4626/Compound V2/LP
+  adapters, and `DeFiExchangeRateService`. `client.defi` is nullable unless
+  `defi.enabled` is set; enabled pools are initialized alongside Chainlink.
+- Added deterministic tests for all adapters, partial and all-failure service
+  results, exact block normalization, LP legs, token subsets, deployment
+  filtering, Base boundary selection, and Base client-pool initialization.
+- `pnpm typecheck`, `pnpm lint`, and `pnpm test` pass (333 tests).
+
+Chainlink-underlying expansion (2026-08-08): every default DeFi underlying
+now maps to a committed Chainlink asset identity, enforced by
+`tests/unit/defi-registry.test.ts`. Aave V2/V3 uses official address-book
+addresses and dynamic normalized-income ray arithmetic; fixed 1:1 aToken
+mapping was removed. Unsupported identities such as frxETH are not included
+until a committed Chainlink mapping exists.
+- Address/runtime follow-up: official Aave address-book entries were checked
+  at one exact current block. All 26 expanded Ethereum entries and all 7
+  expanded Base entries had deployed bytecode and positive Pool normalized
+  income at endpoint IDs `drpc-public` and `base-drpc`, respectively. No URL,
+  calldata, returndata, or rate was recorded.
+
+Live verification follow-up (2026-08-07): a direct, unauthenticated
+`eth_getCode` sweep of every registry address found three fabricated Base
+`underlyings` addresses (`USDbC`, `cbETH`, `wstETH` legs on the Aave V3
+entries); they were corrected against the official `bgd-labs/aave-address-book`
+`AaveV3BaseAssets` source and re-confirmed on-chain. `base-publicnode` was
+removed from `BUILTIN_BASE_ARCHIVE_RPCS` because it rejects historical
+`eth_call`/`eth_getCode` with "Archive requests require a personal token",
+the same failure already recorded for Ethereum PublicNode. Base's Multicall3
+deployment block (`5022`) was confirmed live against three independent
+endpoints. After these fixes, an opt-in live run of
+`client.defi.getExchangeRatesAtBlock()` against the public built-in Archive
+RPC pools succeeded with zero failures for all 10 Ethereum tokens (block
+21,000,000) and all 5 Base tokens (block 25,000,000). See
+`docs/INTEGRATIONS.md` section 18 for full evidence. No URL, calldata,
+return data, or rate value was logged.
+
+Non-negotiable invariants: direct-only Archive RPC; no background health timer;
+random healthy endpoint permutation; one endpoint pinned per operation; full
+restart after retryable endpoint failure; exact decimal-string arithmetic;
+per-token partial failures; no runtime token-list discovery.
 
 ## 2026-08-07 v0.4 Proposal: Chainlink Historical Prices via Ethereum Archive RPC and Multicall3
 
-**Status:** Approved by the owner on 2026-08-07. Source implementation is
-authorized within the accepted v0.4 architecture in
-`docs/CHAINLINK_ETHEREUM_ARCHIVE_RPC_MULTICALL3_UPGRADE.md`. P0 verification is
-complete; see `docs/DECISIONS.md` ADR-028/ADR-029 and `docs/INTEGRATIONS.md`
-sections 15-17 for recorded evidence. Work proceeds P1 through P6 as bounded
-packages.
+**Status:** Approved by the owner on 2026-08-07. P0 through P5 are complete:
+pure ABI codecs (Multicall3 `aggregate3`, Chainlink `AggregatorV3Interface`),
+`ArchiveRpcTransport`/`EthereumArchiveRpcExecutor`/`EthereumArchiveRpcPool`
+(direct-only, random-pinned, restart-on-retry per ADR-029), `RpcService`
+(`multicallAtBlock`), `ChainlinkService`
+(`getTokenPricesAtBlock`), `EvmDataClient` wiring (`client.rpc`/`client.chainlink`,
+concurrent Archive RPC pool + managed proxy initialization), and full unit
+test coverage (`tests/unit/chainlink-service.test.ts`,
+`tests/unit/client.test.ts`, `tests/unit/archive-rpc-transport.test.ts`, and
+related Multicall3/RPC-service suites). P6 (review, documentation, packaging,
+verification) is in progress: this file, `README.md`, and
+`scripts/probe-ethereum-archive-rpcs.mjs` (with its `pnpm
+probe:ethereum-archive-rpcs` script entry) were added/updated as part of P6.
+See `docs/DECISIONS.md` ADR-028/ADR-029 and `docs/INTEGRATIONS.md` sections
+15-17 for recorded P0 evidence.
 
 **Design source:**
 `docs/CHAINLINK_ETHEREUM_ARCHIVE_RPC_MULTICALL3_UPGRADE.md`
@@ -21,6 +97,14 @@ packages.
 
 **RPC/feed maintenance:**
 `docs/CHAINLINK_ETHEREUM_ARCHIVE_RPC_MAINTENANCE.md`
+
+**Adding another chain (e.g. Base) to this feature:**
+`docs/CHAINLINK_ARCHIVE_RPC_MULTICALL3_ADD_CHAIN_HANDOFF.md` is a
+self-contained handoff for a future AI session: current Ethereum-only
+architecture, every hardcoded `chainId: 1`/Ethereum assumption and its exact
+file/line, and the required work packages to add a second chain without
+breaking Ethereum. Give that document directly to the next AI along with
+`Agent.md`.
 
 The proposal adds an opt-in Ethereum Mainnet Chainlink namespace that accepts
 one block number and reads every enabled standard Crypto/USD feed in a
@@ -53,10 +137,13 @@ Nodies, and Tenderly. This is only a verification snapshot.
   section 17) was fetched and filtered by the exact v0.4 selection rule
   (`productTypeCode == "RefPrice"`, `docs.quoteAsset == "USD"`,
   `docs.assetClass == "Crypto"`, no `secondaryProxyAddress`, not
-  `docs.hidden`, no `docs.shutdownDate`). This yields 72 standard Crypto/USD
-  feeds with zero duplicate addresses or names; the six core mappings in the
-  proposal's sample table (ETH/USD, BTC/USD, LINK/USD, USDC/USD, USDT/USD,
-  DAI/USD) match exactly.
+  `docs.hidden`, no `docs.shutdownDate`). This yields **71** standard
+  Crypto/USD feeds with zero duplicate addresses or names; the six core
+  mappings in the proposal's sample table (ETH/USD, BTC/USD, LINK/USD,
+  USDC/USD, USDT/USD, DAI/USD) match exactly. (An earlier pass miscounted 72
+  by not separately applying the `docs.shutdownDate` exclusion to DOLO/USD,
+  which has no `docs.hidden` flag; see `INTEGRATIONS.md` section 16 for the
+  correction.)
 - A live `aggregate3` call encoding `latestRoundData()` + `decimals()` for the
   ETH/USD proxy at block 18,000,000 decoded identically to a direct
   `latestRoundData()` call, confirming selector `0x82ad56cb` and the tuple

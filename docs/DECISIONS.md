@@ -544,3 +544,38 @@ These are not architecture blockers for writing code until their named milestone
 - Whether support should include Node.js 22 in addition to Node.js 24; decide after package smoke tests.
 - Whether custom provider adapters are experimental or part of the supported v0.1 public API.
 - Default provider request pacing when callers do not state their plan. The safe proposal is conservative per-provider defaults with configuration overrides.
+
+## ADR-030: DeFi exchange rates are a separate exact-block snapshot operation
+
+**Status:** Accepted by owner in the v0.5 implementation request
+
+**Decision:** Add a dedicated `client.defi.getExchangeRatesAtBlock()` service
+backed by committed per-chain token definitions and pure protocol adapters. Do
+not merge its output into market candles or Chainlink prices. Use exact
+Multicall3 `eth_call` reads at one requested block and return per-token
+failures with partial-success semantics.
+
+**Reason:** Exchange rates are protocol state (shares/assets, lending indexes,
+and LP reserves), not a trade price or oracle answer. Keeping the operation
+separate preserves identity, precision, and future extension boundaries.
+
+**Trade-off:** The registry requires maintenance as protocol deployments and
+ABIs evolve; in return, callers get deterministic reproducible snapshots and
+no runtime token discovery.
+
+## ADR-031: Archive RPC pools are chain-scoped, random-pinned, and restartable
+
+**Status:** Accepted by owner in the v0.5 implementation request
+
+**Decision:** Parameterize the existing Archive RPC pool/executor by chain
+identity and verified Multicall3 deployment boundary. Maintain independent
+Ethereum and Base public endpoint pools. Each operation shuffles healthy
+endpoints, pins all batches to one endpoint, and on retryable failure discards
+partial results before trying the next endpoint once.
+
+**Reason:** Public archive services differ in chain support, historical depth,
+and rate behavior. Cross-chain endpoint reuse or per-batch endpoint switching
+can mix inconsistent state.
+
+**Trade-off:** A request may repeat all batches after an endpoint failure, but
+the result is internally consistent and endpoint failures are isolated.

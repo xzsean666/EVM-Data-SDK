@@ -443,14 +443,26 @@ against every configured feed proxy.
 - Applying the exact v0.4 selection rule (`productTypeCode == "RefPrice"`,
   `docs.quoteAsset == "USD"`, `docs.assetClass == "Crypto"`, no
   `secondaryProxyAddress`, `docs.hidden` not true, no `docs.shutdownDate`)
-  yields 72 standard feeds with zero duplicate `proxyAddress` or `name`
+  yields **71** standard feeds with zero duplicate `proxyAddress` or `name`
   values. The six core mappings in the upgrade proposal (ETH/USD, BTC/USD,
   LINK/USD, USDC/USD, USDT/USD, DAI/USD) match this filtered set exactly.
+  (Correction: an earlier pass through this same rule miscounted 72 by
+  stopping after the `docs.hidden` exclusion and not separately applying the
+  `docs.shutdownDate` exclusion. One entry, DOLO/USD, has no `docs.hidden`
+  flag but does carry `docs.shutdownDate: "April 29th, 2026"`, so it must
+  still be excluded. Re-deriving the filter against a byte-identical copy of
+  the same source file, verified by matching SHA-256, confirms 71 is correct.)
 - SVR/shared-SVR feeds (for example a EUR/USD entry carrying
   `secondaryProxyAddress`) and hidden/deprecating feeds (for example a
-  BAT/USD entry with `docs.hidden: true` and a `docs.shutdownDate`) are
-  confirmed present in the source data, so the exclusion rules are exercised
-  against real records, not only a hypothetical schema.
+  BAT/USD entry with `docs.hidden: true` and a `docs.shutdownDate`, and a
+  DOLO/USD entry with only `docs.shutdownDate` set) are confirmed present in
+  the source data, so the exclusion rules are exercised against real
+  records, not only a hypothetical schema.
+- One filtered entry, "U / USD" (`proxyAddress`
+  `0xF6351B2dCF0110E76c71C1d319Af2f410454B6f3`, `decimals: 18`), has no
+  `docs.baseAsset` key (only `baseAssetClic`/`baseAssetEntityId`). The
+  generator falls back to deriving `baseAsset` from splitting `name` on
+  `" / "` for entries missing this field.
 
 **Important notes:**
 
@@ -503,3 +515,81 @@ probed only when a caller enables `chainlink.enabled` and calls
   is not a rate-limit, retention, or terms guarantee; see
   `CHAINLINK_ETHEREUM_ARCHIVE_RPC_MAINTENANCE.md` for the update procedure
   and rejected-candidate history.
+
+## 18. DeFi Exchange Rate Snapshot integrations (v0.5)
+
+The module uses no new runtime dependency. It reuses Multicall3
+`aggregate3((address,bool,bytes)[])` and the direct-only Archive RPC transport.
+Protocol ABI selectors and mapping rules are recorded in
+`docs/DEFI_EXCHANGE_RATE_SNAPSHOT/UPGRADE.md` and covered by fixture tests.
+
+The Ethereum built-in Archive RPC registry retains the five verified
+endpoints and adds additional public candidates where the maintenance check
+confirms exact historical `eth_call` support. Base has a separate registry
+(`src/rpc/builtinBaseArchiveRpcs.ts`) with chain ID `0x2105`; Base endpoints are
+never probed as Ethereum endpoints. Public endpoints are best-effort,
+unauthenticated services and may change archive retention or rate limits.
+
+Initial manifest sources are official Lido, Rocket Pool, Aave, Compound,
+Maker/Sky ERC-4626, Frax, Coinbase, and Uniswap contract/address
+documentation. The registry is committed and versioned; runtime never calls
+token-list or protocol metadata APIs. Address/ABI changes require rechecking
+official sources and updating fixtures before changing the manifest.
+
+**Chainlink-underlying selection rule (2026-08-08):** The default DeFi
+registry is a reviewed allowlist, not a token-list crawl. Each underlying leg
+records a `chainlinkAssetSymbol`, and a deterministic test requires that
+identity to appear in the committed Chainlink Ethereum feed manifest. Aave
+V2/V3 token and underlying addresses are sourced from the official
+`bgd-labs/aave-address-book`. Aave aToken rates use Pool
+`getReserveNormalizedIncome(address)` (`0xd15e0053`) and exact ray arithmetic,
+rather than a fixed 1:1 assumption. Base entries use Base-specific official
+addresses with the same committed asset identity allowlist.
+
+**Aave address/runtime verification (2026-08-08):** An opt-in direct RPC
+check at one exact current block confirmed deployed bytecode and a positive
+`getReserveNormalizedIncome` result for all 26 added Ethereum Aave entries on
+endpoint ID `drpc-public`, and all 7 added Base entries on endpoint ID
+`base-drpc`. The check logged only chain ID, endpoint ID, fixed block number,
+and pass counts; it did not log URLs, calldata, returndata, or rates.
+
+**Base Multicall3 deployment and candidate pool verification (2026-08-07):**
+a direct, unauthenticated `eth_getCode` check against
+`0xcA11bde05977b3631167028862bE2a173976CA11` on three independent Base public
+endpoints (`base.drpc.org`, `base-mainnet.public.blastapi.io`,
+`base.meowrpc.com`) returned empty bytecode at block `5021` and the canonical
+Multicall3 runtime bytecode at block `5022`, confirming
+`MULTICALL3_BASE_MAINNET_DEPLOYMENT_BLOCK = 5022n` in
+`src/rpc/EthereumMulticall3Codec.ts`. All three endpoints also answered
+`eth_chainId` with `0x2105`. `base.publicnode.com` answered `eth_chainId`
+correctly but rejected `eth_getCode`/`eth_call` at that historical block with
+`"Archive requests require a personal token"` — the same failure mode already
+recorded for Ethereum's PublicNode candidate — so it was removed from
+`BUILTIN_BASE_ARCHIVE_RPCS` rather than kept as a false-positive built-in.
+This is only an endpoint/deployment-block verification snapshot.
+
+**DeFi token registry address correction (2026-08-07):** a follow-up
+`eth_getCode` sweep of every address in `src/defi/defiTokenRegistry.ts` found
+that all 14 Ethereum entries have deployed bytecode, but three Base
+`underlyings` addresses were incorrect (`USDbC`, `cbETH`, and `wstETH` legs on
+the `base:aave-v3:ausdbc`/`acbeth`/`awsteth` entries) — `eth_getCode` returned
+empty at those addresses. The five Aave V3 Base `aToken` addresses themselves
+were correct. Corrected values were sourced from the official
+`bgd-labs/aave-address-book` `AaveV3BaseAssets` Solidity constants
+(`USDbC_UNDERLYING = 0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA`,
+`cbETH_UNDERLYING = 0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22`,
+`wstETH_UNDERLYING = 0xc1CBa3fCea344f92D9239c08C0568f6F2F0ee452`) and
+re-confirmed with `eth_getCode` on `base.drpc.org`. The Base native `USDC`
+underlying address was also re-checksummed to
+`0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` during this pass; its value was
+already correct, only casing changed.
+
+**End-to-end live verification (2026-08-07):** after the address and endpoint
+corrections above, `client.defi.getExchangeRatesAtBlock()` was run opt-in
+against the public built-in Archive RPC pools (no proxy, no application
+credentials). All 10 configured Ethereum tokens resolved with zero failures
+at block `21,000,000`; all 5 configured Base tokens resolved with zero
+failures at block `25,000,000`. `multicallBatches` was 1 for each chain. No
+endpoint URL, calldata, return data, or resolved rate value was printed —
+only the aggregate summary (`configuredTokens`/`succeededTokens`/`failedTokens`
+/`multicallBatches`) and failure `tokenId`/`code` pairs, which were empty.
