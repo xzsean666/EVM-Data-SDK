@@ -112,6 +112,7 @@ describe("ChainlinkService.getTokenPricesAtBlock", () => {
     expect(result.prices).toHaveLength(1);
     const price = result.prices[0]!;
     expect(price.feedId).toBe(feed.id);
+    expect(price.tokenSymbol).toBe(feed.assetSymbol);
     expect(price.rawAnswer).toBe("300000000000");
     expect(price.price).toBe("3000");
     expect(price.decimals).toBe(8);

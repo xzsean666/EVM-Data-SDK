@@ -3,6 +3,7 @@ import type { HttpTransport } from "../../transport/HttpTransport";
 import type {
   CapabilityRequest,
   DataProviderAdapter,
+  ProviderBlockRangeItem,
   ProviderBlockRangeWindowResult,
   ProviderAttemptContext,
 } from "../DataProviderAdapter";
@@ -40,7 +41,13 @@ import {
 } from "./etherscanMapper";
 
 export const ETHERSCAN_V2_BASE_URL = "https://api.etherscan.io/v2/api";
-export const ETHERSCAN_MAX_PAGE_SIZE = MAX_PAGE_SIZE;
+/**
+ * Etherscan's account-list endpoints truncate each physical response at
+ * 1,000 records, including when a larger `offset` is requested. Keep this
+ * separate from the SDK's public logical page size (10,000) so callers can
+ * continue through provider cursors while every upstream page is complete.
+ */
+export const ETHERSCAN_MAX_PAGE_SIZE = 1_000;
 
 export interface EtherscanAdapterOptions {
   readonly transport?: HttpTransport;
@@ -69,7 +76,9 @@ export class EtherscanAdapter implements DataProviderAdapter {
     if (request.chain.routes.etherscan === undefined) return false;
     if (request.operation === "getNativeBalance") return true;
     if (request.operation === "getErc20TransfersByBlockRange") return true;
-    return "pageSize" in request.request && request.request.pageSize <= ETHERSCAN_MAX_PAGE_SIZE;
+    // The adapter can satisfy the SDK's public 10,000-record logical page
+    // through Etherscan's 1,000-record physical pages and provider cursors.
+    return "pageSize" in request.request && request.request.pageSize <= MAX_PAGE_SIZE;
   }
 
   async getTransactions(
@@ -80,7 +89,7 @@ export class EtherscanAdapter implements DataProviderAdapter {
     const body = await this.call("txlist", {
       address: request.address,
       page,
-      offset: request.pageSize,
+      offset: etherscanPageSize(request.pageSize),
       sort: request.order,
       ...(request.startBlock === null ? {} : { startblock: request.startBlock }),
       ...(request.endBlock === null ? {} : { endblock: request.endBlock }),
@@ -100,7 +109,7 @@ export class EtherscanAdapter implements DataProviderAdapter {
     }
     try {
       const items = envelope.data.result.map((item) => mapEtherscanTransaction(item, context.chain));
-      return pageResult(items, nextPage(items.length, request.pageSize, page), context);
+      return pageResult(items, nextPage(items.length, etherscanPageSize(request.pageSize), page), context);
     } catch (error: unknown) {
       throw invalidResponse(context, error);
     }
@@ -137,7 +146,7 @@ export class EtherscanAdapter implements DataProviderAdapter {
       address: request.address,
       ...(request.tokenAddress === null ? {} : { contractaddress: request.tokenAddress }),
       page,
-      offset: request.pageSize,
+      offset: etherscanPageSize(request.pageSize),
       sort: request.order,
       ...(request.startBlock === null ? {} : { startblock: request.startBlock }),
       ...(request.endBlock === null ? {} : { endblock: request.endBlock }),
@@ -162,7 +171,7 @@ export class EtherscanAdapter implements DataProviderAdapter {
         request.direction === "incoming" && item.to === request.address ||
         request.direction === "outgoing" && item.from === request.address
       ));
-      return pageResult(items, nextPage(allItems.length, request.pageSize, page), context);
+      return pageResult(items, nextPage(allItems.length, etherscanPageSize(request.pageSize), page), context);
     } catch (error: unknown) {
       throw invalidResponse(context, error);
     }
@@ -172,40 +181,51 @@ export class EtherscanAdapter implements DataProviderAdapter {
     request: NormalizedErc20BlockRangeRequest,
     context: ProviderAttemptContext,
   ): Promise<ProviderBlockRangeWindowResult> {
-    const body = await this.call("tokentx", {
-      address: request.address,
-      ...(request.tokenAddress === null ? {} : { contractaddress: request.tokenAddress }),
-      page: 1,
-      offset: ETHERSCAN_MAX_PAGE_SIZE,
-      sort: "asc",
-      startblock: request.startBlock,
-      endblock: request.endBlock,
-    }, context);
-    const envelope = etherscanTokenTransferEnvelopeSchema.safeParse(body);
-    if (!envelope.success) throw invalidResponse(context);
-    if (envelope.data.status === "0") {
-      if (isEmptyMessage(envelope.data.message, envelope.data.result, "transfers")) {
-        return { items: [], complete: true, pageInfo: { provider: this.name, chainId: context.chain.chainId } };
+    const fetchPage = async (page: number): Promise<Erc20Transfer[]> => {
+      const body = await this.call("tokentx", {
+        address: request.address,
+        ...(request.tokenAddress === null ? {} : { contractaddress: request.tokenAddress }),
+        page,
+        offset: ETHERSCAN_MAX_PAGE_SIZE,
+        sort: "asc",
+        startblock: request.startBlock,
+        endblock: request.endBlock,
+      }, context);
+      const envelope = etherscanTokenTransferEnvelopeSchema.safeParse(body);
+      if (!envelope.success) throw invalidResponse(context);
+      if (envelope.data.status === "0") {
+        if (isEmptyMessage(envelope.data.message, envelope.data.result, "transfers")) return [];
+        throw classifyEtherscanEnvelopeError(envelope.data.message, envelope.data.result, context.chain.chainId);
       }
-      throw classifyEtherscanEnvelopeError(envelope.data.message, envelope.data.result, context.chain.chainId);
+      if (!Array.isArray(envelope.data.result)) throw invalidResponse(context);
+      try {
+        return envelope.data.result.map((item) => mapEtherscanTokenTransfer(item, context.chain));
+      } catch (error: unknown) {
+        throw invalidResponse(context, error);
+      }
+    };
+
+    const firstPage = await fetchPage(1);
+    if (firstPage.length < ETHERSCAN_MAX_PAGE_SIZE) {
+      return completeRangePage(firstPage, request, context);
     }
-    if (!Array.isArray(envelope.data.result)) throw invalidResponse(context);
-    try {
-      const mapped = envelope.data.result.map((item) => mapEtherscanTokenTransfer(item, context.chain));
-      return {
-        items: mapped
-          .filter((item) => directionMatches(item, request.direction, request.address))
-          .map((item) => ({ item, identityKey: null })),
-        // The Etherscan range endpoint returns an already-deduplicated list.
-        // Some valid responses omit logIndex, so no event identity can be
-        // required a second time by the generic scanner.
-        itemsAlreadyDeduplicated: true,
-        complete: mapped.length < ETHERSCAN_MAX_PAGE_SIZE,
-        pageInfo: { provider: this.name, chainId: context.chain.chainId },
-      };
-    } catch (error: unknown) {
-      throw invalidResponse(context, error);
+
+    // Preserve binary splitting for broad intervals. Fetching every physical
+    // page of a busy multi-block range can exceed the logical request budget;
+    // once the scanner isolates one block, pagination below proves that last
+    // window is complete instead of treating exactly 1,000 rows as a stall.
+    if (request.startBlock !== request.endBlock) {
+      return incompleteRangePage(firstPage, request, context);
     }
+
+    const pages = [firstPage];
+    for (let page = 2; ; page += 1) {
+      await context.beforeProviderRequest?.();
+      const current = await fetchPage(page);
+      pages.push(current);
+      if (current.length < ETHERSCAN_MAX_PAGE_SIZE) break;
+    }
+    return completeRangePage(pages.flat(), request, context);
   }
 
   /**
@@ -593,6 +613,10 @@ function nextPage(length: number, pageSize: number, page: number): EtherscanPage
   return length >= pageSize ? { page: page + 1 } : null;
 }
 
+function etherscanPageSize(requestedPageSize: number): number {
+  return Math.min(requestedPageSize, ETHERSCAN_MAX_PAGE_SIZE);
+}
+
 function pageResult<T>(items: T[], nextPageState: EtherscanPageState | null, context: ProviderAttemptContext): ProviderPageResult<T, EtherscanPageState> {
   return {
     items,
@@ -607,6 +631,44 @@ function directionMatches(
   address: string,
 ): boolean {
   return direction === "both" || direction === "incoming" && item.to === address || direction === "outgoing" && item.from === address;
+}
+
+function rangeItems(
+  values: readonly Erc20Transfer[],
+  request: NormalizedErc20BlockRangeRequest,
+): ProviderBlockRangeItem[] {
+  return values
+    .filter((item) => directionMatches(item, request.direction, request.address))
+    .map((item) => ({ item, identityKey: null }));
+}
+
+function completeRangePage(
+  values: readonly Erc20Transfer[],
+  request: NormalizedErc20BlockRangeRequest,
+  context: ProviderAttemptContext,
+): ProviderBlockRangeWindowResult {
+  return {
+    items: rangeItems(values, request),
+    // Etherscan's range pages are already deduplicated. Some valid responses
+    // omit logIndex, so the generic scanner cannot require an event identity
+    // a second time.
+    itemsAlreadyDeduplicated: true,
+    complete: true,
+    pageInfo: { provider: "etherscan", chainId: context.chain.chainId },
+  };
+}
+
+function incompleteRangePage(
+  values: readonly Erc20Transfer[],
+  request: NormalizedErc20BlockRangeRequest,
+  context: ProviderAttemptContext,
+): ProviderBlockRangeWindowResult {
+  return {
+    items: rangeItems(values, request),
+    itemsAlreadyDeduplicated: true,
+    complete: false,
+    pageInfo: { provider: "etherscan", chainId: context.chain.chainId },
+  };
 }
 
 function invalidResponse(context: ProviderAttemptContext, cause?: unknown): EvmDataError {

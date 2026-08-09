@@ -65,7 +65,7 @@ describe("EvmDataClient", () => {
     await client.address.getTransactions({ chain: 1, address, fullData: true });
     expect(transport.requests).toHaveLength(1);
     expect(transport.requests[0]?.url).toBe("https://api.etherscan.io/v2/api");
-    expect(transport.requests[0]?.params).toMatchObject({ offset: 10_000, apikey: "etherscan-key" });
+    expect(transport.requests[0]?.params).toMatchObject({ offset: 1_000, apikey: "etherscan-key" });
   });
 
   it("completes a transaction block range without exposing its provider cursor", async () => {
@@ -77,7 +77,7 @@ describe("EvmDataClient", () => {
     const client = new EvmDataClient({ providers: [{ kind: "etherscan", apiKeys: ["key"] }], requestPolicy: { maxTotalAttempts: 1 } }, { transport });
     const result = await client.address.getTransactionsByBlockRange({ chain: 1, address, startBlock: "1", endBlock: "10" });
     expect(result).toMatchObject({ address, range: { startBlock: "1", endBlock: "10" }, provider: "etherscan", pages: 1, upstreamRequests: 1 });
-    expect(transport.requests[0]?.params).toMatchObject({ action: "txlist", startblock: "1", endblock: "10", offset: 10_000 });
+    expect(transport.requests[0]?.params).toMatchObject({ action: "txlist", startblock: "1", endblock: "10", offset: 1_000 });
     expect(result).not.toHaveProperty("nextCursor");
   });
 

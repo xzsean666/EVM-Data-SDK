@@ -41,5 +41,12 @@ export const alchemyTransfersResultSchema = z.object({
   pageKey: z.string().max(2048).nullable().optional(),
 }).passthrough();
 
+export const alchemyTokenBalancesResultSchema = z.object({
+  tokenBalances: z.array(z.object({
+    contractAddress: address,
+    tokenBalance: hexQuantity.nullable(),
+  }).passthrough()),
+}).passthrough();
+
 export type AlchemyTransfer = z.infer<typeof transferSchema>;
 export type AlchemyTransfersResult = z.infer<typeof alchemyTransfersResultSchema>;

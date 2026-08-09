@@ -253,6 +253,7 @@ export class RequestExecutor {
           proxy,
           timeoutMs,
           ...(request.signal === undefined ? {} : { signal: request.signal }),
+          beforeProviderRequest: async () => this.pace(candidate.adapter.name, deadline, request.signal),
           ...(providerPageState === null ? { providerPageState: null } : { providerPageState }),
           correlationId: this.correlationIdFactory(),
         };

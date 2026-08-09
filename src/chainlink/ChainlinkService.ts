@@ -248,6 +248,7 @@ function evaluateFeed(
     success: true,
     price: Object.freeze({
       feedId: feed.id,
+      tokenSymbol: feed.assetSymbol,
       asset: Object.freeze({ symbol: feed.assetSymbol, name: feed.assetName }),
       pair: Object.freeze({ base: feed.baseAsset, quote: "USD" as const }),
       feedAddress: feed.proxyAddress,

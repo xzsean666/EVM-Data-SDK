@@ -29,6 +29,12 @@ export interface ProviderAttemptContext {
   readonly proxy: ProxyLease | null;
   readonly timeoutMs: number;
   readonly signal?: AbortSignal;
+  /**
+   * Called before an adapter makes an additional physical upstream request
+   * within the same logical SDK attempt. This keeps provider pagination under
+   * the executor's shared pacing and deadline budget.
+   */
+  readonly beforeProviderRequest?: () => Promise<void>;
   readonly providerPageState?: unknown;
   readonly correlationId: string;
 }

@@ -116,6 +116,24 @@ describe("AlchemyAdapter", () => {
     expect(transport.requests.every((request) => request.proxy?.host === "127.0.0.1")).toBe(true);
   });
 
+  it("keeps valid historical balances when one token reverts", async () => {
+    const tokens = [
+      "0x0000000000000000000000000000000000000001",
+      "0x0000000000000000000000000000000000000002",
+    ];
+    const result = await new AlchemyAdapter({
+      transport: new FixtureTransport(aggregate3Response([7n, null])),
+    }).getErc20BalancesAtBlock({
+      address,
+      blockNumber: "25486078",
+      tokenAddresses: tokens,
+    }, context());
+
+    expect(result.items).toEqual([
+      expect.objectContaining({ tokenAddress: tokens[0], amount: "7" }),
+    ]);
+  });
+
   it("returns both complete Alchemy pages, de-duplicates a self-transfer, and keeps two stream page keys", async () => {
     const incomingFirst = transfersResponse([
       transfer("incoming", "0xc", "0x1111111111111111111111111111111111111111", address),
@@ -250,9 +268,11 @@ function transfersResponse(transfers: readonly Record<string, unknown>[], pageKe
   return { jsonrpc: "2.0", id: 1, result: { transfers, pageKey } };
 }
 
-function aggregate3Response(balances: readonly bigint[]): unknown {
+function aggregate3Response(balances: readonly (bigint | null)[]): unknown {
   const word = (value: bigint) => value.toString(16).padStart(64, "0");
-  const tuples = balances.map((balance) => `${word(1n)}${word(64n)}${word(32n)}${word(balance)}`);
+  const tuples = balances.map((balance) => balance === null
+    ? `${word(0n)}${word(64n)}${word(0n)}`
+    : `${word(1n)}${word(64n)}${word(32n)}${word(balance)}`);
   let offset = balances.length * 32;
   const offsets = tuples.map((tuple) => {
     const value = word(BigInt(offset));

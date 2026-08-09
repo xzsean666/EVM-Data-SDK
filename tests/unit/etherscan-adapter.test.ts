@@ -26,6 +26,17 @@ class FixtureTransport implements HttpTransport {
   }
 }
 
+class SequenceFixtureTransport implements HttpTransport {
+  readonly requests: HttpRequest[] = [];
+  constructor(private readonly bodies: readonly unknown[]) {}
+  async request(request: HttpRequest): Promise<HttpResponse> {
+    this.requests.push(request);
+    const body = this.bodies[this.requests.length - 1];
+    if (body === undefined) throw new Error("Unexpected fixture request.");
+    return { status: 200, headers: {}, body };
+  }
+}
+
 function context(overrides: Partial<ProviderAttemptContext> = {}): ProviderAttemptContext {
   return {
     chain: new ChainRegistry().resolve("ethereum"),
@@ -115,11 +126,11 @@ describe("EtherscanAdapter", () => {
     expect(transport.requests[0]?.params).toMatchObject({ action: "tokentx", page: 1, offset: 1, sort: "desc" });
   });
 
-  it("uses a fresh ascending closed range request and marks a full Etherscan page incomplete", async () => {
+  it("marks a full multi-block Etherscan range page incomplete for scanner splitting", async () => {
     const fullPage = {
       status: "1",
       message: "OK",
-      result: Array.from({ length: 10_000 }, (_, index) => ({
+      result: Array.from({ length: 1_000 }, (_, index) => ({
         blockNumber: "42",
         hash: "0x" + String(index).padStart(64, "0"),
         transactionHash: "0x" + String(index).padStart(64, "0"),
@@ -142,8 +153,83 @@ describe("EtherscanAdapter", () => {
       context(),
     );
     expect(result.complete).toBe(false);
-    expect(result.items).toHaveLength(10_000);
-    expect(transport.requests[0]?.params).toMatchObject({ action: "tokentx", page: 1, offset: 10_000, sort: "asc", startblock: "40", endblock: "42" });
+    expect(result.items).toHaveLength(1_000);
+    expect(transport.requests[0]?.params).toMatchObject({ action: "tokentx", page: 1, offset: 1_000, sort: "asc", startblock: "40", endblock: "42" });
+  });
+
+  it("uses ascending physical pages to complete a full single-block Etherscan range page", async () => {
+    const fullPage = {
+      status: "1",
+      message: "OK",
+      result: Array.from({ length: 1_000 }, (_, index) => ({
+        blockNumber: "42",
+        hash: "0x" + String(index).padStart(64, "0"),
+        transactionHash: "0x" + String(index).padStart(64, "0"),
+        logIndex: String(index),
+        from: "0x1111111111111111111111111111111111111111",
+        to: "0x2222222222222222222222222222222222222222",
+        contractAddress: "0x5555555555555555555555555555555555555555",
+        value: "1",
+      })),
+    };
+    const finalPage = {
+      status: "1",
+      message: "OK",
+      result: [{
+        blockNumber: "42",
+        hash: "0x" + "f".repeat(64),
+        transactionHash: "0x" + "f".repeat(64),
+        logIndex: "1000",
+        from: "0x1111111111111111111111111111111111111111",
+        to: "0x2222222222222222222222222222222222222222",
+        contractAddress: "0x5555555555555555555555555555555555555555",
+        value: "1",
+      }],
+    };
+    const transport = new SequenceFixtureTransport([fullPage, finalPage]);
+    const result = await new EtherscanAdapter({ transport }).getErc20TransfersByBlockRangeWindow(
+      normalizeErc20BlockRangeRequest({
+        chain: 1,
+        address: "0x1111111111111111111111111111111111111111",
+        startBlock: "42",
+        endBlock: "42",
+        direction: "outgoing",
+      }),
+      context(),
+    );
+    expect(result.complete).toBe(true);
+    expect(result.items).toHaveLength(1_001);
+    expect(transport.requests[0]?.params).toMatchObject({ action: "tokentx", page: 1, offset: 1_000, sort: "asc", startblock: "42", endblock: "42" });
+    expect(transport.requests[1]?.params).toMatchObject({ action: "tokentx", page: 2, offset: 1_000, sort: "asc", startblock: "42", endblock: "42" });
+  });
+
+  it("caps logical 10,000-record list pages at Etherscan's physical 1,000-record limit", async () => {
+    const fullPage = {
+      status: "1",
+      message: "OK",
+      result: Array.from({ length: 1_000 }, (_, index) => ({
+        blockNumber: String(index + 1),
+        timeStamp: "1700000000",
+        hash: "0x" + String(index).padStart(64, "0"),
+        transactionIndex: "0",
+        from: "0x1111111111111111111111111111111111111111",
+        to: "0x2222222222222222222222222222222222222222",
+        value: "1",
+        gas: "21000",
+        gasUsed: "21000",
+        gasPrice: "1",
+        isError: "0",
+      })),
+    };
+    const transport = new FixtureTransport(fullPage);
+    const result = await new EtherscanAdapter({ transport }).getTransactions(
+      parseTransactionsRequest({ chain: 1, address: "0x1111111111111111111111111111111111111111", pageSize: 10_000 }),
+      context(),
+    );
+
+    expect(result.items).toHaveLength(1_000);
+    expect(result.nextPageState).toEqual({ page: 2 });
+    expect(transport.requests[0]?.params).toMatchObject({ action: "txlist", page: 1, offset: 1_000 });
   });
 
   it("maps an empty provider token-decimal field to null", async () => {
@@ -195,7 +281,7 @@ describe("EtherscanAdapter", () => {
     }, context());
     expect(result).toMatchObject({ provider: "etherscan", pages: 1, upstreamRequests: 1 });
     expect(result.items[0]).toMatchObject({ blockNumber: "42", value: "100", traceId: "0_1", status: "success" });
-    expect(transport.requests[0]?.params).toMatchObject({ action: "txlistinternal", startblock: "40", endblock: "42", page: 1, offset: 10_000, sort: "asc" });
+    expect(transport.requests[0]?.params).toMatchObject({ action: "txlistinternal", startblock: "40", endblock: "42", page: 1, offset: 1_000, sort: "asc" });
   });
 
   it("maps Ethereum Beacon withdrawals as Gwei without using an RPC endpoint", async () => {

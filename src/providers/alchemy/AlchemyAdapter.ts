@@ -1,12 +1,12 @@
 import { AxiosHttpTransport, parseHttpProxyUrl } from "../../transport/AxiosHttpTransport";
 import type { HttpTransport } from "../../transport/HttpTransport";
 import { EvmDataError } from "../../domain/errors";
-import type { Erc20BalanceAtBlock, Erc20BalancesAtBlock, Erc20Transfer } from "../../domain/models";
+import type { Erc20BalanceAtBlock, Erc20BalancesAtBlock, Erc20TokenHolding, Erc20TokenHoldings, Erc20Transfer } from "../../domain/models";
 import type { NormalizedErc20BlockRangeRequest, NormalizedErc20TransfersRequest, NormalizedTransactionsRequest, TransferDirection } from "../../domain/operations";
 import type { ProviderPageResult } from "../../domain/pagination";
 import type { CapabilityRequest, DataProviderAdapter, ProviderBlockRangeWindowResult, ProviderAttemptContext } from "../DataProviderAdapter";
 import { classifyAlchemyHttpResponse, classifyAlchemyJsonRpcError, normalizeAlchemyTransportError } from "./alchemyErrors";
-import { alchemyJsonRpcResponseSchema, alchemyTransfersResultSchema, type AlchemyTransfer } from "./alchemySchemas";
+import { alchemyJsonRpcResponseSchema, alchemyTokenBalancesResultSchema, alchemyTransfersResultSchema, type AlchemyTransfer } from "./alchemySchemas";
 import { mapAlchemyTransfer } from "./alchemyMapper";
 import { decodeAggregate3Result, encodeAggregate3, MULTICALL3_ADDRESS } from "../../rpc/EthereumMulticall3Codec";
 
@@ -74,6 +74,41 @@ export class AlchemyAdapter implements DataProviderAdapter {
     }
     if (request.operation === "getErc20TransfersByBlockRange") return true;
     return false;
+  }
+
+  /** Current inventory discovery only; callers must still query an explicit
+   * historical block for any persisted balance assertion. */
+  async getErc20TokenHoldings(
+    request: { readonly address: string },
+    context: ProviderAttemptContext,
+  ): Promise<Erc20TokenHoldings> {
+    // Omitting the optional contract list asks Alchemy for the wallet's
+    // actual inventory. `DEFAULT_TOKENS` is a provider-defined catalogue,
+    // not an address-specific holding set.
+    const body = await this.call("alchemy_getTokenBalances", [request.address], context);
+    const result = parseResult(body, context);
+    const parsed = alchemyTokenBalancesResultSchema.safeParse(result);
+    if (!parsed.success) throw invalidResponse(context, parsed.error);
+    const items: Erc20TokenHolding[] = parsed.data.tokenBalances
+      .filter((item) => item.tokenBalance !== null && BigInt(item.tokenBalance) > 0n)
+      .map((item) => ({
+        chainId: context.chain.chainId,
+        address: request.address,
+        tokenAddress: item.contractAddress.toLowerCase(),
+        tokenName: null,
+        tokenSymbol: null,
+        tokenDecimals: null,
+        amount: BigInt(item.tokenBalance!).toString(),
+        provider: this.name,
+      }));
+    return {
+      chainId: context.chain.chainId,
+      address: request.address,
+      items,
+      pages: 1,
+      provider: this.name,
+      upstreamRequests: 1,
+    };
   }
 
   async getErc20Transfers(request: NormalizedErc20TransfersRequest, context: ProviderAttemptContext): Promise<ProviderPageResult<Erc20Transfer, AlchemySinglePageState | AlchemyBothPageState>> {
@@ -153,12 +188,14 @@ export class AlchemyAdapter implements DataProviderAdapter {
       const result = parseResult(body, context);
       const balances = decodeAggregate3Balances(result, tokens, context);
       for (let index = 0; index < tokens.length; index += 1) {
+        const balance = balances[index];
+        if (balance === null || balance === undefined) continue;
         items.push({
           chainId: context.chain.chainId,
           address: request.address,
           tokenAddress: tokens[index]!,
           blockNumber: BigInt(request.blockNumber).toString(),
-          amount: balances[index]!.toString(),
+          amount: balance.toString(),
           provider: this.name,
         });
       }
@@ -418,11 +455,11 @@ function chunk<T>(values: readonly T[], size: number): T[][] {
 
 /**
  * Decodes each `aggregate3` tuple (via the shared pure Multicall3 codec) into
- * an ERC-20 balance. `allowFailure: true` still surfaces a per-token revert
- * as an explicit error rather than a fabricated balance; only a genuinely
- * empty return (undeployed contract at this historical block) is zero.
+ * an ERC-20 balance. A per-token revert is omitted rather than fabricated as
+ * a zero balance, so it cannot poison unrelated tokens in the same batch.
+ * Only a genuinely empty successful return is zero.
  */
-function decodeAggregate3Balances(value: unknown, tokenAddresses: readonly string[], context: ProviderAttemptContext): bigint[] {
+function decodeAggregate3Balances(value: unknown, tokenAddresses: readonly string[], context: ProviderAttemptContext): Array<bigint | null> {
   if (typeof value !== "string") throw invalidResponse(context);
   let results;
   try {
@@ -430,16 +467,8 @@ function decodeAggregate3Balances(value: unknown, tokenAddresses: readonly strin
   } catch (error: unknown) {
     throw invalidResponse(context, error);
   }
-  return results.map((result, index) => {
-    if (!result.success) {
-      throw new EvmDataError({
-        code: "INVALID_PROVIDER_RESPONSE",
-        message: `Alchemy Multicall balanceOf reverted for ${tokenAddresses[index]}.`,
-        retryable: false,
-        provider: "alchemy",
-        chainId: context.chain.chainId,
-      });
-    }
+  return results.map((result) => {
+    if (!result.success) return null;
     // An eth_call to an address without code succeeds and returns 0x. At the
     // requested historical block that means this contract was not deployed,
     // so its ERC-20 balance is deterministically zero.

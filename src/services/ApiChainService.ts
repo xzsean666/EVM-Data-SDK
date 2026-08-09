@@ -153,17 +153,11 @@ export class ApiChainService {
           }, context)
         }
         if (adapter instanceof AlchemyAdapter) {
-          throw new EvmDataError({
-            code: 'UNSUPPORTED_OPERATION',
-            message: 'Alchemy cannot enumerate an unconstrained ERC-20 inventory.',
-            retryable: false,
-            provider: 'alchemy',
-            chainId: chain.chainId,
-          })
+          return adapter.getErc20TokenHoldings({ address: input.address }, context)
         }
         return adapter.getErc20TokenHoldings({ address: input.address }, context)
       },
-      { includeAlchemy: false },
+      { includeAlchemy: true },
     )
   }
 

@@ -21,6 +21,8 @@ export interface NormalizedChainlinkTokenPricesAtBlockRequest {
 
 export interface ChainlinkPriceAtBlock {
   readonly feedId: string;
+  /** Canonical symbol of the asset priced by this feed (for example `DAI`). */
+  readonly tokenSymbol: string;
   readonly asset: {
     readonly symbol: string;
     readonly name: string | null;
