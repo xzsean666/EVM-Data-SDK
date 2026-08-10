@@ -1,5 +1,20 @@
 # Current Progress
 
+## 2026-08-10 Uniswap V3 Historical Price
+
+Implementation is present for the Ethereum-only opt-in module. Added strict
+`uniswapV3` configuration, public request/result/failure models, static
+versioned WETH/USDC manifest, slot0 ABI validation, pure BigInt spot and
+TickMath calculations, shared-pool Multicall3 service, client composition and
+Archive pool initialization, public exports, and the maintainer-only
+`pnpm uniswap:v3:update` command.
+
+The constructor performs no RPC work; requests use the existing exact-block
+Archive executor and expose stable endpoint IDs only. Deterministic repository
+checks pass: `pnpm typecheck`, `pnpm lint`, `pnpm test` (343 tests), `pnpm
+build`, `pnpm test:package`, and `pnpm check`. Live pool/address verification
+and a reviewed generated-manifest refresh remain separate maintainer work.
+
 Last updated: 2026-08-08
 
 Workflow state: Step 4/5 v0.5 DeFi Exchange Rate Snapshot implementation in progress after v0.4 Chainlink Archive RPC/Multicall3; release decisions and Git identity remain outside implementation scope.

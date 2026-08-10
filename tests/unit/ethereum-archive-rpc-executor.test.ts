@@ -85,6 +85,34 @@ function fakePool(snapshot: readonly EthereumArchiveRpcEndpoint[]): FakePool {
 }
 
 describe("EthereumArchiveRpcExecutor.executeMulticallBatches", () => {
+  it("races a bounded endpoint wave when explicitly configured", async () => {
+    const calls: string[] = [];
+    const transport: ArchiveRpcTransport = {
+      call: (options: ArchiveRpcCallOptions) => {
+        calls.push(options.endpointUrl);
+        if (options.endpointUrl === ENDPOINT_A.url) {
+          return new Promise((_, reject) => {
+            options.signal?.addEventListener("abort", () => reject(archiveRpcUnavailable("cancelled")), { once: true });
+          });
+        }
+        return Promise.resolve({ number: "0x123", timestamp: "0x1" });
+      },
+    } as unknown as ArchiveRpcTransport;
+    const pool = fakePool([ENDPOINT_A, ENDPOINT_B]);
+    const executor = new EthereumArchiveRpcExecutor({
+      pool,
+      randomSource: NO_RANDOM,
+      transport,
+      maxConcurrentRpcAttempts: 2,
+    });
+
+    const result = await executor.findLatestBlockNumber();
+
+    expect(result).toEqual({ blockNumber: "291", rpcEndpointId: ENDPOINT_B.id });
+    expect(calls).toEqual([ENDPOINT_A.url, ENDPOINT_B.url]);
+    expect(pool.outcomes).toEqual([{ id: ENDPOINT_B.id, outcome: "success" }]);
+  });
+
   it("pins the whole operation to one endpoint and returns batches in order", async () => {
     const returnDataA = "0x" + "01".repeat(32);
     const returnDataB = "0x" + "02".repeat(32);

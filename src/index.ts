@@ -7,6 +7,7 @@ export type {
   AlchemyConfiguration,
   ChainlinkConfiguration,
   DeFiConfiguration,
+  UniswapV3Configuration,
   ClientConfiguration,
   EtherscanConfiguration,
   EthereumArchiveRpcEndpointConfiguration,
@@ -22,6 +23,14 @@ export type {
   SingBoxRuntimeConfiguration,
   TelemetryEvent,
 } from "./domain/configuration";
+export type {
+  UniswapV3HistoricalPriceRequest,
+  UniswapV3HistoricalPriceResult,
+  UniswapV3HistoricalPrice,
+  UniswapV3PriceAsset,
+  UniswapV3PriceFailure,
+  UniswapV3PriceFailureCode,
+} from "./domain/uniswapV3HistoricalPriceModels";
 export type {
   DeFiExchangeRate,
   DeFiExchangeRateFailure,
@@ -133,3 +142,9 @@ export { DEFI_TOKEN_REGISTRY } from "./defi/defiTokenRegistry";
 export { DEFI_PROTOCOL_SCOPE } from "./defi/defiProtocolScope";
 export type { DeFiProtocolScopeChain } from "./defi/defiProtocolScope";
 export type { DeFiTokenDefinition, DeFiUnderlyingDefinition, DeFiAdapterKind } from "./defi/DeFiTokenDefinition";
+export { UniswapV3HistoricalPriceService } from "./defi/UniswapV3HistoricalPriceService";
+export type { UniswapV3MulticallService, UniswapV3HistoricalPriceServiceOptions } from "./defi/UniswapV3HistoricalPriceService";
+export type { UniswapV3TokenDefinition } from "./defi/UniswapV3TokenDefinition";
+export { UNISWAP_V3_TOKEN_REGISTRY, UNISWAP_V3_TOKEN_REGISTRY_VERSION, uniswapV3RegistryVersion } from "./defi/uniswapV3TokenRegistry";
+export { decodeUniswapV3Slot0, UNISWAP_V3_SLOT0_SELECTOR } from "./defi/UniswapV3Slot0Codec";
+export { getSqrtRatioAtTick, ratioForSqrtPrice } from "./defi/UniswapV3PriceMath";

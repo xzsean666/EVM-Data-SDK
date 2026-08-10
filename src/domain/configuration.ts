@@ -175,6 +175,8 @@ export interface ChainlinkConfiguration {
   readonly totalTimeoutMs?: number;
   readonly maxCallsPerMulticall?: number;
   readonly maxRpcAttempts?: number;
+  /** Number of Archive RPC endpoints raced per attempt wave. Defaults to 1. */
+  readonly maxConcurrentRpcAttempts?: number;
 }
 
 export interface NormalizedEthereumArchiveRpcEndpointConfiguration {
@@ -192,6 +194,7 @@ export interface NormalizedChainlinkConfiguration {
   readonly totalTimeoutMs: number;
   readonly maxCallsPerMulticall: number;
   readonly maxRpcAttempts: number;
+  readonly maxConcurrentRpcAttempts: number;
 }
 
 export interface DeFiConfiguration {
@@ -207,6 +210,30 @@ export interface DeFiConfiguration {
   readonly totalTimeoutMs?: number;
   readonly maxCallsPerMulticall?: number;
   readonly maxRpcAttempts?: number;
+  /** Number of Archive RPC endpoints raced per attempt wave. Defaults to 1. */
+  readonly maxConcurrentRpcAttempts?: number;
+}
+
+export interface UniswapV3Configuration {
+  readonly enabled?: boolean;
+  readonly useBuiltinEthereumArchiveRpcs?: boolean;
+  readonly rpcEndpoints?: readonly EthereumArchiveRpcEndpointConfiguration[];
+  readonly healthCheckTimeoutMs?: number;
+  readonly attemptTimeoutMs?: number;
+  readonly totalTimeoutMs?: number;
+  readonly maxCallsPerMulticall?: number;
+  readonly maxRpcAttempts?: number;
+}
+
+export interface NormalizedUniswapV3Configuration {
+  readonly enabled: boolean;
+  readonly useBuiltinEthereumArchiveRpcs: boolean;
+  readonly rpcEndpoints: readonly NormalizedEthereumArchiveRpcEndpointConfiguration[];
+  readonly healthCheckTimeoutMs: number;
+  readonly attemptTimeoutMs: number;
+  readonly totalTimeoutMs: number;
+  readonly maxCallsPerMulticall: number;
+  readonly maxRpcAttempts: number;
 }
 
 export interface NormalizedDeFiConfiguration {
@@ -219,6 +246,7 @@ export interface NormalizedDeFiConfiguration {
   readonly totalTimeoutMs: number;
   readonly maxCallsPerMulticall: number;
   readonly maxRpcAttempts: number;
+  readonly maxConcurrentRpcAttempts: number;
 }
 
 export interface ClientConfiguration {
@@ -236,6 +264,7 @@ export interface ClientConfiguration {
   readonly chainlink?: ChainlinkConfiguration;
   /** Opt-in exact-block DeFi exchange-rate snapshot feature (v0.5). */
   readonly defi?: DeFiConfiguration;
+  readonly uniswapV3?: UniswapV3Configuration;
   readonly logger?: ObservationCallback;
   readonly telemetry?: ObservationCallback;
 }
@@ -251,6 +280,7 @@ export interface NormalizedClientConfiguration {
   readonly price?: NormalizedPriceConfiguration;
   readonly chainlink: NormalizedChainlinkConfiguration;
   readonly defi: NormalizedDeFiConfiguration;
+  readonly uniswapV3: NormalizedUniswapV3Configuration;
   readonly logger?: ObservationCallback;
   readonly telemetry?: ObservationCallback;
 }
@@ -323,6 +353,7 @@ const chainlinkSchema = z
     totalTimeoutMs: z.number().int().positive().max(86_400_000).default(DEFAULT_TOTAL_TIMEOUT_MS),
     maxCallsPerMulticall: z.number().int().min(1).max(1000).default(100),
     maxRpcAttempts: z.number().int().min(1).max(20).default(5),
+    maxConcurrentRpcAttempts: z.number().int().min(1).max(4).default(1),
   })
   .strict();
 const defiSchema = z.object({
@@ -333,6 +364,17 @@ const defiSchema = z.object({
     ethereum: z.array(archiveRpcEndpointSchema).max(64).optional().default([]),
     base: z.array(archiveRpcEndpointSchema).max(64).optional().default([]),
   }).strict().optional().default({ ethereum: [], base: [] }),
+  healthCheckTimeoutMs: z.number().int().positive().max(86_400_000).default(DEFAULT_ATTEMPT_TIMEOUT_MS),
+  attemptTimeoutMs: z.number().int().positive().max(86_400_000).default(DEFAULT_ATTEMPT_TIMEOUT_MS),
+  totalTimeoutMs: z.number().int().positive().max(86_400_000).default(DEFAULT_TOTAL_TIMEOUT_MS),
+  maxCallsPerMulticall: z.number().int().min(1).max(1000).default(100),
+  maxRpcAttempts: z.number().int().min(1).max(20).default(5),
+  maxConcurrentRpcAttempts: z.number().int().min(1).max(4).default(1),
+}).strict();
+const uniswapV3Schema = z.object({
+  enabled: z.boolean().optional().default(false),
+  useBuiltinEthereumArchiveRpcs: z.boolean().optional(),
+  rpcEndpoints: z.array(archiveRpcEndpointSchema).max(64).optional().default([]),
   healthCheckTimeoutMs: z.number().int().positive().max(86_400_000).default(DEFAULT_ATTEMPT_TIMEOUT_MS),
   attemptTimeoutMs: z.number().int().positive().max(86_400_000).default(DEFAULT_ATTEMPT_TIMEOUT_MS),
   totalTimeoutMs: z.number().int().positive().max(86_400_000).default(DEFAULT_TOTAL_TIMEOUT_MS),
@@ -351,6 +393,7 @@ const clientShapeSchema = z
     maxRangeWindows: z.number().int().positive().max(1_000_000).default(DEFAULT_MAX_RANGE_WINDOWS),
     chainlink: chainlinkSchema.optional(),
     defi: defiSchema.optional(),
+    uniswapV3: uniswapV3Schema.optional(),
     logger: z.custom<ObservationCallback>((value) => typeof value === "function").optional(),
     telemetry: z.custom<ObservationCallback>((value) => typeof value === "function").optional(),
   })
@@ -372,10 +415,12 @@ export function parseClientConfiguration(input: unknown): NormalizedClientConfig
       totalTimeoutMs: DEFAULT_TOTAL_TIMEOUT_MS,
       maxCallsPerMulticall: 100,
       maxRpcAttempts: 5,
+      maxConcurrentRpcAttempts: 1,
     },
   );
-  const defi = normalizeDeFiConfiguration(parsed.data.defi ?? { enabled: false, rpcEndpoints: { ethereum: [], base: [] }, healthCheckTimeoutMs: DEFAULT_ATTEMPT_TIMEOUT_MS, attemptTimeoutMs: DEFAULT_ATTEMPT_TIMEOUT_MS, totalTimeoutMs: DEFAULT_TOTAL_TIMEOUT_MS, maxCallsPerMulticall: 100, maxRpcAttempts: 5 });
-  if (parsed.data.providers.length === 0 && parsed.data.price === undefined && !chainlink.enabled && !defi.enabled) throw invalidConfiguration("Configure at least one blockchain or price provider, or enable Chainlink or DeFi.");
+  const defi = normalizeDeFiConfiguration(parsed.data.defi ?? { enabled: false, rpcEndpoints: { ethereum: [], base: [] }, healthCheckTimeoutMs: DEFAULT_ATTEMPT_TIMEOUT_MS, attemptTimeoutMs: DEFAULT_ATTEMPT_TIMEOUT_MS, totalTimeoutMs: DEFAULT_TOTAL_TIMEOUT_MS, maxCallsPerMulticall: 100, maxRpcAttempts: 5, maxConcurrentRpcAttempts: 1 });
+  const uniswapV3 = normalizeUniswapV3Configuration(parsed.data.uniswapV3 ?? { enabled: false, rpcEndpoints: [], healthCheckTimeoutMs: DEFAULT_ATTEMPT_TIMEOUT_MS, attemptTimeoutMs: DEFAULT_ATTEMPT_TIMEOUT_MS, totalTimeoutMs: DEFAULT_TOTAL_TIMEOUT_MS, maxCallsPerMulticall: 100, maxRpcAttempts: 5 });
+  if (parsed.data.providers.length === 0 && parsed.data.price === undefined && !chainlink.enabled && !defi.enabled && !uniswapV3.enabled) throw invalidConfiguration("Configure at least one blockchain or price provider, or enable Chainlink, DeFi, or Uniswap V3.");
   const price = normalizePriceConfiguration(parsed.data.price ?? {
     routeMode: "direct",
     attemptTimeoutMs: DEFAULT_ATTEMPT_TIMEOUT_MS,
@@ -384,7 +429,7 @@ export function parseClientConfiguration(input: unknown): NormalizedClientConfig
     tokenAliases: {},
     geckoNetworks: ["eth", "bsc", "polygon_pos", "arbitrum", "base", "optimism"],
   });
-  if (providers.length === 0 && price.providers.length === 0 && !chainlink.enabled && !defi.enabled) throw invalidConfiguration("Configure at least one blockchain or price provider, or enable Chainlink or DeFi.");
+  if (providers.length === 0 && price.providers.length === 0 && !chainlink.enabled && !defi.enabled && !uniswapV3.enabled) throw invalidConfiguration("Configure at least one blockchain or price provider, or enable Chainlink, DeFi, or Uniswap V3.");
   const chains = parsed.data.chains.map((chain) => parseChainDefinition(chain));
   const requestPolicy = normalizeRequestPolicy(parsed.data.requestPolicy ?? {});
   const proxies = parsed.data.proxies.map((proxy) => normalizeProxy(proxy));
@@ -403,11 +448,26 @@ export function parseClientConfiguration(input: unknown): NormalizedClientConfig
     price,
     chainlink,
     defi,
+    uniswapV3,
     ...(parsed.data.logger === undefined ? {} : { logger: parsed.data.logger }),
     ...(parsed.data.telemetry === undefined ? {} : { telemetry: parsed.data.telemetry }),
   };
 
   return Object.freeze(configuration);
+}
+
+function normalizeUniswapV3Configuration(value: z.output<typeof uniswapV3Schema>): NormalizedUniswapV3Configuration {
+  if (value.totalTimeoutMs < value.attemptTimeoutMs) throw invalidConfiguration("uniswapV3.totalTimeoutMs must be at least uniswapV3.attemptTimeoutMs.");
+  const useBuiltinEthereumArchiveRpcs = value.useBuiltinEthereumArchiveRpcs ?? value.enabled;
+  const ids = new Set<string>(); const urls = new Set<string>();
+  const rpcEndpoints = value.rpcEndpoints.map((endpoint) => {
+    const id = endpoint.id.trim(); if (!id || ids.has(id)) throw invalidConfiguration("uniswapV3.rpcEndpoints ids must be unique and non-empty."); ids.add(id);
+    let url: URL; try { url = new URL(endpoint.url); } catch { throw invalidConfiguration("uniswapV3.rpcEndpoints urls must be valid HTTPS URLs."); }
+    if (url.protocol !== "https:" || urls.has(url.toString())) throw invalidConfiguration("uniswapV3.rpcEndpoints urls must be unique HTTPS URLs."); urls.add(url.toString());
+    return Object.freeze({ id, url: endpoint.url.trim(), enabled: endpoint.enabled });
+  });
+  if (value.enabled && !useBuiltinEthereumArchiveRpcs && rpcEndpoints.every((endpoint) => !endpoint.enabled)) throw invalidConfiguration("uniswapV3 is enabled but no Archive RPC endpoint is configured.");
+  return Object.freeze({ enabled: value.enabled, useBuiltinEthereumArchiveRpcs, rpcEndpoints: Object.freeze(rpcEndpoints), healthCheckTimeoutMs: value.healthCheckTimeoutMs, attemptTimeoutMs: value.attemptTimeoutMs, totalTimeoutMs: value.totalTimeoutMs, maxCallsPerMulticall: value.maxCallsPerMulticall, maxRpcAttempts: value.maxRpcAttempts });
 }
 
 function normalizeDeFiConfiguration(value: z.output<typeof defiSchema>): NormalizedDeFiConfiguration {
@@ -431,7 +491,7 @@ function normalizeDeFiConfiguration(value: z.output<typeof defiSchema>): Normali
   if (value.enabled && !useBuiltinArchiveRpcs) {
     for (const chain of chains) if (rpcEndpoints[chain].every((endpoint) => !endpoint.enabled)) throw invalidConfiguration(`defi is enabled for ${chain} but no Archive RPC endpoint is configured.`);
   }
-  return Object.freeze({ enabled: value.enabled, chains: Object.freeze(chains), useBuiltinArchiveRpcs, rpcEndpoints, healthCheckTimeoutMs: value.healthCheckTimeoutMs, attemptTimeoutMs: value.attemptTimeoutMs, totalTimeoutMs: value.totalTimeoutMs, maxCallsPerMulticall: value.maxCallsPerMulticall, maxRpcAttempts: value.maxRpcAttempts });
+  return Object.freeze({ enabled: value.enabled, chains: Object.freeze(chains), useBuiltinArchiveRpcs, rpcEndpoints, healthCheckTimeoutMs: value.healthCheckTimeoutMs, attemptTimeoutMs: value.attemptTimeoutMs, totalTimeoutMs: value.totalTimeoutMs, maxCallsPerMulticall: value.maxCallsPerMulticall, maxRpcAttempts: value.maxRpcAttempts, maxConcurrentRpcAttempts: value.maxConcurrentRpcAttempts });
 }
 
 function normalizeChainlinkConfiguration(
@@ -490,6 +550,7 @@ function normalizeChainlinkConfiguration(
     totalTimeoutMs: value.totalTimeoutMs,
     maxCallsPerMulticall: value.maxCallsPerMulticall,
     maxRpcAttempts: value.maxRpcAttempts,
+    maxConcurrentRpcAttempts: value.maxConcurrentRpcAttempts,
   });
 }
 

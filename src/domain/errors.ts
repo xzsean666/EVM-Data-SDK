@@ -41,7 +41,8 @@ export type ErrorCode =
   | "MULTICALL_NOT_DEPLOYED_AT_BLOCK"
   | "MULTICALL_RESPONSE_INVALID"
   | "CHAINLINK_PRICE_DATA_UNAVAILABLE"
-  | "DEFI_EXCHANGE_RATE_DATA_UNAVAILABLE";
+  | "DEFI_EXCHANGE_RATE_DATA_UNAVAILABLE"
+  | "UNISWAP_V3_PRICE_DATA_UNAVAILABLE";
 
 export interface EvmDataErrorOptions {
   readonly code: ErrorCode;
@@ -203,6 +204,16 @@ export function defiExchangeRateDataUnavailable(message: string, cause?: unknown
     code: "DEFI_EXCHANGE_RATE_DATA_UNAVAILABLE",
     message,
     retryable: false,
+    ...(cause === undefined ? {} : { cause }),
+  });
+}
+
+export function uniswapV3PriceDataUnavailable(message: string, cause?: unknown): EvmDataError {
+  return new EvmDataError({
+    code: "UNISWAP_V3_PRICE_DATA_UNAVAILABLE",
+    message,
+    retryable: false,
+    chainId: 1,
     ...(cause === undefined ? {} : { cause }),
   });
 }

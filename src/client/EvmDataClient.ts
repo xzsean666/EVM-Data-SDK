@@ -34,6 +34,7 @@ import { RpcService } from "../rpc/RpcService";
 import { ChainlinkService } from "../chainlink/ChainlinkService";
 import { DeFiExchangeRateService } from "../defi/DeFiExchangeRateService";
 import { MULTICALL3_ADDRESS, MULTICALL3_BASE_MAINNET_DEPLOYMENT_BLOCK, MULTICALL3_ETHEREUM_MAINNET_DEPLOYMENT_BLOCK } from "../rpc/EthereumMulticall3Codec";
+import { UniswapV3HistoricalPriceService } from "../defi/UniswapV3HistoricalPriceService";
 
 export interface EvmDataClientOptions {
   readonly transport?: HttpTransport;
@@ -47,6 +48,8 @@ export interface EvmDataClientOptions {
   readonly archiveRpcPool?: EthereumArchiveRpcPool;
   /** Test seams for DeFi chain-specific Archive RPC pools. */
   readonly defiArchiveRpcPools?: Partial<Record<"ethereum" | "base", EthereumArchiveRpcPool>>;
+  /** Test seam for the opt-in Uniswap V3 Ethereum Archive RPC pool. */
+  readonly uniswapV3ArchiveRpcPool?: EthereumArchiveRpcPool;
 }
 
 export class EvmDataClient {
@@ -56,11 +59,13 @@ export class EvmDataClient {
   readonly rpc: RpcService | null;
   readonly chainlink: ChainlinkService | null;
   readonly defi: DeFiExchangeRateService | null;
+  readonly uniswapV3: UniswapV3HistoricalPriceService | null;
 
   private readonly configuration: NormalizedClientConfiguration;
   private readonly advancedProxyManager: SingBoxProxyManager | null;
   private readonly archiveRpcPool: EthereumArchiveRpcPool | null;
   private readonly defiArchiveRpcPools: readonly EthereumArchiveRpcPool[];
+  private readonly uniswapV3ArchiveRpcPool: EthereumArchiveRpcPool | null;
   /**
    * Per-chain Archive RPC executors, keyed by chain, reused to serve
    * `getBlockNumberByTimestamp` via pure public RPC binary search. Populated
@@ -156,6 +161,7 @@ export class EvmDataClient {
 
     const chainlinkConfiguration = this.configuration.chainlink;
     const defiConfiguration = this.configuration.defi;
+    const uniswapV3Configuration = this.configuration.uniswapV3;
     const defiRpcServices = new Map<1 | 8453, RpcService>();
     const defiPools: EthereumArchiveRpcPool[] = [];
     if (chainlinkConfiguration.enabled) {
@@ -180,6 +186,7 @@ export class EvmDataClient {
         attemptTimeoutMs: chainlinkConfiguration.attemptTimeoutMs,
         totalTimeoutMs: chainlinkConfiguration.totalTimeoutMs,
         maxRpcAttempts: chainlinkConfiguration.maxRpcAttempts,
+        maxConcurrentRpcAttempts: chainlinkConfiguration.maxConcurrentRpcAttempts,
       });
       this.rpc = new RpcService({
         executor: archiveRpcExecutor,
@@ -207,13 +214,30 @@ export class EvmDataClient {
           multicall3DeploymentBlock: (chainId === 1 ? MULTICALL3_ETHEREUM_MAINNET_DEPLOYMENT_BLOCK : MULTICALL3_BASE_MAINNET_DEPLOYMENT_BLOCK).toString(),
         });
       }
-      const executor = new EthereumArchiveRpcExecutor({ pool, randomSource: options.archiveRpcRandomSource ?? systemRandom, attemptTimeoutMs: defiConfiguration.attemptTimeoutMs, totalTimeoutMs: defiConfiguration.totalTimeoutMs, maxRpcAttempts: defiConfiguration.maxRpcAttempts });
+      const executor = new EthereumArchiveRpcExecutor({ pool, randomSource: options.archiveRpcRandomSource ?? systemRandom, attemptTimeoutMs: defiConfiguration.attemptTimeoutMs, totalTimeoutMs: defiConfiguration.totalTimeoutMs, maxRpcAttempts: defiConfiguration.maxRpcAttempts, maxConcurrentRpcAttempts: defiConfiguration.maxConcurrentRpcAttempts });
       defiRpcServices.set(chainId, new RpcService({ executor, maxCallsPerMulticall: defiConfiguration.maxCallsPerMulticall, chainId, multicall3Address: MULTICALL3_ADDRESS, multicall3DeploymentBlock: (chainId === 1 ? MULTICALL3_ETHEREUM_MAINNET_DEPLOYMENT_BLOCK : MULTICALL3_BASE_MAINNET_DEPLOYMENT_BLOCK).toString() }));
       this.chainRpcExecutors.set(chain, executor);
       if (pool !== this.archiveRpcPool) defiPools.push(pool);
     }
     this.defiArchiveRpcPools = Object.freeze(defiPools);
     this.defi = defiConfiguration.enabled ? new DeFiExchangeRateService({ rpcServices: defiRpcServices }) : null;
+    if (uniswapV3Configuration.enabled) {
+      const builtin = uniswapV3Configuration.useBuiltinEthereumArchiveRpcs ? BUILTIN_ETHEREUM_ARCHIVE_RPCS : [];
+      const custom = uniswapV3Configuration.rpcEndpoints.filter((endpoint) => endpoint.enabled).map((endpoint) => ({ id: endpoint.id, url: endpoint.url }));
+      const pool = options.uniswapV3ArchiveRpcPool ?? this.archiveRpcPool ?? new EthereumArchiveRpcPool({
+        endpoints: mergeArchiveRpcEndpoints([...builtin, ...custom]),
+        healthCheckTimeoutMs: uniswapV3Configuration.healthCheckTimeoutMs,
+        expectedChainId: 1,
+        multicall3Address: MULTICALL3_ADDRESS,
+        multicall3DeploymentBlock: MULTICALL3_ETHEREUM_MAINNET_DEPLOYMENT_BLOCK.toString(),
+      });
+      this.uniswapV3ArchiveRpcPool = pool;
+      const executor = new EthereumArchiveRpcExecutor({ pool, randomSource: options.archiveRpcRandomSource ?? systemRandom, attemptTimeoutMs: uniswapV3Configuration.attemptTimeoutMs, totalTimeoutMs: uniswapV3Configuration.totalTimeoutMs, maxRpcAttempts: uniswapV3Configuration.maxRpcAttempts });
+      this.uniswapV3 = new UniswapV3HistoricalPriceService({ rpcService: new RpcService({ executor, maxCallsPerMulticall: uniswapV3Configuration.maxCallsPerMulticall, chainId: 1, multicall3Address: MULTICALL3_ADDRESS, multicall3DeploymentBlock: MULTICALL3_ETHEREUM_MAINNET_DEPLOYMENT_BLOCK.toString() }) });
+    } else {
+      this.uniswapV3ArchiveRpcPool = null;
+      this.uniswapV3 = null;
+    }
   }
 
   /**
@@ -276,6 +300,7 @@ export class EvmDataClient {
       tasks.push(this.archiveRpcPool.initialize(signal));
     }
     for (const pool of this.defiArchiveRpcPools) tasks.push(pool.initialize(signal));
+    if (this.uniswapV3ArchiveRpcPool !== null && !this.defiArchiveRpcPools.includes(this.uniswapV3ArchiveRpcPool) && this.uniswapV3ArchiveRpcPool !== this.archiveRpcPool) tasks.push(this.uniswapV3ArchiveRpcPool.initialize(signal));
     await Promise.all(tasks);
   }
 

@@ -26,6 +26,8 @@ export interface EthereumArchiveRpcExecutorOptions {
   readonly attemptTimeoutMs?: number;
   readonly totalTimeoutMs?: number;
   readonly maxRpcAttempts?: number;
+  /** Bounded endpoint race width. Defaults to serial failover. */
+  readonly maxConcurrentRpcAttempts?: number;
   /** Injectable clock for deterministic total-timeout tests. */
   readonly now?: () => number;
 }
@@ -47,6 +49,7 @@ export class EthereumArchiveRpcExecutor implements ArchiveRpcMulticallExecutor {
   private readonly attemptTimeoutMs: number;
   private readonly totalTimeoutMs: number;
   private readonly maxRpcAttempts: number;
+  private readonly maxConcurrentRpcAttempts: number;
   private readonly now: () => number;
 
   constructor(options: EthereumArchiveRpcExecutorOptions) {
@@ -56,6 +59,10 @@ export class EthereumArchiveRpcExecutor implements ArchiveRpcMulticallExecutor {
     this.attemptTimeoutMs = options.attemptTimeoutMs ?? DEFAULT_ATTEMPT_TIMEOUT_MS;
     this.totalTimeoutMs = options.totalTimeoutMs ?? DEFAULT_TOTAL_TIMEOUT_MS;
     this.maxRpcAttempts = Math.max(1, options.maxRpcAttempts ?? DEFAULT_MAX_RPC_ATTEMPTS);
+    this.maxConcurrentRpcAttempts = Math.max(
+      1,
+      Math.min(this.maxRpcAttempts, options.maxConcurrentRpcAttempts ?? 1),
+    );
     this.now = options.now ?? (() => Date.now());
   }
 
@@ -78,38 +85,16 @@ export class EthereumArchiveRpcExecutor implements ArchiveRpcMulticallExecutor {
       throw archiveRpcUnavailable("No healthy Ethereum Archive RPC endpoint is available.");
     }
 
-    const attempts = Math.min(this.maxRpcAttempts, snapshot.length);
-    let lastError: unknown = archiveRpcUnavailable("No Ethereum Archive RPC attempt was made.");
-
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
-      if (isAborted(signal)) {
-        throw lastError;
-      }
-      if (this.now() >= deadline) {
-        throw archiveRpcUnavailable("Ethereum Archive RPC total timeout was exceeded.");
-      }
-
-      const endpoint = snapshot[attempt]!;
-      try {
-        const blockNumber = await this.binarySearchOnEndpoint(
-          endpoint,
-          targetTimestampSeconds,
-          lowerBoundBlock,
-          signal,
-          deadline,
-        );
-        this.pool.reportOutcome(endpoint.id, "success");
-        return { blockNumber: blockNumber.toString(10), rpcEndpointId: endpoint.id };
-      } catch (error: unknown) {
-        this.pool.reportOutcome(endpoint.id, "failure");
-        lastError = error;
-        if (isAborted(signal) || !isRetryableFailure(error)) {
-          throw error;
-        }
-      }
-    }
-
-    throw lastError;
+    return this.runEndpointAttempts(snapshot, signal, deadline, async (endpoint, attemptSignal) => {
+      const blockNumber = await this.binarySearchOnEndpoint(
+        endpoint,
+        targetTimestampSeconds,
+        lowerBoundBlock,
+        attemptSignal,
+        deadline,
+      );
+      return { blockNumber: blockNumber.toString(10), rpcEndpointId: endpoint.id };
+    });
   }
 
   /**
@@ -125,32 +110,10 @@ export class EthereumArchiveRpcExecutor implements ArchiveRpcMulticallExecutor {
       throw archiveRpcUnavailable("No healthy Ethereum Archive RPC endpoint is available.");
     }
 
-    const attempts = Math.min(this.maxRpcAttempts, snapshot.length);
-    let lastError: unknown = archiveRpcUnavailable("No Ethereum Archive RPC attempt was made.");
-
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
-      if (isAborted(signal)) {
-        throw lastError;
-      }
-      if (this.now() >= deadline) {
-        throw archiveRpcUnavailable("Ethereum Archive RPC total timeout was exceeded.");
-      }
-
-      const endpoint = snapshot[attempt]!;
-      try {
-        const latest = await this.readBlockHeaderByTag(endpoint, "latest", signal, deadline);
-        this.pool.reportOutcome(endpoint.id, "success");
-        return { blockNumber: latest.number.toString(10), rpcEndpointId: endpoint.id };
-      } catch (error: unknown) {
-        this.pool.reportOutcome(endpoint.id, "failure");
-        lastError = error;
-        if (isAborted(signal) || !isRetryableFailure(error)) {
-          throw error;
-        }
-      }
-    }
-
-    throw lastError;
+    return this.runEndpointAttempts(snapshot, signal, deadline, async (endpoint, attemptSignal) => {
+      const latest = await this.readBlockHeaderByTag(endpoint, "latest", attemptSignal, deadline);
+      return { blockNumber: latest.number.toString(10), rpcEndpointId: endpoint.id };
+    });
   }
 
   private async binarySearchOnEndpoint(
@@ -233,30 +196,85 @@ export class EthereumArchiveRpcExecutor implements ArchiveRpcMulticallExecutor {
       throw archiveRpcUnavailable("No healthy Ethereum Archive RPC endpoint is available.");
     }
 
-    const attempts = Math.min(this.maxRpcAttempts, snapshot.length);
+    return this.runEndpointAttempts(snapshot, request.signal, deadline, (endpoint, attemptSignal) =>
+      this.executeOnEndpoint(endpoint, { ...request, signal: attemptSignal }, deadline),
+    );
+  }
+
+  /**
+   * Race a small wave of independent endpoints. A successful request aborts
+   * the remaining requests in that wave; only an all-failed wave advances to
+   * more endpoints. The default width of one preserves legacy serial retry.
+   */
+  private async runEndpointAttempts<T>(
+    snapshot: readonly EthereumArchiveRpcEndpoint[],
+    signal: AbortSignal | undefined,
+    deadline: number,
+    operation: (endpoint: EthereumArchiveRpcEndpoint, signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    const endpoints = snapshot.slice(0, this.maxRpcAttempts);
     let lastError: unknown = archiveRpcUnavailable("No Ethereum Archive RPC attempt was made.");
 
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
-      if (isAborted(request.signal)) {
-        throw lastError;
+    // Preserve the established serial behaviour exactly unless a caller
+    // explicitly opts into endpoint races.
+    if (this.maxConcurrentRpcAttempts === 1) {
+      for (const endpoint of endpoints) {
+        if (isAborted(signal)) throw lastError;
+        if (this.now() >= deadline) {
+          throw archiveRpcUnavailable("Ethereum Archive RPC total timeout was exceeded.");
+        }
+        try {
+          const result = await operation(endpoint, signal ?? new AbortController().signal);
+          this.pool.reportOutcome(endpoint.id, "success");
+          return result;
+        } catch (error: unknown) {
+          this.pool.reportOutcome(endpoint.id, "failure");
+          lastError = error;
+          if (isAborted(signal) || !isRetryableFailure(error)) throw error;
+        }
       }
+      throw lastError;
+    }
+
+    for (let start = 0; start < endpoints.length; start += this.maxConcurrentRpcAttempts) {
+      if (isAborted(signal)) throw lastError;
       if (this.now() >= deadline) {
         throw archiveRpcUnavailable("Ethereum Archive RPC total timeout was exceeded.");
       }
 
-      const endpoint = snapshot[attempt]!;
+      const wave = endpoints.slice(start, start + this.maxConcurrentRpcAttempts);
+      const controllers = wave.map(() => new AbortController());
+      const abortWave = () => controllers.forEach((controller) => controller.abort());
+      signal?.addEventListener("abort", abortWave, { once: true });
+      let won = false;
+      const failures: unknown[] = [];
       try {
-        const result = await this.executeOnEndpoint(endpoint, request, deadline);
-        this.pool.reportOutcome(endpoint.id, "success");
+        const result = await Promise.any(wave.map((endpoint, index) =>
+          operation(endpoint, controllers[index]!.signal)
+            .then((value) => {
+              won = true;
+              this.pool.reportOutcome(endpoint.id, "success");
+              abortWave();
+              return value;
+            })
+            .catch((error: unknown) => {
+              if (!won && !controllers[index]!.signal.aborted) {
+                this.pool.reportOutcome(endpoint.id, "failure");
+                failures.push(error);
+              }
+              throw error;
+            }),
+        ));
         return result;
-      } catch (error: unknown) {
-        this.pool.reportOutcome(endpoint.id, "failure");
-        lastError = error;
-        if (isAborted(request.signal) || !isRetryableFailure(error)) {
-          throw error;
+      } catch {
+        const nonRetryable = failures.find((error) => !isRetryableFailure(error));
+        if (signal?.aborted || nonRetryable !== undefined) {
+          throw nonRetryable ?? failures.at(-1) ?? lastError;
         }
-        // Retryable endpoint/network/archive failure: discard partial
-        // results and restart the whole operation on the next endpoint.
+        lastError = failures.at(-1) ?? lastError;
+      } finally {
+        signal?.removeEventListener("abort", abortWave);
+        abortWave();
       }
     }
 

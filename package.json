@@ -33,6 +33,7 @@
     "prepack": "pnpm build",
     "test:package": "node tests/package/smoke.mjs",
     "update:chainlink-feeds": "node scripts/update-chainlink-ethereum-feeds.mjs",
+    "uniswap:v3:update": "node scripts/update-uniswap-v3-manifest.mjs",
     "probe:ethereum-archive-rpcs": "node scripts/probe-ethereum-archive-rpcs.mjs",
     "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm build && pnpm test:package",
     "changeset": "changeset",
