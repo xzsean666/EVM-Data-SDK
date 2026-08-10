@@ -39,7 +39,7 @@ const transfers = await client.token.getErc20Transfers({
 
 `allowDirect: false` requires every request to use a configured HTTP(S) proxy. With `allowDirect: true` and at least one proxy, requests round-robin through each proxy and the local direct route. With no proxies, the client uses the local route only.
 
-List `nextCursor` values are SDK-owned and provider-pinned. Pass the same filters and cursor back unchanged for the next page. `pageSize` defaults to 50; valid values are 1–10,000. Provider eligibility is automatic: 1–100 can use Moralis, ERC-20 requests up to 1,000 can use Alchemy, and 1,001–10,000 use Etherscan only. Alchemy supports incoming, outgoing, and both-direction ERC-20 queries; its both-direction mode fetches one page per direction, returns their full de-duplicated union (up to `2 × pageSize` records), and uses one Alchemy-pinned dual cursor. Set `fullData: true` to force Etherscan and, when `pageSize` is omitted, request its 10,000-record page. `fullData` does not combine every historical page: continue with `nextCursor` to retrieve additional records. Alchemy remains intentionally excluded from normal transaction history.
+List `nextCursor` values are SDK-owned and provider-pinned. Pass the same filters and cursor back unchanged for the next page. `pageSize` defaults to 50; valid values are 1–10,000. Provider eligibility is automatic: 1–100 can use Moralis, ERC-20 requests up to 1,000 can use Alchemy, and 1,001–10,000 use Etherscan or a chain-compatible Blockscout configuration. Alchemy supports incoming, outgoing, and both-direction ERC-20 queries; its both-direction mode fetches one page per direction, returns their full de-duplicated union (up to `2 × pageSize` records), and uses one Alchemy-pinned dual cursor. Set `fullData: true` to restrict routing to Etherscan-compatible providers and, when `pageSize` is omitted, request a 10,000-record logical page. `fullData` does not combine every historical page: continue with `nextCursor` to retrieve additional records. Alchemy remains intentionally excluded from normal transaction history.
 
 Run deterministic checks with `pnpm check`. Live provider tests are opt-in and never require the SDK itself to read environment files.
 
@@ -149,3 +149,26 @@ for the full contract and extension procedure.
 
 A staged implementation prompt for gpt-terra is in
 [`docs/GPT_TERRA_IMPLEMENTATION_PROMPT.md`](./docs/GPT_TERRA_IMPLEMENTATION_PROMPT.md).
+
+## Blockscout provider
+
+Blockscout Etherscan-compatible account APIs use the same SDK methods and
+response models as Etherscan. Configure an instance and its own API-key pool:
+
+```ts
+const client = new EvmDataClient({
+  providers: [{
+    kind: "blockscout",
+    apiKeys: [process.env.BLOCKSCOUT_API_KEY!],
+    baseUrl: "https://eth.blockscout.com/api",
+  }],
+});
+```
+
+When Etherscan and Blockscout are both configured, the existing router and
+bounded executor select among compatible candidates and rotate only the
+selected provider's credentials. Results preserve the common model while
+reporting `provider: "blockscout"`; API keys and upstream URLs are never
+returned. See [`docs/BLOCKSCOUT_PROVIDER/UPGRADE.md`](./docs/BLOCKSCOUT_PROVIDER/UPGRADE.md)
+for the contract and [`docs/BLOCKSCOUT_PROVIDER/AI_IMPLEMENTATION_PROMPT.md`](./docs/BLOCKSCOUT_PROVIDER/AI_IMPLEMENTATION_PROMPT.md)
+for the implementation handoff.

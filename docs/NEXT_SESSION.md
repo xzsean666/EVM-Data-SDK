@@ -1,5 +1,27 @@
 # Current Progress
 
+## 2026-08-10 Blockscout provider extension
+
+Added built-in `blockscout` configuration, chain route metadata, a thin
+Blockscout specialization of the Etherscan-compatible adapter, dynamic
+provider provenance/error mapping, client factory/export wiring, API-only
+timestamp and explicit-balance composition, and full-data router eligibility.
+Etherscan and Blockscout configurations keep independent credential pools;
+continuation cursors remain pinned to the exact provider configuration.
+
+The Ethereum built-in route is `https://eth.blockscout.com/api`; other chains
+require a verified `routes.blockscout.apiUrl`; provider `baseUrl` only overrides
+an eligible route. Offline
+tests cover only-Blockscout selection, its key pool, unified mapping, omission
+of Etherscan V2 `chainid`, built-in routing, and Etherscan-to-Blockscout
+fallback. Full `pnpm check` passes: typecheck, lint, 35 test files / 355 tests,
+build, and package smoke including the public Blockscout export and consumer
+types. No authenticated live Blockscout smoke was run; endpoint-specific
+optional action support remains a deployment check.
+
+Handoff documents: `docs/BLOCKSCOUT_PROVIDER/UPGRADE.md`,
+`TASK_BREAKDOWN.md`, and `AI_IMPLEMENTATION_PROMPT.md`.
+
 ## 2026-08-10 Uniswap V3 Historical Price
 
 Implementation is present for the Ethereum-only opt-in module. Added strict
@@ -263,7 +285,7 @@ Alchemy, or Moralis with explicit provenance.
 
 **Files:** `src/domain/operations.ts`, `src/execution/ProviderRouter.ts`, built-in list adapters, cursor tests, router/adapter/client tests, `scripts/live-smoke.mjs`, README, and the required architecture/integration/decision/build documents.
 
-**Design:** `pageSize` accepts 1–10,000. Moralis is eligible through 100, Alchemy ERC-20 through 1,000 per stream, and Etherscan through 10,000. `fullData: true` forces Etherscan, defaults an omitted page size to 10,000, and remains cursor-paginated rather than performing unbounded aggregation.
+**Design at completion:** `pageSize` accepts 1–10,000. Moralis is eligible through 100, Alchemy ERC-20 through 1,000 per stream, and Etherscan through 10,000. The later ADR-032 Blockscout extension makes verified Etherscan-compatible Blockscout routes eligible alongside Etherscan for `fullData`; the mode remains cursor-paginated rather than performing unbounded aggregation.
 
 **Acceptance:** Deterministic tests prove provider eligibility at 100, 1,000, 1,001, and 10,000; a cursor rejects a changed `fullData` setting; no over-limit provider request is sent; and opt-in live checks use `.env.key` without printing secret values, URLs, cursors, or returned records.
 
@@ -341,7 +363,7 @@ Alchemy, or Moralis with explicit provenance.
 - Official API semantics were rechecked. The implementation and `TOKEN_PRICE_UPGRADE.md` record the only material correction: OKX uses `bar=1Dutc` rather than `1D` to honor the SDK UTC-day contract. GeckoTerminal requests `currency=usd` and the resolved `token=base|quote` side.
 - Focused commits remain pending because Git user.name and user.email are unset; no identity will be fabricated and no push will be made.
 
-- Work Packages 10 and 11 are complete: list `pageSize` now accepts 1–10,000; provider capability filtering enforces Moralis 100, Alchemy ERC-20 1,000 per stream, and Etherscan 10,000. Alchemy both direction returns the full two-stream union with an Alchemy-pinned dual cursor. `fullData: true` makes Etherscan the only candidate and defaults an omitted page size to 10,000; it remains cursor-paginated and is part of the cursor fingerprint.
+- Work Packages 10 and 11 are complete: list `pageSize` now accepts 1–10,000; provider capability filtering enforces Moralis 100, Alchemy ERC-20 1,000 per stream, and Etherscan-compatible explorer logical pages through 10,000. Alchemy both direction returns the full two-stream union with an Alchemy-pinned dual cursor. As extended by ADR-032, `fullData: true` allows Etherscan or a verified Blockscout route, defaults an omitted page size to 10,000, remains cursor-paginated, and is part of the cursor fingerprint.
 - API-only chain additions are implemented: `address.getTransactionsByBlockRange`
   consumes provider cursors internally, and `chain.getLatestBlockNumber` /
   `getBlockNumberByTimestamp` use Etherscan's indexed block API. Alchemy is not

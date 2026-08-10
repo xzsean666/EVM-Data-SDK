@@ -128,7 +128,7 @@ function supportsRequest(
   chain: ChainDefinition,
   continuation: boolean,
 ): boolean {
-  if (requiresEtherscan(request) && adapter.name !== "etherscan") {
+  if (requiresIndexedFullData(request) && adapter.name !== "etherscan" && adapter.name !== "blockscout") {
     return false;
   }
   if (!hasOperationMethod(adapter, request.operation)) {
@@ -143,7 +143,7 @@ function supportsRequest(
   return adapter.supports(capability);
 }
 
-function requiresEtherscan(request: NormalizedProviderRequest): boolean {
+function requiresIndexedFullData(request: NormalizedProviderRequest): boolean {
   return (request.operation === "getTransactions" || request.operation === "getErc20Transfers") &&
     request.fullData;
 }

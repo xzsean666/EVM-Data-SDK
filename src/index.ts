@@ -5,6 +5,7 @@ export {
 
 export type {
   AlchemyConfiguration,
+  BlockscoutConfiguration,
   ChainlinkConfiguration,
   DeFiConfiguration,
   UniswapV3Configuration,
@@ -55,6 +56,7 @@ export type {
 } from "./domain/rpcModels";
 export type {
   AlchemyRoute,
+  BlockscoutRoute,
   BuiltinProviderName,
   ChainDefinition,
   ChainReference,
@@ -121,6 +123,7 @@ export type { EvmDataClientOptions } from "./client/EvmDataClient";
 export { prewarmSingBox, SUPPORTED_SING_BOX_VERSION } from "./proxy/SingBoxBinaryManager";
 export type { PrewarmSingBoxOptions } from "./proxy/SingBoxBinaryManager";
 export type { DataProviderAdapter, ProviderAdapterFailure } from "./providers/DataProviderAdapter";
+export { BlockscoutAdapter } from "./providers/blockscout/BlockscoutAdapter";
 export type {
   PriceProviderAttemptContext,
   PriceProxyLease,

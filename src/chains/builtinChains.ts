@@ -10,6 +10,7 @@ const definitions = [
     nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
     routes: {
       etherscan: { chainId: "1" },
+      blockscout: { apiUrl: "https://eth.blockscout.com/api" },
       alchemy: { httpUrlPrefix: "https://eth-mainnet.g.alchemy.com/v2" },
       moralis: { chain: "0x1" },
     },
@@ -58,6 +59,7 @@ const definitions = [
     nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
     routes: {
       etherscan: { chainId: "8453" },
+      blockscout: { apiUrl: "https://base.blockscout.com/api" },
       alchemy: { httpUrlPrefix: "https://base-mainnet.g.alchemy.com/v2" },
       moralis: { chain: "0x2105" },
     },

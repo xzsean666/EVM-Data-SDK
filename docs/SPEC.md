@@ -8,7 +8,7 @@ Last verified: 2026-08-07
 
 ## 1. Purpose
 
-EVM Data SDK is a lightweight, Node.js-first TypeScript library that provides stable read-only access to indexed EVM data across Etherscan, Alchemy, and Moralis, plus token price history aggregated from public market-data providers. It gives applications one public model and one failure contract while preserving provider capability differences explicitly.
+EVM Data SDK is a lightweight, Node.js-first TypeScript library that provides stable read-only access to indexed EVM data across Etherscan, Blockscout, Alchemy, and Moralis, plus token price history aggregated from public market-data providers. It gives applications one public model and one failure contract while preserving provider capability differences explicitly.
 
 The SDK does not promise that every provider can satisfy every operation. It selects and falls back only among providers that can satisfy the same semantic contract for the requested chain and options.
 
@@ -54,7 +54,7 @@ const contexts = await client.address.getTransactionContextsByHash({
 
 The exact compile-ready types are an implementation deliverable. The semantic contracts in this specification are fixed unless the architecture is amended.
 
-For the built-in adapters, `ProviderName` is `"etherscan" | "alchemy" | "moralis"`. Custom adapters use a validated non-empty provider name string and remain distinguishable in provenance and cursors.
+For the built-in adapters, `ProviderName` is `"etherscan" | "blockscout" | "alchemy" | "moralis"`. Custom adapters use a validated non-empty provider name string and remain distinguishable in provenance and cursors.
 
 ### 2.2 Initial built-in chains
 
@@ -75,12 +75,12 @@ Custom chain definitions may be supplied in configuration. They must include a u
 
 `yes` means the v0.1 adapter is intended to implement the operation where that provider supports the selected chain and the user's account plan permits it.
 
-| Operation | Etherscan V2 | Alchemy | Moralis Data API |
-| --- | --- | --- | --- |
-| Normal address transactions | yes: `account/txlist` | no: asset transfers are not complete transactions | yes: raw wallet transactions |
-| Latest native balance | yes: `account/balance` | yes: `eth_getBalance` | yes: native balance |
-| ERC-20 transfers, both directions | yes | yes: bounded two-stream `alchemy_getAssetTransfers` merge | yes |
-| ERC-20 transfers, incoming or outgoing | yes, with SDK-side filtering | yes: `alchemy_getAssetTransfers` | yes, with SDK-side filtering |
+| Operation | Etherscan V2 | Blockscout compatible | Alchemy | Moralis Data API |
+| --- | --- | --- | --- | --- |
+| Normal address transactions | yes: `account/txlist` | yes: `account/txlist` | no: asset transfers are not complete transactions | yes: raw wallet transactions |
+| Latest native balance | yes: `account/balance` | yes: `account/balance` | yes: `eth_getBalance` | yes: native balance |
+| ERC-20 transfers, both directions | yes | yes: `account/tokentx` | yes: bounded two-stream `alchemy_getAssetTransfers` merge | yes |
+| ERC-20 transfers, incoming or outgoing | yes, with SDK-side filtering | yes, with SDK-side filtering | yes: `alchemy_getAssetTransfers` | yes, with SDK-side filtering |
 
 The router must evaluate request features, not only method names. Alchemy is eligible for an ERC-20 request in every direction through 1,000 records; `direction: "both"` is a bounded merge of Alchemy's independent incoming and outgoing streams. Alchemy remains ineligible for normal transaction history because asset transfers are not complete transactions.
 
@@ -119,7 +119,7 @@ in-flight reads, without a background refresh timer.
 ### 2.5 Request normalization
 
 - List requests default to `pageSize: 50` and `order: "desc"`. Accepted page sizes are integers from 1 through 10,000. Provider eligibility is page-size-aware: Moralis accepts 1–100, Alchemy accepts 1–1,000 for ERC-20 operations, and Etherscan accepts 1–10,000 for list operations.
-- `fullData: true` is available on list requests. It forces the request (and every retry) to Etherscan, because Etherscan has the largest supported page capacity. When `pageSize` is omitted in this mode, it uses 10,000. The name does **not** mean that one SDK call aggregates every historical record: the result remains one Etherscan page and callers must follow `nextCursor` until it is `null`.
+- `fullData: true` is available on list requests. It restricts the request (and every retry) to configured Etherscan-compatible Etherscan or Blockscout adapters. When `pageSize` is omitted in this mode, it uses a 10,000-record logical page; each adapter may use smaller physical pages. The name does **not** mean that one SDK call aggregates every historical record: callers must follow `nextCursor` until it is `null`.
 - ERC-20 transfer requests default to `direction: "both"` and may specify one structurally valid `tokenAddress`.
 - For Alchemy `direction: "both"`, `pageSize` is applied to each upstream stream. One SDK page returns the complete de-duplicated union of those two upstream pages, so it may contain up to `2 × pageSize` transfers. A self-transfer is assigned to outgoing only, so it cannot be repeated when the independent stream cursors advance at different rates. Its next cursor contains only the two Alchemy continuation states.
 - Optional `startBlock` and `endBlock` filters are decimal strings. They are normalized without leading zeroes, and `startBlock` must not exceed `endBlock`.
@@ -320,7 +320,7 @@ The client must validate configuration during construction and fail before any n
 
 The router must select providers in caller-configured priority order after filtering by chain, operation, and request features. It must return `UNSUPPORTED_OPERATION` without a network call when no provider is eligible.
 
-For list requests, page size is an exact capability feature. A request for 1,000 records may route only to eligible Alchemy and Etherscan adapters (Alchemy remains limited to ERC-20 transfers); a request for 1,001 through 10,000 records may route only to Etherscan. `fullData: true` limits candidates to Etherscan even when a smaller page size was explicitly supplied. Eligible candidates remain ordered by the caller's provider configuration and are tried serially under the existing bounded fallback policy.
+For list requests, page size is an exact capability feature. A request for 1,000 records may route only to eligible Alchemy, Etherscan, and Blockscout adapters (Alchemy remains limited to ERC-20 transfers); a request for 1,001 through 10,000 records may route only to Etherscan-compatible Etherscan/Blockscout adapters. `fullData: true` applies that same restriction even when a smaller page size was explicitly supplied. Eligible candidates remain ordered by the caller's provider configuration and are tried serially under the existing bounded fallback policy.
 
 ### FR-003 Provider fallback
 
@@ -778,3 +778,25 @@ source, never fetched at runtime. Adding a protocol or chain requires a new
 adapter/manifest entry, official-address and ABI verification, deterministic
 fixtures, and the handoff procedure in
 `docs/DEFI_EXCHANGE_RATE_SNAPSHOT/AI_CONTEXT.md`.
+
+## 15. Blockscout provider extension
+
+`blockscout` is a built-in indexed provider for Blockscout instances exposing
+the Etherscan-compatible `/api` contract. It accepts the same address,
+transaction, native-balance, ERC-20 transfer, page-size, direction, block-range,
+and cursor inputs as the Etherscan adapter. Its public output uses the existing
+domain models and reports `provider: "blockscout"`.
+
+Each Blockscout configuration has an independent API-key pool and may provide a
+network-specific `baseUrl`. With both Etherscan and Blockscout configured, the
+central router and executor choose only capability-compatible candidates and
+perform bounded key/provider fallback. A cursor is pinned to its original
+provider configuration. The SDK does not infer Blockscout URLs for arbitrary
+chains; a chain must declare `routes.blockscout.apiUrl`. A provider `baseUrl`
+may override that declared route but does not broaden chain capability.
+
+The adapter validates Etherscan-shaped envelopes at the provider boundary,
+canonicalizes all integer quantities to decimal strings, filters transfer
+direction in the SDK, and redacts credentials and upstream text from errors.
+Blockscout v2 REST-only endpoints and operations without verified semantic
+equivalence remain out of scope.

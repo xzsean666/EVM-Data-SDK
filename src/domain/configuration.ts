@@ -121,6 +121,10 @@ export interface EtherscanConfiguration extends ProviderConfigurationBase {
   readonly kind: "etherscan";
 }
 
+export interface BlockscoutConfiguration extends ProviderConfigurationBase {
+  readonly kind: "blockscout";
+}
+
 export interface AlchemyConfiguration extends ProviderConfigurationBase {
   readonly kind: "alchemy";
 }
@@ -131,11 +135,16 @@ export interface MoralisConfiguration extends ProviderConfigurationBase {
 
 export type ProviderConfiguration =
   | EtherscanConfiguration
+  | BlockscoutConfiguration
   | AlchemyConfiguration
   | MoralisConfiguration;
 
 interface NormalizedEtherscanConfiguration extends NormalizedProviderConfigurationBase {
   readonly kind: "etherscan";
+}
+
+interface NormalizedBlockscoutConfiguration extends NormalizedProviderConfigurationBase {
+  readonly kind: "blockscout";
 }
 
 interface NormalizedAlchemyConfiguration extends NormalizedProviderConfigurationBase {
@@ -148,6 +157,7 @@ interface NormalizedMoralisConfiguration extends NormalizedProviderConfiguration
 
 type NormalizedProviderConfiguration =
   | NormalizedEtherscanConfiguration
+  | NormalizedBlockscoutConfiguration
   | NormalizedAlchemyConfiguration
   | NormalizedMoralisConfiguration;
 
@@ -293,6 +303,7 @@ const providerBaseSchema = {
 };
 const providerSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("etherscan"), ...providerBaseSchema }).strict(),
+  z.object({ kind: z.literal("blockscout"), ...providerBaseSchema }).strict(),
   z.object({ kind: z.literal("alchemy"), ...providerBaseSchema }).strict(),
   z.object({ kind: z.literal("moralis"), ...providerBaseSchema }).strict(),
 ]);
@@ -644,6 +655,9 @@ function normalizeProvider(
   if (provider.kind === "etherscan") {
     return Object.freeze({ kind: "etherscan", ...common, ...baseUrl });
   }
+  if (provider.kind === "blockscout") {
+    return Object.freeze({ kind: "blockscout", ...common, ...baseUrl });
+  }
   if (provider.kind === "alchemy") {
     return Object.freeze({ kind: "alchemy", ...common, ...baseUrl });
   }
@@ -728,5 +742,5 @@ function isLoopbackHost(hostname: string): boolean {
 }
 
 export function isBuiltinProviderName(value: string): value is BuiltinProviderName {
-  return value === "etherscan" || value === "alchemy" || value === "moralis";
+  return value === "etherscan" || value === "blockscout" || value === "alchemy" || value === "moralis";
 }

@@ -579,3 +579,35 @@ can mix inconsistent state.
 
 **Trade-off:** A request may repeat all batches after an endpoint failure, but
 the result is internally consistent and endpoint failures are isolated.
+
+## ADR-032: Blockscout is an independent Etherscan-compatible provider
+
+**Status:** Accepted by owner in the 2026-08-10 implementation request
+
+This ADR supersedes ADR-021 only where ADR-021 named Etherscan as the exclusive
+`fullData`/1,001–10,000 provider; verified Etherscan-compatible Blockscout
+routes now share that eligibility. All other ADR-021 limits remain accepted.
+
+**Decision:** Add `blockscout` as a distinct built-in provider configuration
+and provenance value while sharing the already-validated Etherscan-compatible
+schema, mapper, pagination, and error-classification implementation. Keep a
+separate credential pool and provider configuration ID. Require a verified
+`routes.blockscout.apiUrl` for chain capability; a provider `baseUrl` may only
+override that eligible route. Omit the Etherscan V2 `chainid` query parameter.
+
+**Reason:** The public SDK operations and normalized responses are semantically
+compatible, but operational identity, API keys, endpoints, quotas, cursors, and
+health must not be conflated. A separate provider lets the existing executor
+select and fall back between Etherscan and Blockscout without changing the
+application-facing functions or models.
+
+**Alternatives considered:** Treat Blockscout keys as Etherscan keys; rejected
+because the endpoints and quota domains differ. Copy the complete Etherscan
+adapter; rejected because it would duplicate mapping and pagination logic.
+Adopt Blockscout v2 REST endpoints immediately; rejected because those payloads
+and pagination semantics require a separate verified adapter contract.
+
+**Trade-off:** The compatibility seam contains provider-identity parameters,
+and individual Blockscout deployments may not implement every optional
+Etherscan action. Capability must remain explicit and production instances
+need bounded verification before optional actions are relied upon.

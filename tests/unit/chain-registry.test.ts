@@ -27,6 +27,7 @@ describe("ChainRegistry", () => {
         nativeCurrency: { name: "Local Ether", symbol: "Leth", decimals: 18 },
         routes: {
           etherscan: { chainId: "9001" },
+          blockscout: { apiUrl: "https://local.blockscout.example/api" },
           moralis: { chain: "0x2329" },
         },
       },
@@ -36,7 +37,10 @@ describe("ChainRegistry", () => {
     expect(chain).toMatchObject({
       chainId: 9001,
       alias: "local-evm",
-      routes: { etherscan: { chainId: "9001" } },
+      routes: {
+        etherscan: { chainId: "9001" },
+        blockscout: { apiUrl: "https://local.blockscout.example/api" },
+      },
     });
     expect(registry.getByChainId(9001)).toBe(chain);
     expect(registry.has("local")).toBe(true);
@@ -70,6 +74,7 @@ describe("ChainRegistry", () => {
     expect(Object.isFrozen(chain)).toBe(true);
     expect(Object.isFrozen(chain.nativeCurrency)).toBe(true);
     expect(Object.isFrozen(chain.routes)).toBe(true);
+    expect(Object.isFrozen(chain.routes.blockscout)).toBe(true);
     expect(Object.isFrozen(chain.aliases)).toBe(true);
     expect(() => ((chain as { name: string }).name = "changed")).toThrow();
     expect(() => registry.resolve("not-a-chain")).toThrowError(

@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { invalidConfiguration } from "./errors";
 
-export type BuiltinProviderName = "etherscan" | "alchemy" | "moralis";
+export type BuiltinProviderName = "etherscan" | "blockscout" | "alchemy" | "moralis";
 export type ProviderName = BuiltinProviderName | (string & {});
 
 export interface NativeCurrency {
@@ -23,8 +23,14 @@ export interface MoralisRoute {
   readonly chain: string;
 }
 
+/** Etherscan-compatible Blockscout API endpoint for one chain. */
+export interface BlockscoutRoute {
+  readonly apiUrl: string;
+}
+
 export interface ChainRoutes {
   readonly etherscan?: EtherscanRoute;
+  readonly blockscout?: BlockscoutRoute;
   readonly alchemy?: AlchemyRoute;
   readonly moralis?: MoralisRoute;
 }
@@ -47,6 +53,12 @@ const routeSchema = z.object({
   etherscan: z
     .object({
       chainId: z.string().regex(decimalStringPattern),
+    })
+    .strict()
+    .optional(),
+  blockscout: z
+    .object({
+      apiUrl: z.string().url(),
     })
     .strict()
     .optional(),
@@ -104,6 +116,13 @@ export function parseChainDefinition(input: unknown): ChainDefinition {
   }
 
   if (
+    chain.routes.blockscout !== undefined &&
+    !isAllowedProviderUrl(chain.routes.blockscout.apiUrl)
+  ) {
+    throw invalidConfiguration(`Chain ${chain.alias} has an invalid Blockscout route URL.`);
+  }
+
+  if (
     chain.routes.etherscan !== undefined &&
     BigInt(chain.routes.etherscan.chainId) !== BigInt(chain.chainId)
   ) {
@@ -112,6 +131,7 @@ export function parseChainDefinition(input: unknown): ChainDefinition {
 
   const routes = {
     ...(chain.routes.etherscan === undefined ? {} : { etherscan: chain.routes.etherscan }),
+    ...(chain.routes.blockscout === undefined ? {} : { blockscout: chain.routes.blockscout }),
     ...(chain.routes.alchemy === undefined ? {} : { alchemy: chain.routes.alchemy }),
     ...(chain.routes.moralis === undefined ? {} : { moralis: chain.routes.moralis }),
   };
@@ -132,6 +152,9 @@ export function freezeChainDefinition(chain: ChainDefinition): ChainDefinition {
     ...(chain.routes.etherscan === undefined
       ? {}
       : { etherscan: Object.freeze({ ...chain.routes.etherscan }) }),
+    ...(chain.routes.blockscout === undefined
+      ? {}
+      : { blockscout: Object.freeze({ ...chain.routes.blockscout }) }),
     ...(chain.routes.alchemy === undefined
       ? {}
       : { alchemy: Object.freeze({ ...chain.routes.alchemy }) }),

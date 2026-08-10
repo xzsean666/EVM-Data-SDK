@@ -119,6 +119,7 @@ The package build must:
 
 ```text
 ETHERSCAN_API_KEY
+BLOCKSCOUT_API_KEY
 ALCHEMY_API_KEY
 MORALIS_API_KEY
 ```

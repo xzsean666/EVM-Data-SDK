@@ -7,6 +7,7 @@ import type {
   ProviderBlockRangeWindowResult,
   ProviderAttemptContext,
 } from "../DataProviderAdapter";
+import type { ProviderName } from "../../domain/chains";
 import type {
   NormalizedErc20BlockRangeRequest,
   NormalizedErc20TransfersRequest,
@@ -53,6 +54,10 @@ export interface EtherscanAdapterOptions {
   readonly transport?: HttpTransport;
   readonly baseUrl?: string;
   readonly allowInsecureHttp?: boolean;
+  /** Internal compatibility seam used by BlockscoutAdapter. */
+  readonly providerName?: "etherscan" | "blockscout";
+  readonly routeName?: "etherscan" | "blockscout";
+  readonly defaultBaseUrl?: string;
 }
 
 interface EtherscanPageState {
@@ -60,20 +65,27 @@ interface EtherscanPageState {
 }
 
 export class EtherscanAdapter implements DataProviderAdapter {
-  readonly name = "etherscan" as const;
+  readonly name: "etherscan" | "blockscout";
 
   private readonly transport: HttpTransport;
   private readonly baseUrl: string;
+  private readonly routeName: "etherscan" | "blockscout";
   /** Etherscan caps historical/holding PRO endpoints at two requests/second. */
   private historicalBalanceNextAt = 0;
 
   constructor(options: EtherscanAdapterOptions = {}) {
+    this.name = options.providerName ?? "etherscan";
+    this.routeName = options.routeName ?? "etherscan";
     this.transport = options.transport ?? new AxiosHttpTransport();
-    this.baseUrl = normalizeBaseUrl(options.baseUrl ?? ETHERSCAN_V2_BASE_URL, options.allowInsecureHttp ?? false);
+    this.baseUrl = normalizeBaseUrl(
+      options.baseUrl ?? options.defaultBaseUrl ?? ETHERSCAN_V2_BASE_URL,
+      options.allowInsecureHttp ?? false,
+      this.name,
+    );
   }
 
   supports(request: CapabilityRequest): boolean {
-    if (request.chain.routes.etherscan === undefined) return false;
+    if (this.routeFor(request.chain) === undefined) return false;
     if (request.operation === "getNativeBalance") return true;
     if (request.operation === "getErc20TransfersByBlockRange") return true;
     // The adapter can satisfy the SDK's public 10,000-record logical page
@@ -81,11 +93,29 @@ export class EtherscanAdapter implements DataProviderAdapter {
     return "pageSize" in request.request && request.request.pageSize <= MAX_PAGE_SIZE;
   }
 
+  private routeFor(chain: ProviderAttemptContext["chain"]): { readonly chainId?: string; readonly apiUrl: string } | undefined {
+    if (this.routeName === "blockscout") {
+      const route = chain.routes.blockscout;
+      return route;
+    }
+    const route = chain.routes.etherscan;
+    return route === undefined ? undefined : { ...route, apiUrl: this.baseUrl };
+  }
+
+  private endpointFor(chain: ProviderAttemptContext["chain"]): string {
+    if (this.routeName === "blockscout") {
+      return this.baseUrl === ETHERSCAN_V2_BASE_URL
+        ? chain.routes.blockscout?.apiUrl ?? this.baseUrl
+        : this.baseUrl;
+    }
+    return this.baseUrl;
+  }
+
   async getTransactions(
     request: NormalizedTransactionsRequest,
     context: ProviderAttemptContext,
   ): Promise<ProviderPageResult<Transaction, EtherscanPageState>> {
-    const page = readPageState(context.providerPageState);
+    const page = readPageState(context.providerPageState, this.name);
     const body = await this.call("txlist", {
       address: request.address,
       page,
@@ -96,22 +126,22 @@ export class EtherscanAdapter implements DataProviderAdapter {
     }, context);
     const envelope = etherscanTransactionListEnvelopeSchema.safeParse(body);
     if (!envelope.success) {
-      throw invalidResponse(context);
+      throw invalidResponse(context, undefined, this.name);
     }
     if (envelope.data.status === "0") {
       if (isEmptyMessage(envelope.data.message, envelope.data.result, "transactions")) {
-        return pageResult([], null, context);
+        return pageResult([], null, context, this.name);
       }
-      throw classifyEtherscanEnvelopeError(envelope.data.message, envelope.data.result, context.chain.chainId);
+      throw classifyEtherscanEnvelopeError(envelope.data.message, envelope.data.result, context.chain.chainId, this.name);
     }
     if (!Array.isArray(envelope.data.result)) {
-      throw invalidResponse(context);
+      throw invalidResponse(context, undefined, this.name);
     }
     try {
-      const items = envelope.data.result.map((item) => mapEtherscanTransaction(item, context.chain));
-      return pageResult(items, nextPage(items.length, etherscanPageSize(request.pageSize), page), context);
+      const items = envelope.data.result.map((item) => mapEtherscanTransaction(item, context.chain, this.name));
+      return pageResult(items, nextPage(items.length, etherscanPageSize(request.pageSize), page), context, this.name);
     } catch (error: unknown) {
-      throw invalidResponse(context, error);
+      throw invalidResponse(context, error, this.name);
     }
   }
 
@@ -122,18 +152,18 @@ export class EtherscanAdapter implements DataProviderAdapter {
     const body = await this.call("balance", { address: request.address, tag: "latest" }, context);
     const envelope = etherscanBalanceEnvelopeSchema.safeParse(body);
     if (!envelope.success) {
-      throw invalidResponse(context);
+      throw invalidResponse(context, undefined, this.name);
     }
     if (envelope.data.status === "0") {
-      throw classifyEtherscanEnvelopeError(envelope.data.message, envelope.data.result, context.chain.chainId);
+      throw classifyEtherscanEnvelopeError(envelope.data.message, envelope.data.result, context.chain.chainId, this.name);
     }
     if (typeof envelope.data.result !== "string" || !/^[0-9]+$/.test(envelope.data.result)) {
-      throw invalidResponse(context);
+      throw invalidResponse(context, undefined, this.name);
     }
     try {
-      return mapEtherscanBalance(envelope.data.result, context.chain, request.address);
+      return mapEtherscanBalance(envelope.data.result, context.chain, request.address, this.name);
     } catch (error: unknown) {
-      throw invalidResponse(context, error);
+      throw invalidResponse(context, error, this.name);
     }
   }
 
@@ -141,7 +171,7 @@ export class EtherscanAdapter implements DataProviderAdapter {
     request: NormalizedErc20TransfersRequest,
     context: ProviderAttemptContext,
   ): Promise<ProviderPageResult<Erc20Transfer, EtherscanPageState>> {
-    const page = readPageState(context.providerPageState);
+    const page = readPageState(context.providerPageState, this.name);
     const body = await this.call("tokentx", {
       address: request.address,
       ...(request.tokenAddress === null ? {} : { contractaddress: request.tokenAddress }),
@@ -153,27 +183,27 @@ export class EtherscanAdapter implements DataProviderAdapter {
     }, context);
     const envelope = etherscanTokenTransferEnvelopeSchema.safeParse(body);
     if (!envelope.success) {
-      throw invalidResponse(context);
+      throw invalidResponse(context, undefined, this.name);
     }
     if (envelope.data.status === "0") {
       if (isEmptyMessage(envelope.data.message, envelope.data.result, "transfers")) {
-        return pageResult([], null, context);
+        return pageResult([], null, context, this.name);
       }
-      throw classifyEtherscanEnvelopeError(envelope.data.message, envelope.data.result, context.chain.chainId);
+      throw classifyEtherscanEnvelopeError(envelope.data.message, envelope.data.result, context.chain.chainId, this.name);
     }
     if (!Array.isArray(envelope.data.result)) {
-      throw invalidResponse(context);
+      throw invalidResponse(context, undefined, this.name);
     }
     try {
-      const allItems = envelope.data.result.map((item) => mapEtherscanTokenTransfer(item, context.chain));
+      const allItems = envelope.data.result.map((item) => mapEtherscanTokenTransfer(item, context.chain, this.name));
       const items = allItems.filter((item) => (
         request.direction === "both" ||
         request.direction === "incoming" && item.to === request.address ||
         request.direction === "outgoing" && item.from === request.address
       ));
-      return pageResult(items, nextPage(allItems.length, etherscanPageSize(request.pageSize), page), context);
+      return pageResult(items, nextPage(allItems.length, etherscanPageSize(request.pageSize), page), context, this.name);
     } catch (error: unknown) {
-      throw invalidResponse(context, error);
+      throw invalidResponse(context, error, this.name);
     }
   }
 
@@ -192,22 +222,22 @@ export class EtherscanAdapter implements DataProviderAdapter {
         endblock: request.endBlock,
       }, context);
       const envelope = etherscanTokenTransferEnvelopeSchema.safeParse(body);
-      if (!envelope.success) throw invalidResponse(context);
+      if (!envelope.success) throw invalidResponse(context, undefined, this.name);
       if (envelope.data.status === "0") {
         if (isEmptyMessage(envelope.data.message, envelope.data.result, "transfers")) return [];
-        throw classifyEtherscanEnvelopeError(envelope.data.message, envelope.data.result, context.chain.chainId);
+        throw classifyEtherscanEnvelopeError(envelope.data.message, envelope.data.result, context.chain.chainId, this.name);
       }
-      if (!Array.isArray(envelope.data.result)) throw invalidResponse(context);
+      if (!Array.isArray(envelope.data.result)) throw invalidResponse(context, undefined, this.name);
       try {
-        return envelope.data.result.map((item) => mapEtherscanTokenTransfer(item, context.chain));
+        return envelope.data.result.map((item) => mapEtherscanTokenTransfer(item, context.chain, this.name));
       } catch (error: unknown) {
-        throw invalidResponse(context, error);
+        throw invalidResponse(context, error, this.name);
       }
     };
 
     const firstPage = await fetchPage(1);
     if (firstPage.length < ETHERSCAN_MAX_PAGE_SIZE) {
-      return completeRangePage(firstPage, request, context);
+      return completeRangePage(firstPage, request, context, this.name);
     }
 
     // Preserve binary splitting for broad intervals. Fetching every physical
@@ -215,7 +245,7 @@ export class EtherscanAdapter implements DataProviderAdapter {
     // once the scanner isolates one block, pagination below proves that last
     // window is complete instead of treating exactly 1,000 rows as a stall.
     if (request.startBlock !== request.endBlock) {
-      return incompleteRangePage(firstPage, request, context);
+      return incompleteRangePage(firstPage, request, context, this.name);
     }
 
     const pages = [firstPage];
@@ -225,7 +255,7 @@ export class EtherscanAdapter implements DataProviderAdapter {
       pages.push(current);
       if (current.length < ETHERSCAN_MAX_PAGE_SIZE) break;
     }
-    return completeRangePage(pages.flat(), request, context);
+    return completeRangePage(pages.flat(), request, context, this.name);
   }
 
   /**
@@ -244,12 +274,12 @@ export class EtherscanAdapter implements DataProviderAdapter {
       blockno: request.blockNumber,
     }, context);
     const envelope = etherscanBalanceEnvelopeSchema.safeParse(body);
-    if (!envelope.success) throw invalidResponse(context);
+    if (!envelope.success) throw invalidResponse(context, undefined, this.name);
     if (envelope.data.status === "0") {
-      throw classifyEtherscanStandardEndpointError(envelope.data.message, envelope.data.result, context.chain.chainId);
+      throw classifyEtherscanStandardEndpointError(envelope.data.message, envelope.data.result, context.chain.chainId, this.name);
     }
     if (typeof envelope.data.result !== "string" || !/^[0-9]+$/.test(envelope.data.result)) {
-      throw invalidResponse(context);
+      throw invalidResponse(context, undefined, this.name);
     }
     return {
       chainId: context.chain.chainId,
@@ -280,29 +310,29 @@ export class EtherscanAdapter implements DataProviderAdapter {
         offset: 100,
       }, context);
       const envelope = etherscanTokenHoldingEnvelopeSchema.safeParse(body);
-      if (!envelope.success) throw invalidResponse(context);
+      if (!envelope.success) throw invalidResponse(context, undefined, this.name);
       if (envelope.data.status === '0') {
         if (isEmptyMessage(envelope.data.message, envelope.data.result, 'transfers')) break;
-        throw classifyEtherscanStandardEndpointError(envelope.data.message, envelope.data.result, context.chain.chainId);
+        throw classifyEtherscanStandardEndpointError(envelope.data.message, envelope.data.result, context.chain.chainId, this.name);
       }
-      if (!Array.isArray(envelope.data.result)) throw invalidResponse(context);
+      if (!Array.isArray(envelope.data.result)) throw invalidResponse(context, undefined, this.name);
       try {
         for (const raw of envelope.data.result) {
-          const item = mapEtherscanTokenHolding(raw, context.chain, request.address);
+          const item = mapEtherscanTokenHolding(raw, context.chain, request.address, this.name);
           if (seen.has(item.tokenAddress)) continue;
           seen.add(item.tokenAddress);
           items.push(item);
         }
       } catch (error: unknown) {
-        throw invalidResponse(context, error);
+        throw invalidResponse(context, error, this.name);
       }
       if (envelope.data.result.length < 100) break;
       if (items.length > 100_000) {
-        throw new EvmDataError({ code: 'INVALID_PROVIDER_RESPONSE', message: 'Etherscan token holdings exceeded the SDK record limit.', retryable: false, provider: this.name, chainId: context.chain.chainId });
+        throw new EvmDataError({ code: 'INVALID_PROVIDER_RESPONSE', message: 'Indexed provider token holdings exceeded the SDK record limit.', retryable: false, provider: this.name, chainId: context.chain.chainId });
       }
     }
     if (page > 1_000) {
-      throw new EvmDataError({ code: 'INVALID_PROVIDER_RESPONSE', message: 'Etherscan token holdings exceeded the SDK page limit.', retryable: false, provider: this.name, chainId: context.chain.chainId });
+      throw new EvmDataError({ code: 'INVALID_PROVIDER_RESPONSE', message: 'Indexed provider token holdings exceeded the SDK page limit.', retryable: false, provider: this.name, chainId: context.chain.chainId });
     }
     return {
       chainId: context.chain.chainId,
@@ -335,15 +365,15 @@ export class EtherscanAdapter implements DataProviderAdapter {
         endblock: request.endBlock,
       }, context);
       const envelope = etherscanInternalTransactionEnvelopeSchema.safeParse(body);
-      if (!envelope.success) throw invalidResponse(context);
+      if (!envelope.success) throw invalidResponse(context, undefined, this.name);
       if (envelope.data.status === "0") {
         if (isEmptyMessage(envelope.data.message, envelope.data.result, "internal transfers")) break;
-        throw classifyEtherscanEnvelopeError(envelope.data.message, envelope.data.result, context.chain.chainId);
+        throw classifyEtherscanEnvelopeError(envelope.data.message, envelope.data.result, context.chain.chainId, this.name);
       }
-      if (!Array.isArray(envelope.data.result)) throw invalidResponse(context);
+      if (!Array.isArray(envelope.data.result)) throw invalidResponse(context, undefined, this.name);
       try {
         for (const raw of envelope.data.result) {
-          const item = mapEtherscanInternalTransaction(raw, context.chain);
+          const item = mapEtherscanInternalTransaction(raw, context.chain, this.name);
           if (item.from !== request.address && item.to !== request.address) continue;
           const key = `${item.transactionHash}:${item.traceId ?? ""}:${item.from}:${item.to}:${item.value}:${item.blockNumber}`;
           if (!seen.has(key)) {
@@ -352,15 +382,15 @@ export class EtherscanAdapter implements DataProviderAdapter {
           }
         }
       } catch (error: unknown) {
-        throw invalidResponse(context, error);
+        throw invalidResponse(context, error, this.name);
       }
       if (envelope.data.result.length < ETHERSCAN_MAX_PAGE_SIZE) break;
       if (items.length > 100_000) {
-        throw new EvmDataError({ code: "INVALID_PROVIDER_RESPONSE", message: "Etherscan internal range exceeded the SDK record limit.", retryable: false, provider: this.name, chainId: context.chain.chainId });
+        throw new EvmDataError({ code: "INVALID_PROVIDER_RESPONSE", message: "Indexed provider internal range exceeded the SDK record limit.", retryable: false, provider: this.name, chainId: context.chain.chainId });
       }
     }
     if (page > 1_000) {
-      throw new EvmDataError({ code: "INVALID_PROVIDER_RESPONSE", message: "Etherscan internal range exceeded the SDK page limit.", retryable: false, provider: this.name, chainId: context.chain.chainId });
+      throw new EvmDataError({ code: "INVALID_PROVIDER_RESPONSE", message: "Indexed provider internal range exceeded the SDK page limit.", retryable: false, provider: this.name, chainId: context.chain.chainId });
     }
     return {
       chainId: context.chain.chainId,
@@ -394,29 +424,29 @@ export class EtherscanAdapter implements DataProviderAdapter {
         endblock: request.endBlock,
       }, context);
       const envelope = etherscanBeaconWithdrawalEnvelopeSchema.safeParse(body);
-      if (!envelope.success) throw invalidResponse(context);
+      if (!envelope.success) throw invalidResponse(context, undefined, this.name);
       if (envelope.data.status === "0") {
         if (isEmptyMessage(envelope.data.message, envelope.data.result, "beacon withdrawals")) break;
-        throw classifyEtherscanEnvelopeError(envelope.data.message, envelope.data.result, context.chain.chainId);
+        throw classifyEtherscanEnvelopeError(envelope.data.message, envelope.data.result, context.chain.chainId, this.name);
       }
-      if (!Array.isArray(envelope.data.result)) throw invalidResponse(context);
+      if (!Array.isArray(envelope.data.result)) throw invalidResponse(context, undefined, this.name);
       try {
         for (const raw of envelope.data.result) {
-          const item = mapEtherscanBeaconWithdrawal(raw, context.chain);
+          const item = mapEtherscanBeaconWithdrawal(raw, context.chain, this.name);
           if (item.address !== request.address || seen.has(item.withdrawalIndex)) continue;
           seen.add(item.withdrawalIndex);
           items.push(item);
         }
       } catch (error: unknown) {
-        throw invalidResponse(context, error);
+        throw invalidResponse(context, error, this.name);
       }
       if (envelope.data.result.length < ETHERSCAN_MAX_PAGE_SIZE) break;
       if (items.length > 100_000) {
-        throw new EvmDataError({ code: "INVALID_PROVIDER_RESPONSE", message: "Etherscan beacon range exceeded the SDK record limit.", retryable: false, provider: this.name, chainId: context.chain.chainId });
+        throw new EvmDataError({ code: "INVALID_PROVIDER_RESPONSE", message: "Indexed provider beacon range exceeded the SDK record limit.", retryable: false, provider: this.name, chainId: context.chain.chainId });
       }
     }
     if (page > 1_000) {
-      throw new EvmDataError({ code: "INVALID_PROVIDER_RESPONSE", message: "Etherscan beacon range exceeded the SDK page limit.", retryable: false, provider: this.name, chainId: context.chain.chainId });
+      throw new EvmDataError({ code: "INVALID_PROVIDER_RESPONSE", message: "Indexed provider beacon range exceeded the SDK page limit.", retryable: false, provider: this.name, chainId: context.chain.chainId });
     }
     return {
       chainId: context.chain.chainId,
@@ -447,24 +477,24 @@ export class EtherscanAdapter implements DataProviderAdapter {
         chainId: context.chain.chainId,
       })
     }
-    const route = context.chain.routes.etherscan
+    const route = this.routeFor(context.chain);
     if (route === undefined) {
-      throw new EvmDataError({ code: 'UNSUPPORTED_CHAIN', message: 'Etherscan does not support this chain.', retryable: false, provider: this.name, chainId: context.chain.chainId })
+      throw new EvmDataError({ code: 'UNSUPPORTED_CHAIN', message: 'Indexed provider does not support this chain.', retryable: false, provider: this.name, chainId: context.chain.chainId })
     }
     if (context.credential === null) {
-      throw new EvmDataError({ code: 'AUTHENTICATION_FAILED', message: 'Etherscan requires an API key.', retryable: false, provider: this.name, chainId: context.chain.chainId })
+      throw new EvmDataError({ code: 'AUTHENTICATION_FAILED', message: 'Indexed provider requires an API key.', retryable: false, provider: this.name, chainId: context.chain.chainId })
     }
     let response
     try {
       response = await this.transport.request({
         method: 'GET',
-        url: this.baseUrl,
+        url: this.endpointFor(context.chain),
         params: {
           module: 'block',
           action: 'getblocknobytime',
           timestamp,
           closest: 'before',
-          chainid: route.chainId,
+          ...(route.chainId === undefined ? {} : { chainid: route.chainId }),
           apikey: context.credential.value,
         },
         timeoutMs: context.timeoutMs,
@@ -472,18 +502,18 @@ export class EtherscanAdapter implements DataProviderAdapter {
         proxy: context.proxy === null ? null : parseHttpProxyUrl(context.proxy.url),
       })
     } catch (error: unknown) {
-      const normalized = normalizeEtherscanTransportError(error, context.chain.chainId)
+      const normalized = normalizeEtherscanTransportError(error, context.chain.chainId, this.name)
       if (normalized !== null) throw normalized
-      throw new EvmDataError({ code: 'PROVIDER_UNAVAILABLE', message: 'Etherscan block lookup failed.', retryable: true, provider: this.name, chainId: context.chain.chainId })
+      throw new EvmDataError({ code: 'PROVIDER_UNAVAILABLE', message: 'Indexed provider block lookup failed.', retryable: true, provider: this.name, chainId: context.chain.chainId })
     }
-    const httpError = classifyEtherscanHttpResponse(response, context.chain.chainId)
+    const httpError = classifyEtherscanHttpResponse(response, context.chain.chainId, this.name)
     if (httpError !== null) throw httpError
     const body = response.body as { status?: unknown; message?: unknown; result?: unknown }
     if (body?.status === '0') {
-      throw classifyEtherscanEnvelopeError(String(body.message ?? ''), body.result, context.chain.chainId)
+      throw classifyEtherscanEnvelopeError(String(body.message ?? ''), body.result, context.chain.chainId, this.name)
     }
     if (typeof body?.result !== 'string' || !/^\d+$/.test(body.result)) {
-      throw invalidResponse(context)
+      throw invalidResponse(context, undefined, this.name)
     }
     return BigInt(body.result).toString()
   }
@@ -493,11 +523,11 @@ export class EtherscanAdapter implements DataProviderAdapter {
     params: Record<string, string | number | undefined>,
     context: ProviderAttemptContext,
   ): Promise<unknown> {
-    const route = context.chain.routes.etherscan;
+    const route = this.routeFor(context.chain);
     if (route === undefined) {
       throw new EvmDataError({
         code: "UNSUPPORTED_CHAIN",
-        message: "Etherscan does not support this chain.",
+        message: "Indexed provider does not support this chain.",
         retryable: false,
         provider: this.name,
         chainId: context.chain.chainId,
@@ -506,7 +536,7 @@ export class EtherscanAdapter implements DataProviderAdapter {
     if (context.credential === null) {
       throw new EvmDataError({
         code: "AUTHENTICATION_FAILED",
-        message: "Etherscan requires an API key.",
+        message: "Indexed provider requires an API key.",
         retryable: false,
         provider: this.name,
         chainId: context.chain.chainId,
@@ -516,11 +546,11 @@ export class EtherscanAdapter implements DataProviderAdapter {
     try {
       response = await this.transport.request({
         method: "GET",
-        url: this.baseUrl,
+        url: this.endpointFor(context.chain),
         params: {
           module: "account",
           action,
-          chainid: route.chainId,
+          ...(route.chainId === undefined ? {} : { chainid: route.chainId }),
           apikey: context.credential.value,
           ...params,
         },
@@ -529,19 +559,19 @@ export class EtherscanAdapter implements DataProviderAdapter {
         proxy: context.proxy === null ? null : parseHttpProxyUrl(context.proxy.url),
       });
     } catch (error: unknown) {
-      const normalized = normalizeEtherscanTransportError(error, context.chain.chainId);
+      const normalized = normalizeEtherscanTransportError(error, context.chain.chainId, this.name);
       if (normalized !== null) {
         throw normalized;
       }
       throw new EvmDataError({
         code: "PROVIDER_UNAVAILABLE",
-        message: "Etherscan request failed.",
+        message: "Indexed provider request failed.",
         retryable: true,
         provider: this.name,
         chainId: context.chain.chainId,
       });
     }
-    const httpError = classifyEtherscanHttpResponse(response, context.chain.chainId);
+    const httpError = classifyEtherscanHttpResponse(response, context.chain.chainId, this.name);
     if (httpError !== null) {
       throw httpError;
     }
@@ -572,21 +602,21 @@ export class EtherscanAdapter implements DataProviderAdapter {
   }
 }
 
-function normalizeBaseUrl(value: string, allowInsecureHttp: boolean): string {
+function normalizeBaseUrl(value: string, allowInsecureHttp: boolean, provider: ProviderName): string {
   let parsed: URL;
   try {
     parsed = new URL(value);
   } catch {
-    throw new Error("Etherscan base URL must be valid.");
+    throw new Error(`${provider} base URL must be valid.`);
   }
   if (parsed.username !== "" || parsed.password !== "" || parsed.search !== "" || parsed.hash !== "") {
-    throw new Error("Etherscan base URL must not contain credentials or query parameters.");
+    throw new Error(`${provider} base URL must not contain credentials or query parameters.`);
   }
-  if (parsed.hostname.toLowerCase() === "api.etherscan.io" && (parsed.protocol !== "https:" || parsed.pathname !== "/v2/api")) {
+  if (provider === "etherscan" && parsed.hostname.toLowerCase() === "api.etherscan.io" && (parsed.protocol !== "https:" || parsed.pathname !== "/v2/api")) {
     throw new Error("The official Etherscan endpoint must use HTTPS V2.");
   }
   if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && (allowInsecureHttp || isLoopbackHost(parsed.hostname)))) {
-    throw new Error("Etherscan base URL must use HTTPS unless insecure HTTP is explicitly enabled.");
+    throw new Error(`${provider} base URL must use HTTPS unless insecure HTTP is explicitly enabled.`);
   }
   return value.replace(/\/$/, "");
 }
@@ -595,16 +625,16 @@ function isLoopbackHost(hostname: string): boolean {
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname === "::1";
 }
 
-function readPageState(value: unknown): number {
+function readPageState(value: unknown, provider: ProviderName): number {
   if (value === null || value === undefined) {
     return 1;
   }
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new EvmDataError({ code: "INVALID_PROVIDER_RESPONSE", message: "Etherscan page state is invalid.", retryable: false, provider: "etherscan" });
+    throw new EvmDataError({ code: "INVALID_PROVIDER_RESPONSE", message: "Indexed provider page state is invalid.", retryable: false, provider });
   }
   const page = (value as { page?: unknown }).page;
   if (Object.keys(value).length !== 1 || typeof page !== "number" || !Number.isSafeInteger(page) || page < 1 || page > 1_000_000_000) {
-    throw new EvmDataError({ code: "INVALID_PROVIDER_RESPONSE", message: "Etherscan page state is invalid.", retryable: false, provider: "etherscan" });
+    throw new EvmDataError({ code: "INVALID_PROVIDER_RESPONSE", message: "Indexed provider page state is invalid.", retryable: false, provider });
   }
   return page;
 }
@@ -617,11 +647,11 @@ function etherscanPageSize(requestedPageSize: number): number {
   return Math.min(requestedPageSize, ETHERSCAN_MAX_PAGE_SIZE);
 }
 
-function pageResult<T>(items: T[], nextPageState: EtherscanPageState | null, context: ProviderAttemptContext): ProviderPageResult<T, EtherscanPageState> {
+function pageResult<T>(items: T[], nextPageState: EtherscanPageState | null, context: ProviderAttemptContext, provider: ProviderName): ProviderPageResult<T, EtherscanPageState> {
   return {
     items,
     nextPageState,
-    pageInfo: { provider: "etherscan", chainId: context.chain.chainId },
+    pageInfo: { provider, chainId: context.chain.chainId },
   };
 }
 
@@ -646,6 +676,7 @@ function completeRangePage(
   values: readonly Erc20Transfer[],
   request: NormalizedErc20BlockRangeRequest,
   context: ProviderAttemptContext,
+  provider: ProviderName,
 ): ProviderBlockRangeWindowResult {
   return {
     items: rangeItems(values, request),
@@ -654,7 +685,7 @@ function completeRangePage(
     // a second time.
     itemsAlreadyDeduplicated: true,
     complete: true,
-    pageInfo: { provider: "etherscan", chainId: context.chain.chainId },
+    pageInfo: { provider, chainId: context.chain.chainId },
   };
 }
 
@@ -662,21 +693,22 @@ function incompleteRangePage(
   values: readonly Erc20Transfer[],
   request: NormalizedErc20BlockRangeRequest,
   context: ProviderAttemptContext,
+  provider: ProviderName,
 ): ProviderBlockRangeWindowResult {
   return {
     items: rangeItems(values, request),
     itemsAlreadyDeduplicated: true,
     complete: false,
-    pageInfo: { provider: "etherscan", chainId: context.chain.chainId },
+    pageInfo: { provider, chainId: context.chain.chainId },
   };
 }
 
-function invalidResponse(context: ProviderAttemptContext, cause?: unknown): EvmDataError {
+function invalidResponse(context: ProviderAttemptContext, cause?: unknown, provider: ProviderName = "etherscan"): EvmDataError {
   return new EvmDataError({
     code: "INVALID_PROVIDER_RESPONSE",
-    message: "Etherscan returned a malformed response.",
+    message: "Indexed provider returned a malformed response.",
     retryable: false,
-    provider: "etherscan",
+    provider,
     chainId: context.chain.chainId,
     ...(cause === undefined ? {} : { cause }),
   });

@@ -102,7 +102,7 @@ try {
   const esmConsumer = path.join(consumerDirectory, "esm-consumer.mjs");
   await writeFile(
     esmConsumer,
-    'import * as sdk from "evm-data-sdk";\nif (typeof sdk !== "object") throw new Error("ESM import failed");\n',
+    'import * as sdk from "evm-data-sdk";\nif (typeof sdk !== "object" || typeof sdk.BlockscoutAdapter !== "function") throw new Error("ESM import failed");\n',
   );
   run(process.execPath, [esmConsumer]);
 
@@ -119,13 +119,14 @@ try {
     typeScriptConsumer,
     [
     'import { EvmDataClient, EvmDataError } from "evm-data-sdk";',
-      'import type { ClientConfiguration, Page, Transaction } from "evm-data-sdk";',
+      'import type { BlockscoutConfiguration, ClientConfiguration, Page, Transaction } from "evm-data-sdk";',
       'const configuration: ClientConfiguration = { providers: [{ kind: "etherscan", apiKeys: ["test-key"] }] };',
+      'const blockscoutConfiguration: BlockscoutConfiguration = { kind: "blockscout", apiKeys: ["test-key"], baseUrl: "https://eth.blockscout.com/api" };',
       'const transaction: Transaction = { chainId: 1, hash: "0x1234", blockNumber: "1", blockHash: null, transactionIndex: null, timestamp: null, from: "0x1234567890abcdef1234567890abcdef12345678", to: null, nonce: null, value: "0", gasLimit: null, gasUsed: null, gasPrice: null, input: null, status: "unknown", provider: "etherscan" };',
       'const page: Page<Transaction> = { items: [transaction], nextCursor: null, pageInfo: { provider: "etherscan", chainId: 1 } };',
       'const error = new EvmDataError({ code: "INVALID_REQUEST", message: "invalid", retryable: false });',
       'const client = new EvmDataClient(configuration);',
-      'void configuration; void page; void error; void client;',
+      'void configuration; void blockscoutConfiguration; void page; void error; void client;',
       '',
     ].join("\n"),
   );

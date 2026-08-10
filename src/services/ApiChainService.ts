@@ -57,31 +57,37 @@ export class ApiChainService {
     chain: ChainReference
     signal?: AbortSignal
     now?: Date
-  }): Promise<{ chainId: number; blockNumber: string; provider: 'etherscan' }> {
+  }): Promise<{ chainId: number; blockNumber: string; provider: 'etherscan' | 'blockscout' }> {
     const chain = this.registry.resolve(input.chain)
     const timestamp = Math.floor((input.now ?? new Date()).getTime() / 1_000).toString()
-    const blockNumber = await this.withEtherscanCandidates(
+    const result = await this.withEtherscanCandidates(
       chain,
       input.signal,
       'No configured indexed API can determine the latest block.',
-      (adapter, context) => adapter.getBlockNumberByTimestamp(timestamp, context),
+      async (adapter, context) => ({
+        blockNumber: await adapter.getBlockNumberByTimestamp(timestamp, context),
+        provider: adapter.name,
+      }),
     )
-    return { chainId: chain.chainId, blockNumber, provider: 'etherscan' }
+    return { chainId: chain.chainId, ...result }
   }
 
   async getBlockNumberByTimestamp(input: {
     chain: ChainReference
     timestamp: string
     signal?: AbortSignal
-  }): Promise<{ chainId: number; blockNumber: string; provider: 'etherscan' }> {
+  }): Promise<{ chainId: number; blockNumber: string; provider: 'etherscan' | 'blockscout' }> {
     const chain = this.registry.resolve(input.chain)
-    const blockNumber = await this.withEtherscanCandidates(
+    const result = await this.withEtherscanCandidates(
       chain,
       input.signal,
       'No configured indexed API can map timestamps to blocks.',
-      (adapter, context) => adapter.getBlockNumberByTimestamp(input.timestamp, context),
+      async (adapter, context) => ({
+        blockNumber: await adapter.getBlockNumberByTimestamp(input.timestamp, context),
+        provider: adapter.name,
+      }),
     )
-    return { chainId: chain.chainId, blockNumber, provider: 'etherscan' }
+    return { chainId: chain.chainId, ...result }
   }
 
   /** Reads an explicit ERC-20 contract set at one historic block via indexed APIs only. */
@@ -125,7 +131,7 @@ export class ApiChainService {
           address: input.address,
           blockNumber: input.blockNumber,
           items,
-          provider: 'etherscan' as const,
+          provider: adapter.name,
         }
       },
       { includeAlchemy: true },

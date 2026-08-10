@@ -45,7 +45,7 @@ DataProviderAdapter                TokenPriceProviderAdapter
       +----------- AxiosHttpTransport +-----------+
                      |
                      v
- Etherscan / Alchemy / Moralis    Binance / OKX / Coinbase / GeckoTerminal
+ Etherscan / Blockscout / Alchemy / Moralis    Binance / OKX / Coinbase / GeckoTerminal
 ```
 
 The SDK is stateless with respect to blockchain data. Its only in-memory state is operational: credential/proxy selection cursors, cooldowns, and passive provider failure state. No state is persisted between processes.
@@ -114,6 +114,8 @@ src/
 │   │   ├── etherscanErrors.ts
 │   │   ├── etherscanMapper.ts
 │   │   └── etherscanSchemas.ts
+│   ├── blockscout/
+│   │   └── BlockscoutAdapter.ts
 │   ├── alchemy/
 │   │   ├── AlchemyAdapter.ts
 │   │   ├── alchemyErrors.ts
@@ -218,7 +220,7 @@ interface DataProviderAdapter {
 }
 ```
 
-`supports` evaluates the exact operation, chain routing metadata, and request features, including a list request's `pageSize`. The router also verifies that the corresponding method exists and centrally restricts `fullData: true` list requests to Etherscan. An adapter method normally performs one upstream attempt with the already selected credential and proxy. The explicit exception is Alchemy `direction: "both"`: one bounded composite attempt issues independent incoming and outgoing requests, then merges their complete pages. It must not select another credential, sleep, retry, or call another provider.
+`supports` evaluates the exact operation, chain routing metadata, and request features, including a list request's `pageSize`. The router also verifies that the corresponding method exists and centrally restricts `fullData: true` list requests to Etherscan-compatible Etherscan/Blockscout adapters. An adapter method normally performs one upstream attempt with the already selected credential and proxy. The explicit exception is Alchemy `direction: "both"`: one bounded composite attempt issues independent incoming and outgoing requests, then merges their complete pages. It must not select another credential, sleep, retry, or call another provider.
 
 `ProviderAttemptContext` contains the resolved chain route, a credential lease value, optional proxy lease, attempt timeout, caller signal, and a generated correlation ID. It is internal and must never be stored in a cursor.
 
@@ -310,7 +312,7 @@ Provider paging state is local to each adapter:
 - Alchemy incoming/outgoing transfers: `pageKey`, direction, and fixed query fields.
 - Alchemy both-direction transfers: two stream states (`incoming` and `outgoing`), each containing only a page key and exhausted state; the cursor contains no transfer items. A self-transfer is emitted from outgoing only, keeping the streams disjoint across continuations.
 
-The fingerprint also contains `fullData`, so a normal Etherscan cursor cannot be reused to enter Etherscan-only mode (or vice versa). `fullData` does not add an unbounded in-SDK aggregation loop; it is a provider-selection and default-page-size mode.
+The fingerprint also contains `fullData`, so a normal provider cursor cannot be reused to enter Etherscan-compatible full-data mode (or vice versa). `fullData` does not add an unbounded in-SDK aggregation loop; it is a provider-selection and default-page-size mode.
 
 The query fingerprint is a deterministic hash of normalized semantic filters, excluding `cursor`, `signal`, timeouts, credentials, and provider choice.
 
@@ -367,7 +369,7 @@ Proxy state is changed only by transport evidence. A provider 401, logical `NOTO
 - Native balance: `module=account&action=balance`.
 - ERC-20 transfers: `module=account&action=tokentx`.
 - Pagination: page/offset, fixed query filters and sort.
-- List page capacity: 1–10,000 records. This is the only built-in list adapter eligible above 1,000 records and is the exclusive `fullData` adapter.
+- List page capacity: 1–10,000 logical records. Etherscan and compatible Blockscout adapters are the only built-ins eligible above 1,000 and for `fullData`.
 - Special handling: an endpoint-specific no-results response is a successful empty page; other `status: "0"` values are classified errors.
 - Plan behavior: BNB Smart Chain, Base, and OP access can require a paid tier even though the chain is supported.
 
@@ -717,7 +719,33 @@ registry version, Multicall batch count, successful rates, failures, and a
 partial summary. No cache, background health timer, floating-point arithmetic,
 or implicit token discovery is introduced.
 
-## 21. Approval Gate
+## 22. Blockscout provider extension
+
+`BlockscoutAdapter` is a thin specialization of the verified
+Etherscan-compatible adapter contract. The shared seam is limited to provider
+identity, chain route/base URL selection, envelope schemas, domain mapping, and
+error classification. It does not share credentials or health state with an
+Etherscan configuration.
+
+```text
+ProviderRouter
+  -> etherscan configuration -> EtherscanAdapter -> etherscan CredentialPool
+  -> blockscout configuration -> BlockscoutAdapter -> blockscout CredentialPool
+```
+
+Both adapters can satisfy the same public operation only when their capability
+predicate and chain route match. The central `RequestExecutor` owns ordering,
+bounded attempts, proxy leases, credential rotation, and provider fallback.
+The provider cursor stores the exact configuration ID and provider name, so a
+continuation never switches from Etherscan to Blockscout or vice versa.
+
+Blockscout URLs are chain-scoped because Blockscout has no Etherscan-V2-style
+universal multi-chain endpoint. An explicit provider `baseUrl` overrides an
+already declared chain route but never makes another chain eligible;
+`routes.blockscout.apiUrl` is required for capability. Runtime URL
+discovery and Blockscout v2 REST adaptation remain outside this module.
+
+## 23. Approval Gate
 
 Implementation is authorized for the accepted v0.3 architecture and, as of
 2026-08-07, the accepted v0.4 Chainlink Archive RPC/Multicall3 extension. Any

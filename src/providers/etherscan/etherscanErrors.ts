@@ -1,4 +1,5 @@
 import type { EvmDataError } from "../../domain/errors";
+import type { ProviderName } from "../../domain/chains";
 import { EvmDataError as EvmDataErrorClass } from "../../domain/errors";
 import { isHttpTransportError } from "../../transport/HttpTransport";
 import type { HttpResponse } from "../../transport/HttpTransport";
@@ -13,6 +14,7 @@ export interface EtherscanErrorContext {
 export function classifyEtherscanHttpResponse(
   response: HttpResponse,
   chainId: number,
+  provider: ProviderName = "etherscan",
 ): EvmDataError | null {
   if (response.status >= 200 && response.status < 300) {
     return null;
@@ -23,60 +25,61 @@ export function classifyEtherscanHttpResponse(
     return new EvmDataErrorClass({
       code: looksLikePlanRestriction(response.body) ? "PLAN_RESTRICTED" : "AUTHENTICATION_FAILED",
       message: looksLikePlanRestriction(response.body)
-        ? "Etherscan plan does not permit this request."
-        : "Etherscan rejected the API key.",
+        ? "Indexed provider plan does not permit this request."
+        : "Indexed provider rejected the API key.",
       retryable: false,
-      provider: "etherscan",
+      provider,
       chainId,
       ...(retryAfterMs === null ? {} : { retryAfterMs }),
     });
   }
   if (response.status === 402) {
-    return providerError("PLAN_RESTRICTED", "Etherscan plan does not permit this request.", false, chainId);
+    return providerError("PLAN_RESTRICTED", "Indexed provider plan does not permit this request.", false, chainId, retryAfterMs, provider);
   }
   if (response.status === 400 || response.status === 422) {
-    return providerError("INVALID_REQUEST", "Etherscan rejected the request parameters.", false, chainId);
+    return providerError("INVALID_REQUEST", "Indexed provider rejected the request parameters.", false, chainId, retryAfterMs, provider);
   }
   if (response.status === 404 && /unsupported|invalid.*chain|chainid/i.test(bodyText(response.body))) {
-    return providerError("UNSUPPORTED_CHAIN", "Etherscan does not support this chain.", false, chainId);
+    return providerError("UNSUPPORTED_CHAIN", "Indexed provider does not support this chain.", false, chainId, retryAfterMs, provider);
   }
   if (response.status === 408) {
-    return providerError("REQUEST_TIMEOUT", "Etherscan request timed out.", true, chainId, retryAfterMs);
+    return providerError("REQUEST_TIMEOUT", "Indexed provider request timed out.", true, chainId, retryAfterMs, provider);
   }
   if (response.status === 429) {
-    return providerError("RATE_LIMITED", "Etherscan rate limit was reached.", true, chainId, retryAfterMs);
+    return providerError("RATE_LIMITED", "Indexed provider rate limit was reached.", true, chainId, retryAfterMs, provider);
   }
   if (response.status === 500 || response.status === 502 || response.status === 503 || response.status === 504) {
-    return providerError("PROVIDER_UNAVAILABLE", "Etherscan is temporarily unavailable.", true, chainId, retryAfterMs);
+    return providerError("PROVIDER_UNAVAILABLE", "Indexed provider is temporarily unavailable.", true, chainId, retryAfterMs, provider);
   }
-  return providerError("INVALID_PROVIDER_RESPONSE", "Etherscan returned an unexpected HTTP response.", false, chainId);
+  return providerError("INVALID_PROVIDER_RESPONSE", "Indexed provider returned an unexpected HTTP response.", false, chainId, retryAfterMs, provider);
 }
 
 export function classifyEtherscanEnvelopeError(
   message: string,
   result: unknown,
   chainId: number,
+  provider: ProviderName = "etherscan",
 ): EvmDataError {
   const text = `${message} ${typeof result === "string" ? result : ""}`.toLowerCase();
   if (/(invalid|missing|not found).*api key|api key.*(invalid|missing)|invalid api key|unauthorized/.test(text)) {
-    return providerError("AUTHENTICATION_FAILED", "Etherscan rejected the API key.", false, chainId);
+    return providerError("AUTHENTICATION_FAILED", "Indexed provider rejected the API key.", false, chainId, null, provider);
   }
   if (PLAN_RESTRICTION_PATTERN.test(text)) {
-    return providerError("PLAN_RESTRICTED", "Etherscan plan does not permit this request.", false, chainId);
+    return providerError("PLAN_RESTRICTED", "Indexed provider plan does not permit this request.", false, chainId, null, provider);
   }
   if (/(unsupported|invalid).*chain|chainid|chain id/.test(text)) {
-    return providerError("UNSUPPORTED_CHAIN", "Etherscan does not support this chain.", false, chainId);
+    return providerError("UNSUPPORTED_CHAIN", "Indexed provider does not support this chain.", false, chainId, null, provider);
   }
   if (/(invalid|missing).*(address|parameter|page|offset|tag)|invalid request/.test(text)) {
-    return providerError("INVALID_REQUEST", "Etherscan rejected the request parameters.", false, chainId);
+    return providerError("INVALID_REQUEST", "Indexed provider rejected the request parameters.", false, chainId, null, provider);
   }
   if (/(rate limit|too many requests|max rate|quota|daily limit|limit reached)/.test(text)) {
-    return providerError("RATE_LIMITED", "Etherscan rate limit was reached.", true, chainId);
+    return providerError("RATE_LIMITED", "Indexed provider rate limit was reached.", true, chainId, null, provider);
   }
   if (/(timeout|timed out|busy|temporarily unavailable|try again later)/.test(text)) {
-    return providerError("PROVIDER_UNAVAILABLE", "Etherscan is temporarily unavailable.", true, chainId);
+    return providerError("PROVIDER_UNAVAILABLE", "Indexed provider is temporarily unavailable.", true, chainId, null, provider);
   }
-  return providerError("PROVIDER_UNAVAILABLE", "Etherscan rejected the request.", false, chainId);
+  return providerError("PROVIDER_UNAVAILABLE", "Indexed provider rejected the request.", false, chainId, null, provider);
 }
 
 /**
@@ -88,30 +91,35 @@ export function classifyEtherscanStandardEndpointError(
   message: string,
   result: unknown,
   chainId: number,
+  provider: ProviderName = "etherscan",
 ): EvmDataError {
-  const classified = classifyEtherscanEnvelopeError(message, result, chainId);
+  const classified = classifyEtherscanEnvelopeError(message, result, chainId, provider);
   if (classified.code !== "PROVIDER_UNAVAILABLE" || classified.retryable) {
     return classified;
   }
-  return providerError("PLAN_RESTRICTED", "Etherscan plan does not permit this request.", false, chainId);
+  return providerError("PLAN_RESTRICTED", "Indexed provider plan does not permit this request.", false, chainId, null, provider);
 }
 
-export function normalizeEtherscanTransportError(error: unknown, chainId: number): EvmDataError | null {
+export function normalizeEtherscanTransportError(
+  error: unknown,
+  chainId: number,
+  provider: ProviderName = "etherscan",
+): EvmDataError | null {
   if (!isHttpTransportError(error)) {
     return null;
   }
   const message = error.code === "REQUEST_TIMEOUT"
-    ? "Etherscan request timed out."
+    ? "Indexed provider request timed out."
     : error.code === "REQUEST_ABORTED"
-      ? "Etherscan request was aborted."
+      ? "Indexed provider request was aborted."
       : error.code === "PROXY_ERROR"
-        ? "Etherscan request failed at the proxy boundary."
-        : "Etherscan network request failed.";
+        ? "Indexed provider request failed at the proxy boundary."
+        : "Indexed provider network request failed.";
   return new EvmDataErrorClass({
     code: error.code,
     message,
     retryable: error.retryable,
-    provider: "etherscan",
+    provider,
     chainId,
   });
 }
@@ -122,12 +130,13 @@ function providerError(
   retryable: boolean,
   chainId: number,
   retryAfterMs: number | null = null,
+  provider: ProviderName = "etherscan",
 ): EvmDataError {
   return new EvmDataErrorClass({
     code,
     message,
     retryable,
-    provider: "etherscan",
+    provider,
     chainId,
     ...(retryAfterMs === null ? {} : { retryAfterMs }),
   });

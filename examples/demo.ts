@@ -18,17 +18,20 @@ async function runDemo() {
 
   // 2. Load API Key pools by prefix dynamically
   const etherscanKeys = envLoader.getKeysByPrefix("ETHERSCAN_API_KEY");
+  const blockscoutKeys = envLoader.getKeysByPrefix("BLOCKSCOUT_API_KEY");
   const alchemyKeys = envLoader.getKeysByPrefix("ALCHEMY_API_KEY");
   const moralisKeys = envLoader.getKeysByPrefix("MORALIS_API_KEY");
 
   console.log("\n[2] Loaded API Keys from .env.key:");
   console.log(` - Etherscan Keys (${etherscanKeys.length}):`, etherscanKeys.map((k) => `${k.slice(0, 6)}...`));
+  console.log(` - Blockscout Keys (${blockscoutKeys.length}):`, blockscoutKeys.map((k) => `${k.slice(0, 6)}...`));
   console.log(` - Alchemy Keys   (${alchemyKeys.length}):`, alchemyKeys.map((k) => `${k.slice(0, 8)}...`));
   console.log(` - Moralis Keys   (${moralisKeys.length}):`, moralisKeys.map((k) => `${k.slice(0, 12)}...`));
 
   // 3. Dynamically construct SDK Provider Configurations
   const providers = [];
   if (etherscanKeys.length > 0) providers.push(envLoader.getProviderConfig("etherscan"));
+  if (blockscoutKeys.length > 0) providers.push(envLoader.getProviderConfig("blockscout"));
   if (alchemyKeys.length > 0) providers.push(envLoader.getProviderConfig("alchemy"));
   if (moralisKeys.length > 0) providers.push(envLoader.getProviderConfig("moralis"));
 

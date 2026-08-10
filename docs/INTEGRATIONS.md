@@ -593,3 +593,41 @@ failures at block `25,000,000`. `multicallBatches` was 1 for each chain. No
 endpoint URL, calldata, return data, or resolved rate value was printed —
 only the aggregate summary (`configuredTokens`/`succeededTokens`/`failedTokens`
 /`multicallBatches`) and failure `tokenId`/`code` pairs, which were empty.
+
+## 19. Blockscout Etherscan-compatible API
+
+**External project:** Blockscout
+
+**Selected interface:** Etherscan-compatible JSON API (`/api`), not the
+Blockscout v2 REST resource API (`/api/v2`).
+
+**Documentation:**
+
+- API overview: https://docs.blockscout.com/devs/apis
+- Etherscan-compatible RPC API: https://docs.blockscout.com/devs/apis/rpc/eth-rpc
+- Hosted Ethereum instance API: https://eth.blockscout.com/api
+
+**SDK purpose:** normal address transactions (`account/txlist`), latest native
+balance (`account/balance`), ERC-20 transfers (`account/tokentx`), and the
+existing SDK block-range scanner over `tokentx`. Explorer instances that expose
+compatible `tokenbalancehistory`, `addresstokenbalance`, or
+`block/getblocknobytime` may also serve the matching API-only SDK operations.
+
+**Authentication:** caller-supplied API key in the `apikey` query parameter.
+Each configured Blockscout provider has an independent `CredentialPool`.
+
+**Routing:** Blockscout endpoints are deployment/network specific. The built-in
+Ethereum route is `https://eth.blockscout.com/api`; other chains require a
+verified `routes.blockscout.apiUrl`. An explicit provider `baseUrl` only
+overrides an already eligible chain route and never broadens capability. The adapter
+does not send Etherscan V2's `chainid` parameter and does not discover URLs at
+runtime.
+
+**Compatibility limits:** API-compatible instances can vary by Blockscout
+version and operator configuration. HTTP success can still contain a logical
+`status: "0"` error or empty result. The SDK validates the Etherscan-shaped
+envelope and maps safe error codes; it does not enable Blockscout v2 REST-only
+fields or assume unverified endpoints are semantically equivalent. The current
+implementation is covered by deterministic fixtures. No authenticated live
+smoke was run in this work package, so each production instance should be
+checked with the bounded procedure in `docs/BLOCKSCOUT_PROVIDER/UPGRADE.md`.

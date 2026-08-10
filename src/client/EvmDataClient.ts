@@ -13,6 +13,7 @@ import { AddressService } from "../services/AddressService";
 import { ApiChainService } from '../services/ApiChainService';
 import { TokenService } from "../services/TokenService";
 import { EtherscanAdapter } from "../providers/etherscan/EtherscanAdapter";
+import { BlockscoutAdapter } from "../providers/blockscout/BlockscoutAdapter";
 import { AlchemyAdapter } from "../providers/alchemy/AlchemyAdapter";
 import { MoralisAdapter } from "../providers/moralis/MoralisAdapter";
 import type { DataProviderAdapter } from "../providers/DataProviderAdapter";
@@ -38,7 +39,7 @@ import { UniswapV3HistoricalPriceService } from "../defi/UniswapV3HistoricalPric
 
 export interface EvmDataClientOptions {
   readonly transport?: HttpTransport;
-  readonly adapters?: Partial<Record<"etherscan" | "alchemy" | "moralis", DataProviderAdapter>>;
+  readonly adapters?: Partial<Record<"etherscan" | "blockscout" | "alchemy" | "moralis", DataProviderAdapter>>;
   readonly priceAdapters?: Partial<Record<"binance" | "okx" | "coinbase" | "geckoterminal", TokenPriceProviderAdapter>>;
   /** Test seam for the optional managed proxy; it never changes public configuration. */
   readonly advancedProxyManager?: SingBoxProxyManager;
@@ -341,7 +342,7 @@ function createPriceAdapter(
 }
 
 function createAdapter(
-  kind: "etherscan" | "alchemy" | "moralis",
+  kind: "etherscan" | "blockscout" | "alchemy" | "moralis",
   baseUrl: string | undefined,
   allowInsecureHttp: boolean,
   transport: HttpTransport | undefined,
@@ -352,6 +353,7 @@ function createAdapter(
     allowInsecureHttp,
   };
   if (kind === "etherscan") return new EtherscanAdapter(options);
+  if (kind === "blockscout") return new BlockscoutAdapter(options);
   if (kind === "alchemy") return new AlchemyAdapter(options);
   return new MoralisAdapter(options);
 }

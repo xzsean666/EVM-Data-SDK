@@ -116,9 +116,10 @@ export class EnvLoader {
   /**
    * Dynamically build SDK provider configurations based on prefix mapping.
    */
-  getProviderConfig(kind: "etherscan" | "alchemy" | "moralis", prefix?: string) {
+  getProviderConfig(kind: "etherscan" | "blockscout" | "alchemy" | "moralis", prefix?: string) {
     const defaultPrefixMap: Record<string, string> = {
       etherscan: "ETHERSCAN_API_KEY",
+      blockscout: "BLOCKSCOUT_API_KEY",
       alchemy: "ALCHEMY_API_KEY",
       moralis: "MORALIS_API_KEY",
     };

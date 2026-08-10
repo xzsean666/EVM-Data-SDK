@@ -181,6 +181,24 @@ describe("configuration contract", () => {
     ).toThrowError(expect.objectContaining({ code: "INVALID_CONFIGURATION" }));
   });
 
+  it("normalizes a Blockscout provider with its independent key pool configuration", () => {
+    const configuration = parseClientConfiguration({
+      providers: [{
+        kind: "blockscout",
+        apiKeys: [" key-a ", "key-b"],
+        baseUrl: "https://eth.blockscout.com/api",
+      }],
+    });
+
+    expect(configuration.providers[0]).toEqual({
+      kind: "blockscout",
+      apiKeys: ["key-a", "key-b"],
+      baseUrl: "https://eth.blockscout.com/api",
+      allowInsecureHttp: false,
+    });
+    expect(Object.isFrozen(configuration.providers[0]?.apiKeys)).toBe(true);
+  });
+
   it("validates timeout relationships and approved endpoint/proxy protocols", () => {
     expect(() => parseClientConfiguration({ providers: [] })).toThrowError(
       expect.objectContaining({ code: "INVALID_CONFIGURATION" }),
