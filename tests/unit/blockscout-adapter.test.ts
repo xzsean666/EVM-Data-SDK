@@ -169,6 +169,46 @@ describe("BlockscoutAdapter", () => {
     });
   });
 
+  it("accepts Blockscout's nested block-number response", async () => {
+    const transport = new FixtureTransport([{ status: "1", message: "OK", result: { blockNumber: "31605326" } }]);
+    const client = new EvmDataClient({
+      providers: [{ kind: "blockscout", apiKeys: ["key"], baseUrl: "https://blockscout.example/api" }],
+    }, { transport });
+
+    await expect(client.chain.getBlockNumberByTimestamp({
+      chain: "base",
+      timestamp: "1700000000",
+    })).resolves.toEqual({ chainId: 8453, blockNumber: "31605326", provider: "blockscout" });
+    await client.close();
+  });
+
+  it("maps Blockscout V2 token holdings into the SDK holdings contract", async () => {
+    const transport = new FixtureTransport([[
+      {
+        token: {
+          address_hash: recipient,
+          name: "USD Coin",
+          symbol: "USDC",
+          decimals: "6",
+        },
+        value: "1234567",
+      },
+    ]]);
+    const adapter = new BlockscoutAdapter({
+      transport,
+      baseUrl: "https://blockscout.example/api",
+    });
+
+    await expect(adapter.getErc20TokenHoldings({ address }, context())).resolves.toMatchObject({
+      provider: "blockscout",
+      items: [{ tokenAddress: recipient, tokenDecimals: 6, amount: "1234567" }],
+    });
+    expect(transport.requests[0]).toMatchObject({
+      url: `https://blockscout.example/api/v2/addresses/${address}/token-balances`,
+      params: { apikey: "blockscout-secret" },
+    });
+  });
+
   it("classifies Blockscout logical errors without exposing the API key", async () => {
     const adapter = new BlockscoutAdapter({
       transport: new FixtureTransport([{ status: "0", message: "NOTOK", result: "Invalid API Key" }]),

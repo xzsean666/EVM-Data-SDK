@@ -202,6 +202,31 @@ export class EthereumArchiveRpcExecutor implements ArchiveRpcMulticallExecutor {
   }
 
   /**
+   * Reads an EOA's native balance at one exact block. This shares the archive
+   * pool, bounded failover and pre/post block-hash assertion used by
+   * multicall, so callers never need to construct an ad-hoc JSON-RPC client.
+   */
+  async getNativeBalanceAtBlock(request: {
+    readonly address: string;
+    readonly blockNumber: string;
+    readonly signal?: AbortSignal;
+  }): Promise<{
+    readonly amount: string;
+    readonly blockHash: string;
+    readonly blockTimestamp: string;
+    readonly rpcEndpointId: string;
+  }> {
+    const deadline = this.now() + this.totalTimeoutMs;
+    const snapshot = this.pool.healthySnapshot(this.randomSource);
+    if (snapshot.length === 0) {
+      throw archiveRpcUnavailable("No healthy Ethereum Archive RPC endpoint is available.");
+    }
+    return this.runEndpointAttempts(snapshot, request.signal, deadline, (endpoint, attemptSignal) =>
+      this.getNativeBalanceOnEndpoint(endpoint, { ...request, signal: attemptSignal }, deadline),
+    );
+  }
+
+  /**
    * Race a small wave of independent endpoints. A successful request aborts
    * the remaining requests in that wave; only an all-failed wave advances to
    * more endpoints. The default width of one preserves legacy serial retry.
@@ -325,6 +350,46 @@ export class EthereumArchiveRpcExecutor implements ArchiveRpcMulticallExecutor {
       blockTimestamp: preHeader.timestamp,
       rpcEndpointId: endpoint.id,
       batchReturnData: Object.freeze(batchReturnData),
+    };
+  }
+
+  private async getNativeBalanceOnEndpoint(
+    endpoint: EthereumArchiveRpcEndpoint,
+    request: {
+      readonly address: string;
+      readonly blockNumber: string;
+      readonly signal?: AbortSignal;
+    },
+    deadline: number,
+  ): Promise<{
+    readonly amount: string;
+    readonly blockHash: string;
+    readonly blockTimestamp: string;
+    readonly rpcEndpointId: string;
+  }> {
+    const blockTag = toBlockTag(request.blockNumber);
+    const preHeader = await this.readBlockHeader(endpoint, blockTag, request.signal, deadline);
+    const rawBalance = await this.call(
+      endpoint,
+      "eth_getBalance",
+      [request.address, blockTag],
+      request.signal,
+      deadline,
+    );
+    if (typeof rawBalance !== "string" || !/^0x[0-9a-fA-F]+$/.test(rawBalance)) {
+      throw rpcResponseInvalid("Ethereum Archive RPC endpoint returned a malformed native balance.");
+    }
+    const postHeader = await this.readBlockHeader(endpoint, blockTag, request.signal, deadline);
+    if (preHeader.hash !== postHeader.hash) {
+      throw rpcBlockReorgDetected(
+        "Ethereum block hash changed while reading native balance; discarding result.",
+      );
+    }
+    return {
+      amount: BigInt(rawBalance).toString(10),
+      blockHash: preHeader.hash,
+      blockTimestamp: preHeader.timestamp,
+      rpcEndpointId: endpoint.id,
     };
   }
 

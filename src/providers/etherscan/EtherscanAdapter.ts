@@ -67,8 +67,8 @@ interface EtherscanPageState {
 export class EtherscanAdapter implements DataProviderAdapter {
   readonly name: "etherscan" | "blockscout";
 
-  private readonly transport: HttpTransport;
-  private readonly baseUrl: string;
+  protected readonly transport: HttpTransport;
+  protected readonly baseUrl: string;
   private readonly routeName: "etherscan" | "blockscout";
   /** Etherscan caps historical/holding PRO endpoints at two requests/second. */
   private historicalBalanceNextAt = 0;
@@ -102,7 +102,7 @@ export class EtherscanAdapter implements DataProviderAdapter {
     return route === undefined ? undefined : { ...route, apiUrl: this.baseUrl };
   }
 
-  private endpointFor(chain: ProviderAttemptContext["chain"]): string {
+  protected endpointFor(chain: ProviderAttemptContext["chain"]): string {
     if (this.routeName === "blockscout") {
       return this.baseUrl === ETHERSCAN_V2_BASE_URL
         ? chain.routes.blockscout?.apiUrl ?? this.baseUrl
@@ -235,27 +235,31 @@ export class EtherscanAdapter implements DataProviderAdapter {
       }
     };
 
-    const firstPage = await fetchPage(1);
-    if (firstPage.length < ETHERSCAN_MAX_PAGE_SIZE) {
-      return completeRangePage(firstPage, request, context, this.name);
-    }
-
-    // Preserve binary splitting for broad intervals. Fetching every physical
-    // page of a busy multi-block range can exceed the logical request budget;
-    // once the scanner isolates one block, pagination below proves that last
-    // window is complete instead of treating exactly 1,000 rows as a stall.
-    if (request.startBlock !== request.endBlock) {
-      return incompleteRangePage(firstPage, request, context, this.name);
-    }
-
-    const pages = [firstPage];
-    for (let page = 2; ; page += 1) {
-      await context.beforeProviderRequest?.();
+    const pages: Erc20Transfer[] = [];
+    for (let page = 1; page <= 1_000; page += 1) {
+      if (page > 1) await context.beforeProviderRequest?.();
       const current = await fetchPage(page);
-      pages.push(current);
-      if (current.length < ETHERSCAN_MAX_PAGE_SIZE) break;
+      pages.push(...current);
+      if (pages.length > 100_000) {
+        throw new EvmDataError({
+          code: "RANGE_RESULT_TOO_LARGE",
+          message: "Indexed provider ERC-20 range exceeded the SDK record limit.",
+          retryable: false,
+          provider: this.name,
+          chainId: context.chain.chainId,
+        });
+      }
+      if (current.length < ETHERSCAN_MAX_PAGE_SIZE) {
+        return completeRangePage(pages, request, context, this.name);
+      }
     }
-    return completeRangePage(pages.flat(), request, context, this.name);
+    throw new EvmDataError({
+      code: "INVALID_PROVIDER_RESPONSE",
+      message: "Indexed provider ERC-20 range exceeded the SDK page limit.",
+      retryable: false,
+      provider: this.name,
+      chainId: context.chain.chainId,
+    });
   }
 
   /**
@@ -512,10 +516,19 @@ export class EtherscanAdapter implements DataProviderAdapter {
     if (body?.status === '0') {
       throw classifyEtherscanEnvelopeError(String(body.message ?? ''), body.result, context.chain.chainId, this.name)
     }
-    if (typeof body?.result !== 'string' || !/^\d+$/.test(body.result)) {
+    // Blockscout's Etherscan-compatible endpoint wraps the block number as
+    // `{ blockNumber: "..." }`, while Etherscan returns the decimal string
+    // directly. Keep the normalization scoped to the Blockscout adapter so
+    // malformed Etherscan responses remain rejected.
+    const blockNumber = this.routeName === 'blockscout' &&
+      typeof body?.result === 'object' && body.result !== null && !Array.isArray(body.result) &&
+      typeof (body.result as { blockNumber?: unknown }).blockNumber === 'string'
+      ? (body.result as { blockNumber: string }).blockNumber
+      : body?.result
+    if (typeof blockNumber !== 'string' || !/^\d+$/.test(blockNumber)) {
       throw invalidResponse(context, undefined, this.name)
     }
-    return BigInt(body.result).toString()
+    return BigInt(blockNumber).toString()
   }
 
   private async call(
@@ -575,6 +588,36 @@ export class EtherscanAdapter implements DataProviderAdapter {
     if (httpError !== null) {
       throw httpError;
     }
+    return this.normalizeResponse(action, response.body);
+  }
+
+  /** Provider-specific aliases are normalized by adapters, before shared schemas. */
+  protected normalizeResponse(action: string, body: unknown): unknown {
+    return body;
+  }
+
+  protected async requestRaw(
+    url: string,
+    params: Record<string, string | number | undefined>,
+    context: ProviderAttemptContext,
+  ): Promise<unknown> {
+    let response;
+    try {
+      response = await this.transport.request({
+        method: "GET",
+        url,
+        params: { ...params, apikey: context.credential?.value },
+        timeoutMs: context.timeoutMs,
+        ...(context.signal === undefined ? {} : { signal: context.signal }),
+        proxy: context.proxy === null ? null : parseHttpProxyUrl(context.proxy.url),
+      });
+    } catch (error: unknown) {
+      const normalized = normalizeEtherscanTransportError(error, context.chain.chainId, this.name);
+      if (normalized !== null) throw normalized;
+      throw new EvmDataError({ code: "PROVIDER_UNAVAILABLE", message: "Indexed provider request failed.", retryable: true, provider: this.name, chainId: context.chain.chainId });
+    }
+    const httpError = classifyEtherscanHttpResponse(response, context.chain.chainId, this.name);
+    if (httpError !== null) throw httpError;
     return response.body;
   }
 
@@ -685,20 +728,6 @@ function completeRangePage(
     // a second time.
     itemsAlreadyDeduplicated: true,
     complete: true,
-    pageInfo: { provider, chainId: context.chain.chainId },
-  };
-}
-
-function incompleteRangePage(
-  values: readonly Erc20Transfer[],
-  request: NormalizedErc20BlockRangeRequest,
-  context: ProviderAttemptContext,
-  provider: ProviderName,
-): ProviderBlockRangeWindowResult {
-  return {
-    items: rangeItems(values, request),
-    itemsAlreadyDeduplicated: true,
-    complete: false,
     pageInfo: { provider, chainId: context.chain.chainId },
   };
 }

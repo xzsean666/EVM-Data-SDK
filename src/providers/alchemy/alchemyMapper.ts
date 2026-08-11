@@ -30,12 +30,32 @@ export function mapAlchemyTransfer(value: AlchemyTransfer, chain: ChainDefinitio
     tokenAddress: tokenAddress.toLowerCase(),
     tokenName: null,
     tokenSymbol: value.asset === undefined || value.asset === null || value.asset === "" ? null : value.asset,
-    tokenDecimals: value.rawContract.decimals ?? null,
+    // Alchemy has returned both `decimals` (number) and the legacy
+    // `decimal` (hex quantity string) field across API versions. Preserve
+    // either representation so a missing plural field does not discard the
+    // token's unit scale.
+    tokenDecimals: mapTokenDecimals(value.rawContract.decimals, value.rawContract.decimal),
     from: value.from.toLowerCase(),
     to: value.to.toLowerCase(),
     amount: hexQuantityToDecimal(amount),
     provider: "alchemy",
   };
+}
+
+function mapTokenDecimals(
+  decimals: number | null | undefined,
+  legacy: string | null | undefined,
+): number | null {
+  if (decimals !== undefined && decimals !== null) {
+    return Number.isInteger(decimals) && decimals >= 0 && decimals <= 255 ? decimals : null;
+  }
+  if (legacy === undefined || legacy === null || legacy === "") return null;
+  try {
+    const parsed = /^0x/i.test(legacy) ? Number(BigInt(legacy)) : Number(legacy);
+    return Number.isSafeInteger(parsed) && parsed >= 0 && parsed <= 255 ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 export function hexQuantityToDecimal(value: string): string {

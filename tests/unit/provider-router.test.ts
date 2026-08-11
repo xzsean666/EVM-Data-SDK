@@ -109,7 +109,7 @@ describe("ProviderRouter", () => {
 
     expect(router.route(atOneThousand).map((candidate) => candidate.adapter.name)).toEqual(["alchemy", "etherscan"]);
     expect(router.route(aboveAlchemy).map((candidate) => candidate.adapter.name)).toEqual(["etherscan"]);
-    expect(router.route(highTransactionPage).map((candidate) => candidate.adapter.name)).toEqual(["etherscan"]);
+    expect(router.route(highTransactionPage).map((candidate) => candidate.adapter.name)).toEqual(["alchemy", "etherscan"]);
     expect(router.route(fullData).map((candidate) => candidate.adapter.name)).toEqual(["etherscan"]);
   });
 

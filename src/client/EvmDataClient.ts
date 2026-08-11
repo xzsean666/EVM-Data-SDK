@@ -36,6 +36,11 @@ import { ChainlinkService } from "../chainlink/ChainlinkService";
 import { DeFiExchangeRateService } from "../defi/DeFiExchangeRateService";
 import { MULTICALL3_ADDRESS, MULTICALL3_BASE_MAINNET_DEPLOYMENT_BLOCK, MULTICALL3_ETHEREUM_MAINNET_DEPLOYMENT_BLOCK } from "../rpc/EthereumMulticall3Codec";
 import { UniswapV3HistoricalPriceService } from "../defi/UniswapV3HistoricalPriceService";
+import {
+  parseNativeBalanceAtBlockRequest,
+  type NativeBalanceAtBlockRequest,
+  type NativeBalanceAtBlockResult,
+} from "../domain/rpcModels";
 
 export interface EvmDataClientOptions {
   readonly transport?: HttpTransport;
@@ -290,6 +295,40 @@ export class EvmDataClient {
     const chainId = input.chain === "ethereum" ? 1 : 8453;
     const result = await rpcExecutor.findLatestBlockNumber(input.signal);
     return { chainId, blockNumber: result.blockNumber, provider: "archive-rpc" };
+  }
+
+  /**
+   * Reads native currency at one exact historical block through the same
+   * per-chain Archive RPC executor used by DeFi snapshots. This is separate
+   * from `address.getNativeBalance`, which intentionally means latest
+   * indexed-provider balance.
+   */
+  async getNativeBalanceAtBlock(
+    input: NativeBalanceAtBlockRequest,
+  ): Promise<NativeBalanceAtBlockResult> {
+    const normalized = parseNativeBalanceAtBlockRequest(input);
+    const chain = normalized.chainId === 1 ? "ethereum" : "base";
+    const rpcExecutor = this.chainRpcExecutors.get(chain);
+    if (rpcExecutor === undefined) {
+      throw invalidConfiguration(
+        `Archive RPC is not enabled for chain "${chain}"; cannot read a historical native balance.`,
+      );
+    }
+    const result = await rpcExecutor.getNativeBalanceAtBlock({
+      address: normalized.address,
+      blockNumber: normalized.blockNumber,
+      ...(normalized.signal === undefined ? {} : { signal: normalized.signal }),
+    });
+    return Object.freeze({
+      chainId: normalized.chainId,
+      address: normalized.address,
+      blockNumber: normalized.blockNumber,
+      amount: result.amount,
+      blockHash: result.blockHash,
+      blockTimestamp: result.blockTimestamp,
+      provider: "archive-rpc" as const,
+      rpcEndpointId: result.rpcEndpointId,
+    });
   }
 
   async initialize(signal?: AbortSignal): Promise<void> {

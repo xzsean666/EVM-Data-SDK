@@ -32,6 +32,18 @@ class FixtureTransport implements HttpTransport {
   }
 }
 
+class SequenceTransport implements HttpTransport {
+  readonly requests: HttpRequest[] = [];
+  constructor(private readonly bodies: readonly unknown[]) {}
+
+  async request(request: HttpRequest): Promise<HttpResponse> {
+    this.requests.push(request);
+    const body = this.bodies[this.requests.length - 1];
+    if (body === undefined) throw new Error("Unexpected fixture request.");
+    return { status: 200, headers: {}, body };
+  }
+}
+
 function context(overrides: Partial<ProviderAttemptContext> = {}): ProviderAttemptContext {
   return {
     chain: new ChainRegistry().resolve("ethereum"),
@@ -188,8 +200,14 @@ describe("MoralisAdapter", () => {
     expect(terminal.complete).toBe(true);
     expect(terminalTransport.requests[0]?.params).toMatchObject({ chain: "0x1", limit: 100, order: "ASC", from_block: "40", to_block: "43" });
 
-    const incomplete = await new MoralisAdapter({ transport: new FixtureTransport(moralisTokenTransfers) }).getErc20TransfersByBlockRangeWindow(request, context());
-    expect(incomplete.complete).toBe(false);
+    const continuationTransport = new SequenceTransport([
+      moralisTokenTransfers,
+      { ...moralisTokenTransfers, cursor: null },
+    ]);
+    const complete = await new MoralisAdapter({ transport: continuationTransport }).getErc20TransfersByBlockRangeWindow(request, context());
+    expect(complete.complete).toBe(true);
+    expect(continuationTransport.requests).toHaveLength(2);
+    expect(continuationTransport.requests[1]?.params).toMatchObject({ cursor: "moralis-token-cursor-page-2" });
   });
 
   it.each([

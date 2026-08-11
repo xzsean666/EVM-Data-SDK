@@ -53,6 +53,8 @@ export type {
   MulticallAtBlockCallResult,
   MulticallAtBlockRequest,
   MulticallAtBlockResult,
+  NativeBalanceAtBlockRequest,
+  NativeBalanceAtBlockResult,
 } from "./domain/rpcModels";
 export type {
   AlchemyRoute,
@@ -72,6 +74,8 @@ export type {
   Erc20BlockRangeRequest,
   Erc20BalancesAtBlockRequest,
   Erc20TokenHoldingsRequest,
+  BeaconWithdrawalsBlockRangeRequest,
+  InternalNativeTransfersBlockRangeRequest,
   NativeBalanceRequest,
   TransactionContextsByHashRequest,
   OperationName,
@@ -105,8 +109,10 @@ export type {
   Erc20TokenHoldings,
   InternalNativeTransfer,
   InternalNativeTransferBlockRange,
+  InternalNativeTransferBlockRangeWindow,
   BeaconWithdrawal,
   BeaconWithdrawalBlockRange,
+  BeaconWithdrawalBlockRangeWindow,
   NativeBalance,
   Page,
   Transaction,

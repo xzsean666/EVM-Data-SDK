@@ -233,7 +233,7 @@ export class ApiChainService {
     signal?: AbortSignal
   }): Promise<InternalNativeTransferBlockRange> {
     const chain = this.registry.resolve(input.chain)
-    return this.withEtherscanCandidates(
+    return this.withInternalNativeCandidates(
       chain,
       input.signal,
       'No configured indexed API can list internal native transfers.',
@@ -275,6 +275,28 @@ export class ApiChainService {
         } catch (error) {
           lastError = error
           if (!canTryAnotherEtherscanCredential(error)) throw error
+        }
+      }
+    }
+    throw unavailable(lastError, chain.chainId, unavailableMessage)
+  }
+
+  private async withInternalNativeCandidates<T>(
+    chain: ReturnType<ChainRegistry['resolve']>,
+    signal: AbortSignal | undefined,
+    unavailableMessage: string,
+    work: (adapter: EtherscanAdapter | AlchemyAdapter, context: ProviderAttemptContext) => Promise<T>,
+  ): Promise<T> {
+    let lastError: unknown
+    for (const configuredProvider of this.providers) {
+      const adapter = configuredProvider.adapter
+      if (!(adapter instanceof EtherscanAdapter) && !(adapter instanceof AlchemyAdapter)) continue
+      for (const apiKey of configuredProvider.apiKeys) {
+        try {
+          return await this.withCandidateContext(chain, { adapter, apiKey }, signal, (context) => work(adapter, context))
+        } catch (error) {
+          lastError = error
+          if (!canTryAnotherApiCredential(error)) throw error
         }
       }
     }

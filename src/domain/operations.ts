@@ -1,7 +1,12 @@
 import { z } from "zod";
 
 import type { ChainReference } from "./chains";
-import type { Erc20BlockRangeWindow, TransactionBlockRangeWindow } from "./models";
+import type {
+  BeaconWithdrawalBlockRangeWindow,
+  Erc20BlockRangeWindow,
+  InternalNativeTransferBlockRangeWindow,
+  TransactionBlockRangeWindow,
+} from "./models";
 import { invalidBlockRange, invalidRequest } from "./errors";
 import { MAX_CURSOR_LENGTH } from "./pagination";
 
@@ -12,6 +17,7 @@ export const OPERATION_NAMES = [
   "getNativeBalance",
   "getErc20Transfers",
   "getErc20TransfersByBlockRange",
+  "getInternalNativeTransfersByBlockRange",
   "getPriceHistory",
 ] as const;
 
@@ -39,6 +45,20 @@ export interface TransactionsBlockRangeRequest extends Omit<TransactionsRequest,
    * not retain completed transaction items in the final aggregate result.
    */
   readonly onWindow?: (window: TransactionBlockRangeWindow) => void | Promise<void>;
+}
+
+/** Complete indexed internal-native transfers in one inclusive block range. */
+export interface InternalNativeTransfersBlockRangeRequest extends Omit<TransactionsRequest, 'startBlock' | 'endBlock' | 'cursor' | 'pageSize' | 'fullData'> {
+  readonly startBlock: string;
+  readonly endBlock: string;
+  readonly onWindow?: (window: InternalNativeTransferBlockRangeWindow) => void | Promise<void>;
+}
+
+/** Complete EIP-4895 withdrawals in one inclusive block range. */
+export interface BeaconWithdrawalsBlockRangeRequest extends Omit<TransactionsRequest, 'startBlock' | 'endBlock' | 'cursor' | 'pageSize' | 'fullData'> {
+  readonly startBlock: string;
+  readonly endBlock: string;
+  readonly onWindow?: (window: BeaconWithdrawalBlockRangeWindow) => void | Promise<void>;
 }
 
 export interface NativeBalanceRequest {

@@ -85,6 +85,31 @@ function fakePool(snapshot: readonly EthereumArchiveRpcEndpoint[]): FakePool {
 }
 
 describe("EthereumArchiveRpcExecutor.executeMulticallBatches", () => {
+  it("reads a native balance at an exact block and verifies the block hash", async () => {
+    const transport = fakeTransport({
+      [ENDPOINT_A.url]: (method) => {
+        if (method === "eth_getBlockByNumber") {
+          return { hash: HASH_A, number: BLOCK_TAG, timestamp: "0x5f5e100" };
+        }
+        if (method === "eth_getBalance") return "0x1aff740c7e76";
+        throw new Error(`Unexpected method ${method}.`);
+      },
+    });
+    const pool = fakePool([ENDPOINT_A]);
+    const executor = new EthereumArchiveRpcExecutor({ pool, randomSource: NO_RANDOM, transport });
+
+    await expect(executor.getNativeBalanceAtBlock({
+      address: "0x1111111111111111111111111111111111111111",
+      blockNumber: BLOCK_NUMBER,
+    })).resolves.toEqual({
+      amount: BigInt("0x1aff740c7e76").toString(10),
+      blockHash: HASH_A,
+      blockTimestamp: "100000000",
+      rpcEndpointId: ENDPOINT_A.id,
+    });
+    expect(pool.outcomes).toEqual([{ id: ENDPOINT_A.id, outcome: "success" }]);
+  });
+
   it("races a bounded endpoint wave when explicitly configured", async () => {
     const calls: string[] = [];
     const transport: ArchiveRpcTransport = {

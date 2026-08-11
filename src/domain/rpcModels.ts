@@ -54,6 +54,35 @@ export interface MulticallAtBlockResult {
   readonly results: readonly MulticallAtBlockCallResult[];
 }
 
+/** One exact native-currency balance read at a canonical historical block. */
+export interface NativeBalanceAtBlockRequest {
+  readonly chain: 1 | "ethereum" | 8453 | "base";
+  readonly address: string;
+  readonly blockNumber: string;
+  readonly signal?: AbortSignal;
+}
+
+export interface NormalizedNativeBalanceAtBlockRequest {
+  readonly chainId: 1 | 8453;
+  readonly address: string;
+  readonly blockNumber: string;
+  readonly signal?: AbortSignal;
+}
+
+export interface NativeBalanceAtBlockResult {
+  readonly chainId: 1 | 8453;
+  readonly address: string;
+  readonly blockNumber: string;
+  /** Raw native-currency quantity in wei. */
+  readonly amount: string;
+  readonly blockHash: string;
+  /** Canonical non-negative base-10 Unix timestamp of `blockHash`. */
+  readonly blockTimestamp: string;
+  readonly provider: "archive-rpc";
+  /** Stable configured endpoint ID only; never the endpoint URL. */
+  readonly rpcEndpointId: string;
+}
+
 export const MAX_MULTICALL_CALLS_PER_REQUEST = 1000;
 
 const addressSchema = z.string().regex(/^0x[0-9a-fA-F]{40}$/);
@@ -92,6 +121,15 @@ const multicallAtBlockRequestSchema = z
   })
   .strict();
 
+const nativeBalanceAtBlockRequestSchema = z
+  .object({
+    chain: chainSchema,
+    address: addressSchema.transform((value) => value.toLowerCase()),
+    blockNumber: blockNumberSchema,
+    signal: z.custom<AbortSignal>((value) => value instanceof AbortSignal).optional(),
+  })
+  .strict();
+
 export function parseMulticallAtBlockRequest(input: unknown): NormalizedMulticallAtBlockRequest {
   const parsed = multicallAtBlockRequestSchema.safeParse(input);
   if (!parsed.success) {
@@ -116,6 +154,21 @@ export function parseMulticallAtBlockRequest(input: unknown): NormalizedMultical
     chainId: parsed.data.chain === 8453 || parsed.data.chain === "base" ? 8453 : 1,
     blockNumber: parsed.data.blockNumber,
     calls: Object.freeze(calls),
+    ...(parsed.data.signal === undefined ? {} : { signal: parsed.data.signal }),
+  };
+}
+
+export function parseNativeBalanceAtBlockRequest(
+  input: unknown,
+): NormalizedNativeBalanceAtBlockRequest {
+  const parsed = nativeBalanceAtBlockRequestSchema.safeParse(input);
+  if (!parsed.success) {
+    throw invalidRequest("Invalid nativeBalanceAtBlock request.");
+  }
+  return {
+    chainId: parsed.data.chain === 8453 || parsed.data.chain === "base" ? 8453 : 1,
+    address: parsed.data.address,
+    blockNumber: parsed.data.blockNumber,
     ...(parsed.data.signal === undefined ? {} : { signal: parsed.data.signal }),
   };
 }

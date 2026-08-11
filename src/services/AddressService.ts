@@ -6,6 +6,8 @@ import {
   normalizeTransactionsRequest,
   type NativeBalanceRequest,
   type TransactionContextsByHashRequest,
+  type BeaconWithdrawalsBlockRangeRequest,
+  type InternalNativeTransfersBlockRangeRequest,
   type TransactionsBlockRangeRequest,
   type TransactionsRequest,
 } from "../domain/operations";
@@ -14,7 +16,6 @@ import type { ApiChainService } from './ApiChainService';
 
 export class AddressService {
   private readonly maxRangeRecords: number;
-  private readonly maxRangeWindows: number;
 
   constructor(
     private readonly executor: RequestExecutor,
@@ -22,7 +23,6 @@ export class AddressService {
     options: { readonly maxRangeRecords: number; readonly maxRangeWindows: number },
   ) {
     this.maxRangeRecords = options.maxRangeRecords;
-    this.maxRangeWindows = options.maxRangeWindows;
   }
 
   getTransactions(request: TransactionsRequest): Promise<Page<Transaction>> {
@@ -38,84 +38,70 @@ export class AddressService {
       fullData: true,
       order: rangeRequest.order ?? 'asc',
     });
-    const pending = [{ startBlock: first.startBlock!, endBlock: first.endBlock! }];
-    const completed: { startBlock: string; endBlock: string }[] = [];
     const records = new Map<string, Transaction>();
     let provider: Transaction['provider'] | null = null;
     let chainId: number | null = null;
     let upstreamRequests = 0;
+    const startBlock = first.startBlock!;
+    const endBlock = first.endBlock!;
+    let cursor: string | null = null;
 
-    while (pending.length > 0) {
+    while (true) {
       if (first.signal?.aborted === true) {
         throw new EvmDataError({ code: 'REQUEST_ABORTED', message: 'Request was aborted by the caller.', retryable: false });
       }
-      if (completed.length + pending.length > this.maxRangeWindows) {
-        throw transactionRangeStalled(completed.length, 'The configured transaction block-range window limit was exceeded.');
-      }
-      const window = pending.shift();
-      if (window === undefined) break;
-      const page = await this.executor.execute({
+      const page: Page<Transaction> = await this.executor.execute({
         ...first,
-        startBlock: window.startBlock,
-        endBlock: window.endBlock,
-        cursor: null,
+        startBlock,
+        endBlock,
+        cursor,
       });
       upstreamRequests += 1;
-      if (page.nextCursor !== null) {
-        if (window.startBlock === window.endBlock) {
-          throw transactionRangeStalled(completed.length, 'No configured provider could prove the single block window is complete.');
-        }
-        const [left, right] = splitTransactionWindow(window);
-        pending.unshift(left, right);
-        continue;
-      }
       if (provider === null) {
         provider = page.pageInfo.provider;
         chainId = page.pageInfo.chainId;
       } else if (provider !== page.pageInfo.provider || chainId !== page.pageInfo.chainId) {
-        throw transactionRangeStalled(completed.length, 'The provider changed after the block-range scan had started.');
+        throw transactionRangeStalled(upstreamRequests - 1, 'The provider changed during the complete block-range scan.');
       }
-      const windowRecords = new Map<string, Transaction>();
       for (const item of page.items) {
         const blockNumber = BigInt(item.blockNumber);
-        if (blockNumber < BigInt(window.startBlock) || blockNumber > BigInt(window.endBlock)) {
-          throw transactionRangeStalled(completed.length, 'Provider returned a transaction outside the requested block window.');
+        if (blockNumber < BigInt(startBlock) || blockNumber > BigInt(endBlock)) {
+          throw transactionRangeStalled(upstreamRequests - 1, 'Provider returned a transaction outside the requested block window.');
         }
         if (item.chainId !== chainId || item.provider !== provider) {
-          throw transactionRangeStalled(completed.length, 'Provider returned a transaction outside the pinned scan provenance.');
+          throw transactionRangeStalled(upstreamRequests - 1, 'Provider returned a transaction outside the pinned scan provenance.');
         }
-        const seen = onWindow === undefined ? records : windowRecords;
-        if (!seen.has(item.hash)) {
-          if (seen.size >= this.maxRangeRecords) {
+        if (!records.has(item.hash)) {
+          if (records.size >= this.maxRangeRecords) {
             throw new EvmDataError({ code: 'RANGE_RESULT_TOO_LARGE', message: 'The transaction block-range result exceeds the configured record safety limit.', retryable: false, provider, chainId });
           }
-          seen.set(item.hash, item);
+          records.set(item.hash, item);
         }
       }
-      if (onWindow !== undefined) {
-        const items = [...windowRecords.values()].sort(compareTransactions);
-        const callback: TransactionBlockRangeWindow = Object.freeze({
-          chainId: chainId!,
-          address: first.address,
-          range: Object.freeze({ startBlock: window.startBlock, endBlock: window.endBlock }),
-          items: Object.freeze(items),
-          provider: provider!,
-          upstreamRequests: 1,
-        });
-        await onWindow(callback);
-      }
-      completed.push(window);
+      if (page.nextCursor === null) break;
+      cursor = page.nextCursor;
     }
-    if (chainId === null || provider === null || !transactionCoverageIsExact(completed, first.startBlock!, first.endBlock!)) {
-      throw transactionRangeStalled(completed.length, 'The transaction block-range scan did not complete its requested coverage.');
+    if (chainId === null || provider === null) {
+      throw transactionRangeStalled(upstreamRequests, 'The transaction block-range scan returned no provider result.');
+    }
+    if (onWindow !== undefined) {
+      const items = [...records.values()].sort(compareTransactions);
+      await onWindow(Object.freeze({
+        chainId,
+        address: first.address,
+        range: Object.freeze({ startBlock, endBlock }),
+        items: Object.freeze(items),
+        provider,
+        upstreamRequests,
+      }));
     }
     return {
       chainId,
       address: first.address,
-      range: { startBlock: first.startBlock ?? '0', endBlock: first.endBlock ?? '0' },
+      range: { startBlock, endBlock },
       items: onWindow === undefined ? [...records.values()].sort(compareTransactions) : [],
       provider,
-      pages: completed.length,
+      pages: upstreamRequests,
       upstreamRequests,
     };
   }
@@ -134,51 +120,143 @@ export class AddressService {
 
   /** API-only explorer lookup for address-scoped internal native transfers. */
   async getInternalNativeTransfersByBlockRange(
-    request: TransactionsBlockRangeRequest,
+    request: InternalNativeTransfersBlockRangeRequest,
   ): Promise<InternalNativeTransferBlockRange> {
+    const { onWindow, ...rangeRequest } = request;
     const normalized = normalizeTransactionsRequest({
-      ...request,
+      ...rangeRequest,
       pageSize: 1,
       fullData: true,
       order: request.order ?? 'asc',
     });
-    return this.indexedApi.getInternalNativeTransfersByBlockRange({
-      chain: normalized.chain,
+    const startBlock = normalized.startBlock ?? '0';
+    const endBlock = normalized.endBlock ?? '0';
+    const ranges = [{ startBlock, endBlock }];
+    let chainId: number | null = null;
+    let provider: InternalNativeTransferBlockRange['provider'] | null = null;
+    let pages = 0;
+    let upstreamRequests = 0;
+    const items: InternalNativeTransferBlockRange['items'][number][] = [];
+    for (const range of ranges) {
+      const result = await this.indexedApi.getInternalNativeTransfersByBlockRange({
+        chain: normalized.chain,
+        address: normalized.address,
+        startBlock: range.startBlock,
+        endBlock: range.endBlock,
+        ...(normalized.signal === undefined ? {} : { signal: normalized.signal }),
+      });
+      assertIndexedRange(result.range, range);
+      if (chainId === null) chainId = result.chainId;
+      if (provider === null) provider = result.provider;
+      if (chainId !== result.chainId) {
+        throw new EvmDataError({
+          code: 'BLOCK_RANGE_STALLED',
+          message: 'The indexed chain changed during the internal-native block-range scan.',
+          retryable: false,
+          provider: result.provider,
+          chainId: result.chainId,
+        });
+      }
+      pages += result.pages;
+      upstreamRequests += result.upstreamRequests;
+      if (onWindow !== undefined) {
+        await onWindow(Object.freeze({
+          chainId: result.chainId,
+          address: result.address,
+          range: Object.freeze(result.range),
+          items: Object.freeze(result.items),
+          provider: result.provider,
+          upstreamRequests: result.upstreamRequests,
+        }));
+      } else {
+        items.push(...result.items);
+      }
+    }
+    return {
+      chainId: chainId!,
       address: normalized.address,
-      startBlock: normalized.startBlock ?? '0',
-      endBlock: normalized.endBlock ?? '0',
-      ...(normalized.signal === undefined ? {} : { signal: normalized.signal }),
-    });
+      range: { startBlock, endBlock },
+      items: onWindow === undefined ? items : [],
+      provider: provider!,
+      pages,
+      upstreamRequests,
+    };
   }
 
   /** API-only EIP-4895 withdrawal lookup; only Ethereum is supported. */
   async getBeaconWithdrawalsByBlockRange(
-    request: TransactionsBlockRangeRequest,
+    request: BeaconWithdrawalsBlockRangeRequest,
   ): Promise<BeaconWithdrawalBlockRange> {
+    const { onWindow, ...rangeRequest } = request;
     const normalized = normalizeTransactionsRequest({
-      ...request,
+      ...rangeRequest,
       pageSize: 1,
       fullData: true,
       order: request.order ?? 'asc',
     });
-    return this.indexedApi.getBeaconWithdrawalsByBlockRange({
-      chain: normalized.chain,
+    const startBlock = normalized.startBlock ?? '0';
+    const endBlock = normalized.endBlock ?? '0';
+    const ranges = [{ startBlock, endBlock }];
+    let chainId: number | null = null;
+    let provider: BeaconWithdrawalBlockRange['provider'] | null = null;
+    let pages = 0;
+    let upstreamRequests = 0;
+    const items: BeaconWithdrawalBlockRange['items'][number][] = [];
+    for (const range of ranges) {
+      const result = await this.indexedApi.getBeaconWithdrawalsByBlockRange({
+        chain: normalized.chain,
+        address: normalized.address,
+        startBlock: range.startBlock,
+        endBlock: range.endBlock,
+        ...(normalized.signal === undefined ? {} : { signal: normalized.signal }),
+      });
+      assertIndexedRange(result.range, range);
+      if (chainId === null) chainId = result.chainId;
+      if (provider === null) provider = result.provider;
+      if (chainId !== result.chainId) {
+        throw new EvmDataError({
+          code: 'BLOCK_RANGE_STALLED',
+          message: 'The indexed chain changed during the Beacon withdrawal block-range scan.',
+          retryable: false,
+          provider: result.provider,
+          chainId: result.chainId,
+        });
+      }
+      pages += result.pages;
+      upstreamRequests += result.upstreamRequests;
+      if (onWindow !== undefined) {
+        await onWindow(Object.freeze({
+          chainId: result.chainId,
+          address: result.address,
+          range: Object.freeze(result.range),
+          items: Object.freeze(result.items),
+          provider: result.provider,
+          upstreamRequests: result.upstreamRequests,
+        }));
+      } else {
+        items.push(...result.items);
+      }
+    }
+    return {
+      chainId: chainId!,
       address: normalized.address,
-      startBlock: normalized.startBlock ?? '0',
-      endBlock: normalized.endBlock ?? '0',
-      ...(normalized.signal === undefined ? {} : { signal: normalized.signal }),
-    });
+      range: { startBlock, endBlock },
+      items: onWindow === undefined ? items : [],
+      provider: provider!,
+      pages,
+      upstreamRequests,
+    };
   }
 }
 
-function splitTransactionWindow(window: { startBlock: string; endBlock: string }) {
-  const start = BigInt(window.startBlock);
-  const end = BigInt(window.endBlock);
-  const midpoint = (start + end) / 2n;
-  return [
-    { startBlock: start.toString(), endBlock: midpoint.toString() },
-    { startBlock: (midpoint + 1n).toString(), endBlock: end.toString() },
-  ] as const;
+function assertIndexedRange(actual: { startBlock: string; endBlock: string }, expected: { startBlock: string; endBlock: string }) {
+  if (actual.startBlock !== expected.startBlock || actual.endBlock !== expected.endBlock) {
+    throw new EvmDataError({
+      code: 'BLOCK_RANGE_INCOMPLETE',
+      message: `The indexed provider returned ${actual.startBlock}-${actual.endBlock}; expected ${expected.startBlock}-${expected.endBlock}.`,
+      retryable: false,
+    });
+  }
 }
 
 function compareTransactions(first: Transaction, second: Transaction) {
@@ -190,16 +268,6 @@ function compareTransactions(first: Transaction, second: Transaction) {
   const firstIndex = BigInt(first.transactionIndex);
   const secondIndex = BigInt(second.transactionIndex);
   return firstIndex === secondIndex ? first.hash.localeCompare(second.hash) : firstIndex < secondIndex ? -1 : 1;
-}
-
-function transactionCoverageIsExact(completed: readonly { startBlock: string; endBlock: string }[], startBlock: string, endBlock: string) {
-  const ordered = [...completed].sort((first, second) => BigInt(first.startBlock) < BigInt(second.startBlock) ? -1 : BigInt(first.startBlock) > BigInt(second.startBlock) ? 1 : 0);
-  let next = BigInt(startBlock);
-  for (const window of ordered) {
-    if (BigInt(window.startBlock) !== next || BigInt(window.endBlock) < next) return false;
-    next = BigInt(window.endBlock) + 1n;
-  }
-  return next === BigInt(endBlock) + 1n;
 }
 
 function transactionRangeStalled(completedWindows: number, message: string) {

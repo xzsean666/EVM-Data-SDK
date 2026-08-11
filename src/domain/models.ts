@@ -219,6 +219,16 @@ export interface InternalNativeTransferBlockRange {
   readonly upstreamRequests: number;
 }
 
+/** One complete, closed internal-native range window emitted during a scan. */
+export interface InternalNativeTransferBlockRangeWindow {
+  readonly chainId: number;
+  readonly address: string;
+  readonly range: BlockRange;
+  readonly items: readonly InternalNativeTransfer[];
+  readonly provider: ProviderName;
+  readonly upstreamRequests: number;
+}
+
 /** EIP-4895 withdrawal. `amount` is Gwei, as returned by the indexed API. */
 export interface BeaconWithdrawal {
   readonly chainId: number;
@@ -239,5 +249,15 @@ export interface BeaconWithdrawalBlockRange {
   readonly items: readonly BeaconWithdrawal[];
   readonly provider: ProviderName;
   readonly pages: number;
+  readonly upstreamRequests: number;
+}
+
+/** One complete, closed Beacon-withdrawal range window emitted during a scan. */
+export interface BeaconWithdrawalBlockRangeWindow {
+  readonly chainId: number;
+  readonly address: string;
+  readonly range: BlockRange;
+  readonly items: readonly BeaconWithdrawal[];
+  readonly provider: ProviderName;
   readonly upstreamRequests: number;
 }

@@ -38,6 +38,18 @@ class BothDirectionTransport implements HttpTransport {
   }
 }
 
+class BothInternalDirectionTransport implements HttpTransport {
+  readonly requests: HttpRequest[] = [];
+
+  constructor(private readonly incoming: unknown, private readonly outgoing: unknown) {}
+
+  async request(request: HttpRequest): Promise<HttpResponse> {
+    this.requests.push(request);
+    const filter = ((request.body as { params?: readonly unknown[] }).params?.[0] ?? {}) as Record<string, unknown>;
+    return { status: 200, headers: {}, body: "toAddress" in filter ? this.incoming : this.outgoing };
+  }
+}
+
 class SequenceTransport implements HttpTransport {
   readonly requests: HttpRequest[] = [];
   constructor(private readonly bodies: unknown[]) {}
@@ -63,16 +75,46 @@ function context(overrides: Partial<ProviderAttemptContext> = {}): ProviderAttem
 const address = "0x2222222222222222222222222222222222222222";
 
 describe("AlchemyAdapter", () => {
-  it("supports balance and ERC-20 transfers in every direction but not transactions", () => {
+  it("supports transaction and ERC-20 range reads while routing native balances elsewhere", () => {
     const adapter = new AlchemyAdapter({ transport: new FixtureTransport(alchemyTransfersPage) });
     const chain = new ChainRegistry().resolve("ethereum");
     expect(adapter.supports({ operation: "getNativeBalance", chain, request: { operation: "getNativeBalance", chain: 1, address } as never, continuation: false })).toBe(false);
-    expect(adapter.supports({ operation: "getTransactions", chain, request: parseTransactionsRequest({ chain: 1, address }), continuation: false })).toBe(false);
+    expect(adapter.supports({ operation: "getTransactions", chain, request: parseTransactionsRequest({ chain: 1, address }), continuation: false })).toBe(true);
     expect(adapter.supports({ operation: "getErc20Transfers", chain, request: parseErc20TransfersRequest({ chain: 1, address, direction: "incoming" }), continuation: false })).toBe(true);
     expect(adapter.supports({ operation: "getErc20Transfers", chain, request: parseErc20TransfersRequest({ chain: 1, address, direction: "incoming", pageSize: 1_000 }), continuation: false })).toBe(true);
     expect(adapter.supports({ operation: "getErc20Transfers", chain, request: parseErc20TransfersRequest({ chain: 1, address, direction: "incoming", pageSize: 1_001 }), continuation: false })).toBe(false);
     expect(adapter.supports({ operation: "getErc20Transfers", chain, request: parseErc20TransfersRequest({ chain: 1, address, direction: "both", pageSize: 1_000 }), continuation: false })).toBe(true);
     expect(adapter.supports({ operation: "getErc20Transfers", chain, request: parseErc20TransfersRequest({ chain: 1, address, direction: "both", pageSize: 1_001 }), continuation: false })).toBe(false);
+  });
+
+  it("queries both directions for internal native transfers and de-duplicates overlaps", async () => {
+    const incoming = transfersResponse([
+      internalTransfer("a", "0x2a", "0x1111111111111111111111111111111111111111", address, "0x2386f26fc10000"),
+      internalTransfer("b", "0x2b", address, address, "0x1"),
+    ], null);
+    const outgoing = transfersResponse([
+      internalTransfer("c", "0x2c", address, "0x3333333333333333333333333333333333333333", "0x2"),
+      internalTransfer("b", "0x2b", address, address, "0x1"),
+    ], null);
+    const transport = new BothInternalDirectionTransport(incoming, outgoing);
+    const result = await new AlchemyAdapter({ transport }).getInternalNativeTransfersByBlockRange(
+      { address, startBlock: "40", endBlock: "42" },
+      context(),
+    );
+
+    expect(result.items.map((item) => item.transactionHash)).toEqual([
+      `0x${"c".repeat(64)}`,
+      `0x${"b".repeat(64)}`,
+      `0x${"a".repeat(64)}`,
+    ]);
+    expect(result.items.find((item) => item.transactionHash === `0x${"a".repeat(64)}`)).toMatchObject({
+      from: "0x1111111111111111111111111111111111111111",
+      to: address,
+      value: "10000000000000000",
+    });
+    expect(transport.requests).toHaveLength(2);
+    expect(transport.requests[0]?.body).toMatchObject({ params: [{ fromAddress: address, fromBlock: "0x28", toBlock: "0x2a" }] });
+    expect(transport.requests[1]?.body).toMatchObject({ params: [{ toAddress: address, fromBlock: "0x28", toBlock: "0x2a" }] });
   });
 
   it("maps directional ERC-20 transfers and preserves page key filters", async () => {
@@ -82,6 +124,35 @@ describe("AlchemyAdapter", () => {
     expect(result.items[0]).toMatchObject({ amount: "99", blockNumber: "42", tokenSymbol: "TOK", tokenDecimals: 18, timestamp: "2024-01-02T03:04:05.000Z" });
     expect(result.nextPageState).toEqual({ pageKey: "alchemy-page-key-2" });
     expect(transport.requests[0]?.body).toMatchObject({ method: "alchemy_getAssetTransfers", params: [{ category: ["erc20"], toAddress: address, contractAddresses: ["0x5555555555555555555555555555555555555555"], fromBlock: "0xa", toBlock: "0x2a", maxCount: "0x2", order: "asc" }] });
+  });
+
+  it("maps Alchemy's legacy singular hexadecimal token decimal field", async () => {
+    const transport = new FixtureTransport({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        transfers: [{
+          category: "erc20",
+          uniqueId: "0xlegacy:log:1",
+          asset: "LEGACY",
+          from: "0x1111111111111111111111111111111111111111",
+          to: address,
+          hash: `0x${"2".repeat(64)}`,
+          blockNum: "0x2a",
+          rawContract: {
+            address: "0x5555555555555555555555555555555555555555",
+            decimal: "0x12",
+            value: "0x1",
+          },
+        }],
+        pageKey: null,
+      },
+    });
+    const result = await new AlchemyAdapter({ transport }).getErc20Transfers(
+      parseErc20TransfersRequest({ chain: 1, address, direction: "incoming" }),
+      context(),
+    );
+    expect(result.items[0]).toMatchObject({ tokenDecimals: 18 });
   });
 
   it("uses page key continuation and recognizes terminal pages", async () => {
@@ -176,16 +247,19 @@ describe("AlchemyAdapter", () => {
 
   it("restarts both directions from one inclusive range without carrying page keys", async () => {
     const incoming = transfersResponse([transfer("incoming", "0x2a", "0x1111111111111111111111111111111111111111", address)], null);
-    const outgoing = transfersResponse([transfer("outgoing", "0x2a", address, "0x3333333333333333333333333333333333333333")], "must-split");
-    const transport = new BothDirectionTransport(incoming, outgoing, incoming, outgoing);
+    const outgoing = transfersResponse([transfer("outgoing", "0x2a", address, "0x3333333333333333333333333333333333333333")], "outgoing-next");
+    const outgoingContinuation = transfersResponse([transfer("outgoing-2", "0x2b", address, "0x3333333333333333333333333333333333333333")], null);
+    const transport = new BothDirectionTransport(incoming, outgoing, incoming, outgoingContinuation);
     const result = await new AlchemyAdapter({ transport }).getErc20TransfersByBlockRangeWindow(
       normalizeErc20BlockRangeRequest({ chain: 1, address, startBlock: "40", endBlock: "42", direction: "both" }),
       context({ providerPageState: { pageKey: "ignored-by-range-operation" } }),
     );
-    expect(result.complete).toBe(false);
-    expect(transport.requests).toHaveLength(2);
+    expect(result.complete).toBe(true);
+    expect(result.items).toHaveLength(3);
+    expect(transport.requests).toHaveLength(3);
     expect(transport.requests[0]?.body).toMatchObject({ params: [{ toAddress: address, fromBlock: "0x28", toBlock: "0x2a", maxCount: "0x3e8", order: "asc" }] });
     expect(transport.requests[1]?.body).toMatchObject({ params: [{ fromAddress: address, fromBlock: "0x28", toBlock: "0x2a", maxCount: "0x3e8", order: "asc" }] });
+    expect(transport.requests[2]?.body).toMatchObject({ params: [{ fromAddress: address, pageKey: "outgoing-next" }] });
     expect(JSON.stringify(transport.requests)).not.toContain("ignored-by-range-operation");
   });
 
@@ -261,6 +335,20 @@ function transfer(uniqueId: string, blockNum: string, from: string, to: string):
     hash: `0x${"1".repeat(64)}`,
     blockNum,
     rawContract: { address: "0x5555555555555555555555555555555555555555", decimals: 18, value: "0x1" },
+  };
+}
+
+function internalTransfer(uniqueId: string, blockNum: string, from: string, to: string, value: string): Record<string, unknown> {
+  return {
+    category: "internal",
+    uniqueId,
+    asset: "ETH",
+    from,
+    to,
+    hash: `0x${uniqueId[0].repeat(64)}`,
+    blockNum,
+    rawContract: { value },
+    metadata: { blockTimestamp: "2026-01-02T03:04:05.000Z" },
   };
 }
 

@@ -1,13 +1,13 @@
 import { AxiosHttpTransport, parseHttpProxyUrl } from "../../transport/AxiosHttpTransport";
 import type { HttpTransport } from "../../transport/HttpTransport";
 import { EvmDataError } from "../../domain/errors";
-import type { Erc20BalanceAtBlock, Erc20BalancesAtBlock, Erc20TokenHolding, Erc20TokenHoldings, Erc20Transfer } from "../../domain/models";
+import type { Erc20BalanceAtBlock, Erc20BalancesAtBlock, Erc20TokenHolding, Erc20TokenHoldings, Erc20Transfer, Transaction, InternalNativeTransfer } from "../../domain/models";
 import type { NormalizedErc20BlockRangeRequest, NormalizedErc20TransfersRequest, NormalizedTransactionsRequest, TransferDirection } from "../../domain/operations";
 import type { ProviderPageResult } from "../../domain/pagination";
 import type { CapabilityRequest, DataProviderAdapter, ProviderBlockRangeWindowResult, ProviderAttemptContext } from "../DataProviderAdapter";
 import { classifyAlchemyHttpResponse, classifyAlchemyJsonRpcError, normalizeAlchemyTransportError } from "./alchemyErrors";
 import { alchemyJsonRpcResponseSchema, alchemyTokenBalancesResultSchema, alchemyTransfersResultSchema, type AlchemyTransfer } from "./alchemySchemas";
-import { mapAlchemyTransfer } from "./alchemyMapper";
+import { mapAlchemyTransfer, hexQuantityToDecimal } from "./alchemyMapper";
 import { decodeAggregate3Result, encodeAggregate3, MULTICALL3_ADDRESS } from "../../rpc/EthereumMulticall3Codec";
 
 export interface AlchemyAdapterOptions {
@@ -17,6 +17,7 @@ export interface AlchemyAdapterOptions {
 }
 
 export const ALCHEMY_MAX_PAGE_SIZE = 1_000;
+const ALCHEMY_MAX_RANGE_PAGES = 101;
 /** Keep one RPC request comfortably below provider request-size limits. */
 // 50 calls keeps historical archive reads below conservative provider payload
 // and compute limits while avoiding a request per token.
@@ -73,7 +74,50 @@ export class AlchemyAdapter implements DataProviderAdapter {
       return "pageSize" in request.request && request.request.pageSize <= ALCHEMY_MAX_PAGE_SIZE;
     }
     if (request.operation === "getErc20TransfersByBlockRange") return true;
+    if (request.operation === "getTransactions") return true;
+    if (request.operation === "getInternalNativeTransfersByBlockRange") return true;
     return false;
+  }
+
+  async getTransactions(request: NormalizedTransactionsRequest, context: ProviderAttemptContext): Promise<ProviderPageResult<Transaction>> {
+    const pageState = readSinglePageState(context.providerPageState);
+    const filter: Record<string, unknown> = {
+      category: ["external", "internal"], withMetadata: true,
+      order: request.order, maxCount: `0x${Math.min(request.pageSize, ALCHEMY_MAX_PAGE_SIZE).toString(16)}`,
+      ...(request.address === undefined ? {} : { fromAddress: request.address }),
+      ...(request.startBlock === null ? {} : { fromBlock: decimalToHex(request.startBlock) }),
+      ...(request.endBlock === null ? {} : { toBlock: decimalToHex(request.endBlock) }),
+      ...(pageState === null ? {} : { pageKey: pageState.pageKey }),
+    };
+    const body = await this.call("alchemy_getAssetTransfers", [filter], context);
+    const parsed = alchemyTransfersResultSchema.safeParse(parseResult(body, context));
+    if (!parsed.success) throw invalidResponse(context, parsed.error);
+    const items = parsed.data.transfers.map((item): Transaction => ({
+      chainId: context.chain.chainId, hash: item.hash.toLowerCase(), blockNumber: hexQuantityToDecimal(item.blockNum),
+      blockHash: null, transactionIndex: null, timestamp: item.metadata?.blockTimestamp ?? null,
+      from: item.from.toLowerCase(), to: item.to.toLowerCase(), nonce: null, value: item.rawContract.value ? hexQuantityToDecimal(item.rawContract.value) : "0",
+      gasLimit: null, gasUsed: null, gasPrice: null, input: null, status: "unknown", provider: "alchemy",
+    }));
+    return { items, nextPageState: parsed.data.pageKey ? { pageKey: parsed.data.pageKey } : null, pageInfo: { provider: "alchemy", chainId: context.chain.chainId } };
+  }
+
+  async getInternalNativeTransfersByBlockRange(request: { readonly address: string; readonly startBlock: string; readonly endBlock: string }, context: ProviderAttemptContext): Promise<import("../../domain/models").InternalNativeTransferBlockRange> {
+    // Query both directions. Alchemy's `fromAddress` filter misses native
+    // deposits whose value reaches the wallet through an internal CALL (for
+    // example Base/OP Stack type-0x7e deposits).
+    const baseFilter = { category: ["internal"], withMetadata: true, order: "asc", maxCount: "0x3e8", fromBlock: decimalToHex(request.startBlock), toBlock: decimalToHex(request.endBlock) };
+    const [outgoingBody, incomingBody] = await Promise.all([
+      this.call("alchemy_getAssetTransfers", [{ ...baseFilter, fromAddress: request.address }], context),
+      this.call("alchemy_getAssetTransfers", [{ ...baseFilter, toAddress: request.address }], context),
+    ]);
+    const outgoing = alchemyTransfersResultSchema.safeParse(parseResult(outgoingBody, context));
+    const incoming = alchemyTransfersResultSchema.safeParse(parseResult(incomingBody, context));
+    if (!outgoing.success) throw invalidResponse(context, outgoing.error);
+    if (!incoming.success) throw invalidResponse(context, incoming.error);
+    const items: InternalNativeTransfer[] = [...outgoing.data.transfers, ...incoming.data.transfers]
+      .map((item): InternalNativeTransfer => ({ chainId: context.chain.chainId, transactionHash: item.hash.toLowerCase(), traceId: item.uniqueId, blockNumber: hexQuantityToDecimal(item.blockNum), timestamp: item.metadata?.blockTimestamp ?? null, from: item.from.toLowerCase(), to: item.to.toLowerCase(), value: item.rawContract.value ? hexQuantityToDecimal(item.rawContract.value) : "0", type: "internal", status: "unknown", provider: "alchemy" }))
+      .filter((item, index, all) => all.findIndex((candidate) => `${candidate.transactionHash}:${candidate.traceId ?? ""}:${candidate.from}:${candidate.to}:${candidate.value}:${candidate.blockNumber}` === `${item.transactionHash}:${item.traceId ?? ""}:${item.from}:${item.to}:${item.value}:${item.blockNumber}`) === index);
+    return { chainId: context.chain.chainId, address: request.address, range: { startBlock: request.startBlock, endBlock: request.endBlock }, items, provider: "alchemy", pages: 1, upstreamRequests: 1 };
   }
 
   /** Current inventory discovery only; callers must still query an explicit
@@ -132,24 +176,60 @@ export class AlchemyAdapter implements DataProviderAdapter {
     context: ProviderAttemptContext,
   ): Promise<ProviderBlockRangeWindowResult> {
     if (request.direction !== "both") {
-      const page = await this.getRangeTransferPage(request, context, request.direction, false);
+      const transfers = await this.getCompleteRangeTransfers(request, context, request.direction, false);
       return {
-        items: page.transfers.map((transfer) => ({ item: transfer.item, identityKey: transfer.uniqueId })),
-        complete: page.nextPageKey === null,
+        items: transfers.map((transfer) => ({ item: transfer.item, identityKey: transfer.uniqueId })),
+        complete: true,
         pageInfo: { provider: this.name, chainId: context.chain.chainId },
       };
     }
 
     const [incoming, outgoing] = await Promise.all([
-      this.getRangeTransferPage(request, context, "incoming", true),
-      this.getRangeTransferPage(request, context, "outgoing", false),
+      this.getCompleteRangeTransfers(request, context, "incoming", true),
+      this.getCompleteRangeTransfers(request, context, "outgoing", false),
     ]);
-    const transfers = mergeBothDirectionPages(incoming, outgoing, "asc");
+    const transfers = mergeBothDirectionTransfers(incoming, outgoing, "asc");
     return {
       items: transfers.map((transfer) => ({ item: transfer.item, identityKey: transfer.uniqueId })),
-      complete: incoming.nextPageKey === null && outgoing.nextPageKey === null,
+      complete: true,
       pageInfo: { provider: this.name, chainId: context.chain.chainId },
     };
+  }
+
+  private async getCompleteRangeTransfers(
+    request: NormalizedErc20BlockRangeRequest,
+    context: ProviderAttemptContext,
+    direction: AlchemyStreamDirection,
+    excludeSelfTransfers: boolean,
+  ): Promise<readonly AlchemyMappedTransfer[]> {
+    const transfers: AlchemyMappedTransfer[] = [];
+    let pageKey: string | null = null;
+    for (let page = 0; page < ALCHEMY_MAX_RANGE_PAGES; page += 1) {
+      if (page > 0) await context.beforeProviderRequest?.();
+      const result = await this.getRangeTransferPage(request, context, direction, excludeSelfTransfers, pageKey);
+      transfers.push(...result.transfers);
+      if (transfers.length > 100_000) {
+        throw new EvmDataError({
+          code: "RANGE_RESULT_TOO_LARGE",
+          message: "Alchemy block-range result exceeds the SDK record limit.",
+          retryable: false,
+          provider: this.name,
+          chainId: context.chain.chainId,
+        });
+      }
+      if (result.nextPageKey === null) return transfers;
+      if (result.nextPageKey === pageKey) {
+        throw invalidResponse(context, new Error("Alchemy returned the same pagination page key twice."));
+      }
+      pageKey = result.nextPageKey;
+    }
+    throw new EvmDataError({
+      code: "INVALID_PROVIDER_RESPONSE",
+      message: "Alchemy block-range pagination exceeded the SDK page limit.",
+      retryable: false,
+      provider: this.name,
+      chainId: context.chain.chainId,
+    });
   }
 
   /**
@@ -284,6 +364,7 @@ export class AlchemyAdapter implements DataProviderAdapter {
     context: ProviderAttemptContext,
     direction: AlchemyStreamDirection,
     excludeSelfTransfers: boolean,
+    pageKey: string | null,
   ): Promise<AlchemyTransferPage> {
     const filter: Record<string, unknown> = {
       category: ["erc20"],
@@ -295,6 +376,7 @@ export class AlchemyAdapter implements DataProviderAdapter {
       ...(request.tokenAddress === null ? {} : { contractAddresses: [request.tokenAddress] }),
       fromBlock: decimalToHex(request.startBlock),
       toBlock: decimalToHex(request.endBlock),
+      ...(pageKey === null ? {} : { pageKey }),
     };
     const body = await this.call("alchemy_getAssetTransfers", [filter], context);
     const result = alchemyTransfersResultSchema.safeParse(parseResult(body, context));
@@ -356,6 +438,16 @@ function mergeBothDirectionPages(
   for (const transfer of [...(incoming?.transfers ?? []), ...(outgoing?.transfers ?? [])]) {
     uniqueTransfers.set(transfer.uniqueId, transfer);
   }
+  return [...uniqueTransfers.values()].sort((first, second) => compareTransfers(first, second, order));
+}
+
+function mergeBothDirectionTransfers(
+  incoming: readonly AlchemyMappedTransfer[],
+  outgoing: readonly AlchemyMappedTransfer[],
+  order: "asc" | "desc",
+): readonly AlchemyMappedTransfer[] {
+  const uniqueTransfers = new Map<string, AlchemyMappedTransfer>();
+  for (const transfer of [...incoming, ...outgoing]) uniqueTransfers.set(transfer.uniqueId, transfer);
   return [...uniqueTransfers.values()].sort((first, second) => compareTransfers(first, second, order));
 }
 

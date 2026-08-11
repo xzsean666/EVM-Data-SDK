@@ -214,28 +214,65 @@ export class MoralisAdapter implements DataProviderAdapter {
     request: NormalizedErc20BlockRangeRequest,
     context: ProviderAttemptContext,
   ): Promise<ProviderBlockRangeWindowResult> {
-    const body = await this.call(`/${request.address}/erc20/transfers`, {
-      chain: moralisChain(context),
-      limit: MORALIS_MAX_PAGE_SIZE,
-      order: "ASC",
-      from_block: request.startBlock,
-      to_block: request.endBlock,
-      ...(request.tokenAddress === null ? {} : { contract_addresses: request.tokenAddress }),
-    }, context);
-    const parsed = moralisTokenTransferCollectionSchema.safeParse(body);
-    if (!parsed.success) throw invalidResponse(context);
-    try {
-      const mapped = parsed.data.result.map((item) => mapMoralisTokenTransfer(item, context.chain));
-      return {
-        items: mapped
-          .filter((item) => directionMatches(item, request.direction, request.address))
-          .map((item) => ({ item, identityKey: null })),
-        complete: parsed.data.cursor === undefined || parsed.data.cursor === null || parsed.data.cursor === "",
-        pageInfo: { provider: this.name, chainId: context.chain.chainId },
-      };
-    } catch (error: unknown) {
-      throw invalidResponse(context, error);
+    const items: Erc20Transfer[] = [];
+    const seen = new Set<string>();
+    let cursor: string | null = null;
+    for (let page = 0; page < 10_001; page += 1) {
+      if (page > 0) await context.beforeProviderRequest?.();
+      const body = await this.call(`/${request.address}/erc20/transfers`, {
+        chain: moralisChain(context),
+        limit: MORALIS_MAX_PAGE_SIZE,
+        order: "ASC",
+        from_block: request.startBlock,
+        to_block: request.endBlock,
+        ...(cursor === null ? {} : { cursor }),
+        ...(request.tokenAddress === null ? {} : { contract_addresses: request.tokenAddress }),
+      }, context);
+      const parsed = moralisTokenTransferCollectionSchema.safeParse(body);
+      if (!parsed.success) throw invalidResponse(context);
+      try {
+        for (const raw of parsed.data.result) {
+          const item = mapMoralisTokenTransfer(raw, context.chain);
+          if (!directionMatches(item, request.direction, request.address)) continue;
+          const identity = `${item.transactionHash}:${item.logIndex ?? ''}:${item.tokenAddress}:${item.from}:${item.to}:${item.amount}`;
+          if (!seen.has(identity)) {
+            seen.add(identity);
+            items.push(item);
+          }
+        }
+      } catch (error: unknown) {
+        throw invalidResponse(context, error);
+      }
+      if (items.length > 100_000) {
+        throw new EvmDataError({
+          code: "RANGE_RESULT_TOO_LARGE",
+          message: "Moralis block-range result exceeds the SDK record limit.",
+          retryable: false,
+          provider: this.name,
+          chainId: context.chain.chainId,
+        });
+      }
+      const nextCursor = parsed.data.cursor ?? null;
+      if (nextCursor === null || nextCursor === "") {
+        return {
+          items: items.map((item) => ({ item, identityKey: null })),
+          itemsAlreadyDeduplicated: true,
+          complete: true,
+          pageInfo: { provider: this.name, chainId: context.chain.chainId },
+        };
+      }
+      if (nextCursor === cursor) {
+        throw invalidResponse(context, new Error("Moralis returned the same pagination cursor twice."));
+      }
+      cursor = nextCursor;
     }
+    throw new EvmDataError({
+      code: "INVALID_PROVIDER_RESPONSE",
+      message: "Moralis block-range pagination exceeded the SDK page limit.",
+      retryable: false,
+      provider: this.name,
+      chainId: context.chain.chainId,
+    });
   }
 
   private async call(

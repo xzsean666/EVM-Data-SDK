@@ -592,7 +592,7 @@ The upgrade does not add global chain event scanning, normal transactions from
 Alchemy asset transfers, arbitrary sing-box configuration, TUN/system routing,
 unbounded memory, or a promise to evade API quotas or network policy.
 
-For durable consumers, both block-range methods accept an optional asynchronous
+For durable consumers, all address/token block-range methods accept an optional asynchronous
 `onWindow` callback. It receives only a complete, inclusive, disjoint window
 after the SDK has proved the provider response terminal. The callback is
 awaited before the next window is requested, so a caller may atomically persist
@@ -630,13 +630,19 @@ requesting an RPC `finalized` tag.
 inclusive address/block interval through Etherscan's indexed
 `account/txlistinternal` endpoint. It exposes canonical decimal-string value,
 trace identity, status and provider provenance; provider pagination remains
-internal and is bounded.
+internal and is bounded. Callback mode uses the same complete-window contract
+and returns an empty aggregate `items` array after the callback is awaited. For
+large callback ranges, the SDK applies a provider-independent 100,000-block
+stream window guard before invoking the provider; this is an SDK memory guard,
+not a business cursor or a provider page size.
 
 `client.address.getBeaconWithdrawalsByBlockRange()` completes an inclusive
 Ethereum address/block interval through Etherscan's indexed
 `account/txsBeaconWithdrawal` endpoint. Withdrawal amounts retain their
 provider unit explicitly (`amountDecimals: 9`, Gwei), so consumers cannot
-mistake it for wei. This endpoint is unavailable on non-Ethereum chains.
+mistake it for wei. Callback mode uses the same complete-window contract and
+returns an empty aggregate `items` array after the callback is awaited. This
+endpoint is unavailable on non-Ethereum chains.
 
 ## 13. v0.4 Upgrade: Chainlink Historical Prices via Ethereum Archive RPC and Multicall3
 

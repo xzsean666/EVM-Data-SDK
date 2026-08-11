@@ -8,7 +8,10 @@ const nullableString = z.string().nullable().optional();
 
 export const etherscanEnvelopeSchema = z
   .object({
-    status: z.enum(["0", "1"]),
+    // Blockscout uses status "2" while some internal traces in the requested
+    // range are still being indexed. Its result is still a valid array and
+    // can be consumed by the shared account mapper.
+    status: z.enum(["0", "1", "2"]),
     message: z.string(),
     result: z.unknown(),
   })

@@ -126,7 +126,7 @@ describe("EtherscanAdapter", () => {
     expect(transport.requests[0]?.params).toMatchObject({ action: "tokentx", page: 1, offset: 1, sort: "desc" });
   });
 
-  it("marks a full multi-block Etherscan range page incomplete for scanner splitting", async () => {
+  it("consumes all Etherscan physical pages for one multi-block range", async () => {
     const fullPage = {
       status: "1",
       message: "OK",
@@ -141,7 +141,20 @@ describe("EtherscanAdapter", () => {
         value: "1",
       })),
     };
-    const transport = new FixtureTransport(fullPage);
+    const transport = new SequenceFixtureTransport([fullPage, {
+      status: "1",
+      message: "OK",
+      result: [{
+        blockNumber: "42",
+        hash: "0x" + "f".repeat(64),
+        transactionHash: "0x" + "f".repeat(64),
+        logIndex: "1000",
+        from: "0x1111111111111111111111111111111111111111",
+        to: "0x2222222222222222222222222222222222222222",
+        contractAddress: "0x5555555555555555555555555555555555555555",
+        value: "1",
+      }],
+    }]);
     const result = await new EtherscanAdapter({ transport }).getErc20TransfersByBlockRangeWindow(
       normalizeErc20BlockRangeRequest({
         chain: 1,
@@ -152,9 +165,10 @@ describe("EtherscanAdapter", () => {
       }),
       context(),
     );
-    expect(result.complete).toBe(false);
-    expect(result.items).toHaveLength(1_000);
+    expect(result.complete).toBe(true);
+    expect(result.items).toHaveLength(1_001);
     expect(transport.requests[0]?.params).toMatchObject({ action: "tokentx", page: 1, offset: 1_000, sort: "asc", startblock: "40", endblock: "42" });
+    expect(transport.requests[1]?.params).toMatchObject({ action: "tokentx", page: 2, offset: 1_000, sort: "asc", startblock: "40", endblock: "42" });
   });
 
   it("uses ascending physical pages to complete a full single-block Etherscan range page", async () => {
@@ -282,6 +296,31 @@ describe("EtherscanAdapter", () => {
     expect(result).toMatchObject({ provider: "etherscan", pages: 1, upstreamRequests: 1 });
     expect(result.items[0]).toMatchObject({ blockNumber: "42", value: "100", traceId: "0_1", status: "success" });
     expect(transport.requests[0]?.params).toMatchObject({ action: "txlistinternal", startblock: "40", endblock: "42", page: 1, offset: 1_000, sort: "asc" });
+  });
+
+  it("accepts Blockscout's partial-index status when it includes an internal result array", async () => {
+    const transport = new FixtureTransport({
+      status: "2",
+      message: "Some internal transactions within this block range have not yet been processed",
+      result: [{
+        blockNumber: "42",
+        timeStamp: "1700000000",
+        hash: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        from: "0x2222222222222222222222222222222222222222",
+        to: "0x1111111111111111111111111111111111111111",
+        value: "100",
+        traceId: "0_1",
+        type: "call",
+        isError: "0",
+      }],
+    });
+    const result = await new EtherscanAdapter({ transport }).getInternalNativeTransfersByBlockRange({
+      address: "0x1111111111111111111111111111111111111111",
+      startBlock: "40",
+      endBlock: "42",
+    }, context());
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]?.value).toBe("100");
   });
 
   it("maps Ethereum Beacon withdrawals as Gwei without using an RPC endpoint", async () => {

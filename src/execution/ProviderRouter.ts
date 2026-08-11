@@ -144,8 +144,10 @@ function supportsRequest(
 }
 
 function requiresIndexedFullData(request: NormalizedProviderRequest): boolean {
-  return (request.operation === "getTransactions" || request.operation === "getErc20Transfers") &&
-    request.fullData;
+  // Alchemy provides the complete transaction-range operation used by the
+  // API-only Base ledger. ERC-20 full-data pagination still requires an
+  // explorer because Alchemy's token endpoint has a smaller page contract.
+  return request.operation === "getErc20Transfers" && request.fullData;
 }
 
 function hasOperationMethod(adapter: DataProviderAdapter, operation: NormalizedProviderRequest["operation"]): boolean {
