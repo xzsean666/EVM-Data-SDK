@@ -26,10 +26,10 @@ block number
 ```
 
 This is an instantaneous pool-state price, not a candle, trade execution
-price, TWAP, Chainlink oracle price, or a cross-provider consensus price. A
-consumer that needs USD valuation must select a pool whose quote token is a
-USD stablecoin or compose this result with another explicitly defined price
-source.
+price, oracle price, or a cross-provider consensus price. The implementation
+also exposes a convenience method that converts the configured USD-stablecoin
+and WETH quote pools into a `priceUsd` value without putting any oracle
+metadata in the Uniswap registry.
 
 ## 2. Scope
 
@@ -148,6 +148,41 @@ contains two addresses or unambiguous manifest symbols, is order-independent,
 and cannot be combined with `tokenIds`; all committed fee tiers for that pair
 are returned separately.
 A request with no selector reads the complete committed Ethereum manifest.
+
+For the common single-token lookup, use:
+
+```ts
+const price = await client.uniswapV3!.getTokenPriceAtBlock({
+  chain: "ethereum",
+  token: "AAVE",
+  blockNumber: "19000000",
+});
+// price.priceUsd
+```
+
+The token may be a configured symbol (or address). Every configured fee tier
+for that token is evaluated at the same block and the highest resulting USD
+price is returned. USDC and USDT quotes are treated as USD; WETH quotes are
+converted through a WETH/stablecoin Uniswap V3 reference pool at that same
+block.
+
+For several tokens, use the batch method so shared pools are read once:
+
+```ts
+const result = await client.uniswapV3!.getTokenPricesAtBlockUsd({
+  chain: "ethereum",
+  blockNumber: "19000000",
+  tokens: ["AAVE", "UNI", "USDC", "WETH"],
+});
+```
+
+The method does not fetch a default set of USDC, ETH, or other prices. It
+reads only pools needed by the requested tokens, de-duplicates shared pool
+addresses, and sends them in one `multicallAtBlock` operation (which may be
+split into configured Multicall3 batches). A WETH/stablecoin reference pool is added
+to that same operation only when a requested token has a WETH quote. WETH
+itself is restricted to stablecoin quote pools, so unrelated WETH/UNI or
+WETH/DAI pools are not queried.
 
 ### 3.3 Result
 

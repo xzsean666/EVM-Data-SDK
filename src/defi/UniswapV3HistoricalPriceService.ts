@@ -1,6 +1,6 @@
 import { invalidRequest, uniswapV3PriceDataUnavailable } from "../domain/errors";
 import type { MulticallAtBlockRequest, MulticallAtBlockResult } from "../domain/rpcModels";
-import { parseUniswapV3HistoricalPriceRequest, type UniswapV3HistoricalPriceRequest, type UniswapV3HistoricalPriceResult, type UniswapV3PriceFailure, type UniswapV3HistoricalPrice } from "../domain/uniswapV3HistoricalPriceModels";
+import { parseUniswapV3HistoricalPriceRequest, parseUniswapV3TokenPriceAtBlockRequest, parseUniswapV3TokenPricesAtBlockRequest, type UniswapV3HistoricalPriceRequest, type UniswapV3HistoricalPriceResult, type UniswapV3PriceFailure, type UniswapV3HistoricalPrice, type UniswapV3TokenPriceAtBlockRequest, type UniswapV3TokenPriceAtBlockResult, type UniswapV3TokenPricesAtBlockRequest, type UniswapV3TokenPricesAtBlockResult } from "../domain/uniswapV3HistoricalPriceModels";
 import type { UniswapV3TokenDefinition } from "./UniswapV3TokenDefinition";
 import { UNISWAP_V3_TOKEN_REGISTRY, uniswapV3RegistryVersion } from "./uniswapV3TokenRegistry";
 import { decodeUniswapV3Slot0, UNISWAP_V3_SLOT0_SELECTOR } from "./UniswapV3Slot0Codec";
@@ -12,6 +12,85 @@ export interface UniswapV3HistoricalPriceServiceOptions { readonly rpcService: U
 export class UniswapV3HistoricalPriceService {
   private readonly rpcService: UniswapV3MulticallService; private readonly manifest: readonly UniswapV3TokenDefinition[]; private readonly version: string;
   constructor(options: UniswapV3HistoricalPriceServiceOptions) { this.rpcService = options.rpcService; this.manifest = options.manifest ?? UNISWAP_V3_TOKEN_REGISTRY; this.version = options.registryVersion ?? uniswapV3RegistryVersion(this.manifest); }
+
+  /**
+   * Returns one USD price for a token at an exact block. All configured pools
+   * matching the symbol/address are evaluated; the highest resulting price is
+   * selected when the token has more than one fee tier.
+   *
+   * USD stablecoin quotes are treated as USD. WETH quotes are converted using
+   * the configured WETH/USDC Uniswap V3 pools at the same block, so the
+   * registry remains entirely Uniswap-owned and contains no oracle metadata.
+   */
+  async getTokenPriceAtBlock(request: UniswapV3TokenPriceAtBlockRequest): Promise<UniswapV3TokenPriceAtBlockResult> {
+    const normalized = parseUniswapV3TokenPriceAtBlockRequest(request);
+    const batch = await this.getTokenPricesAtBlockUsd({
+      chain: normalized.chain,
+      blockNumber: normalized.blockNumber,
+      tokens: [normalized.token],
+      ...(normalized.signal === undefined ? {} : { signal: normalized.signal }),
+    });
+    const result = batch.prices[0];
+    if (result === undefined) throw uniswapV3PriceDataUnavailable(`No Uniswap V3 USD price resolved for token "${normalized.token}" at block ${normalized.blockNumber}.`);
+    return result;
+  }
+
+  /** Resolves many symbols/addresses with one deduplicated Multicall3 request. */
+  async getTokenPricesAtBlockUsd(request: UniswapV3TokenPricesAtBlockRequest): Promise<UniswapV3TokenPricesAtBlockResult> {
+    const normalized = parseUniswapV3TokenPricesAtBlockRequest(request);
+    const requested = normalized.tokens.map((token) => ({
+      token,
+      candidates: resolveToken(token, this.manifest).filter((definition) => {
+        if (!isUsdResolvableDefinition(definition)) return false;
+        // WETH itself must be priced from a USD stablecoin pool. Including
+        // WETH/UNI, WETH/DAI, etc. would only add unrelated pools and cannot
+        // produce a USD result without another oracle hop.
+        if (isWeth(definition.tokenAddress)) return isUsdc(definition.quoteTokenAddress) || isUsdt(definition.quoteTokenAddress);
+        return true;
+      }),
+    }));
+    const candidates = requested.flatMap(({ candidates: definitions }) => definitions);
+    const reference = candidates.some((token) => isWeth(token.quoteTokenAddress))
+      ? this.manifest.filter((token) => isWeth(token.tokenAddress) && (isUsdc(token.quoteTokenAddress) || isUsdt(token.quoteTokenAddress)))
+      : [];
+    const selected = [...new Map([...candidates, ...reference].map((token) => [token.id, token])).values()];
+    if (selected.length === 0) {
+      throw uniswapV3PriceDataUnavailable(`No Uniswap V3 USD pool is configured for the requested token(s) at block ${normalized.blockNumber}.`);
+    }
+    const snapshot = await this.getTokenPricesAtBlock({
+      chain: normalized.chain,
+      blockNumber: normalized.blockNumber,
+      tokenIds: selected.map((token) => token.id),
+      ...(normalized.signal === undefined ? {} : { signal: normalized.signal }),
+    });
+    const byId = new Map(snapshot.prices.map((price) => [price.tokenId, price]));
+    const wethUsd = reference.map((token) => byId.get(token.id)).filter((price): price is UniswapV3HistoricalPrice => price !== undefined).reduce<{ numerator: bigint; denominator: bigint } | null>((highest, price) => {
+      const candidate = { numerator: BigInt(price.ratioNumerator), denominator: BigInt(price.ratioDenominator) };
+      return highest === null || candidate.numerator * highest.denominator > highest.numerator * candidate.denominator ? candidate : highest;
+    }, null);
+    const prices: UniswapV3TokenPriceAtBlockResult[] = [];
+    const failures: { token: string; message: string }[] = [];
+    for (const entry of requested) {
+      const resolved = entry.candidates.map((definition) => {
+        const price = byId.get(definition.id);
+        if (price === undefined) return null;
+        const numerator = BigInt(price.ratioNumerator);
+        const denominator = BigInt(price.ratioDenominator);
+        const usd = isWeth(price.quoteToken.address)
+          ? wethUsd === null ? null : { numerator: numerator * wethUsd.numerator, denominator: denominator * wethUsd.denominator }
+          : isUsdc(price.quoteToken.address) || isUsdt(price.quoteToken.address) ? { numerator, denominator } : null;
+        return usd === null ? null : { definition, price, usd };
+      }).filter((value): value is { definition: UniswapV3TokenDefinition; price: UniswapV3HistoricalPrice; usd: { numerator: bigint; denominator: bigint } } => value !== null);
+      if (resolved.length === 0) {
+        failures.push({ token: entry.token, message: `No Uniswap V3 USD price resolved at block ${normalized.blockNumber}.` });
+        continue;
+      }
+      const highest = resolved.reduce((best, value) => value.usd.numerator * best.usd.denominator > best.usd.numerator * value.usd.denominator ? value : best);
+      prices.push(Object.freeze({ chainId: 1, blockNumber: snapshot.blockNumber, blockHash: snapshot.blockHash, blockTimestamp: snapshot.blockTimestamp, token: entry.token, tokenAddress: highest.definition.tokenAddress, tokenSymbol: highest.definition.tokenSymbol, tokenDecimals: highest.definition.tokenDecimals, priceUsd: renderScaled(highest.usd.numerator, highest.usd.denominator), feeTier: highest.definition.feeTier, poolAddress: highest.definition.poolAddress, quoteToken: highest.price.quoteToken, source: "uniswap-v3" }));
+    }
+    return Object.freeze({ chainId: 1, blockNumber: snapshot.blockNumber, blockHash: snapshot.blockHash, blockTimestamp: snapshot.blockTimestamp, registryVersion: snapshot.registryVersion, rpcEndpointId: snapshot.rpcEndpointId, executionMode: "multicall3", prices: Object.freeze(prices), failures: Object.freeze(failures), summary: Object.freeze({ requestedTokens: requested.length, succeededTokens: prices.length, failedTokens: failures.length, distinctPools: snapshot.summary.distinctPools, multicallBatches: snapshot.summary.multicallBatches, partial: failures.length > 0 }) });
+  }
+
   async getTokenPricesAtBlock(request: UniswapV3HistoricalPriceRequest): Promise<UniswapV3HistoricalPriceResult> {
     const normalized = parseUniswapV3HistoricalPriceRequest(request);
     const configured = this.manifest;
@@ -50,6 +129,41 @@ export class UniswapV3HistoricalPriceService {
   }
 }
 function failure(token: UniswapV3TokenDefinition, code: UniswapV3PriceFailure["code"], message: string): UniswapV3PriceFailure { return Object.freeze({ tokenId: token.id, tokenAddress: token.tokenAddress, poolAddress: token.poolAddress, code, retryable: false, message }); }
+
+const ONE_USD = 10n ** 18n;
+const WETH = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2";
+const USDC = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48";
+const USDT = "0xdac17f958d2ee523a2206206994597c13d831ec7";
+
+function isWeth(address: string): boolean { return address.toLowerCase() === WETH; }
+function isUsdc(address: string): boolean { return address.toLowerCase() === USDC; }
+function isUsdt(address: string): boolean { return address.toLowerCase() === USDT; }
+function isUsdResolvableDefinition(definition: UniswapV3TokenDefinition): boolean {
+  return isUsdc(definition.quoteTokenAddress) || isUsdt(definition.quoteTokenAddress) || isWeth(definition.quoteTokenAddress);
+}
+function renderScaled(numerator: bigint, denominator: bigint): string {
+  const value = (numerator * ONE_USD) / denominator;
+  const whole = value / ONE_USD;
+  const fraction = (value % ONE_USD).toString().padStart(18, "0").replace(/0+$/, "");
+  return fraction.length === 0 ? whole.toString() : `${whole}.${fraction}`;
+}
+
+function resolveToken(input: string, manifest: readonly UniswapV3TokenDefinition[]): readonly UniswapV3TokenDefinition[] {
+  const value = input.toLowerCase();
+  const aliases: Record<string, string> = { eth: "weth", btc: "wbtc", avax: "wavax", tao: "wtao" };
+  const requested = aliases[value] ?? value;
+  if (/^0x[0-9a-f]{40}$/.test(requested)) {
+    const matches = manifest.filter((token) => token.tokenAddress.toLowerCase() === requested);
+    if (matches.length === 0) throw invalidRequest("The requested Uniswap V3 token address is not configured.");
+    return matches;
+  }
+  const matches = manifest.filter((token) => token.tokenSymbol.toLowerCase() === requested);
+  if (matches.length === 0) throw invalidRequest(`The requested Uniswap V3 token symbol "${input}" is not configured.`);
+  if (new Set(matches.map((token) => token.tokenAddress.toLowerCase())).size > 1) {
+    throw invalidRequest(`The requested Uniswap V3 token symbol "${input}" is ambiguous.`);
+  }
+  return matches;
+}
 
 function resolvePair(input: readonly [string, string], configured: readonly UniswapV3TokenDefinition[]): Set<string> {
   const values = input.map((value) => value.toLowerCase());

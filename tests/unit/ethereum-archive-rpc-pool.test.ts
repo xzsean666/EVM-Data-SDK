@@ -181,6 +181,30 @@ describe("EthereumArchiveRpcPool.initialize", () => {
   });
 });
 
+describe("EthereumArchiveRpcPool.refreshIfNeeded", () => {
+  it("re-probes an empty pool after a transient initialization failure", async () => {
+    let probeAttempts = 0;
+    const transport = fakeTransport({
+      [ENDPOINT_A.url]: (method, params) => {
+        probeAttempts += 1;
+        if (probeAttempts === 1) return new Error("transient provider failure");
+        return healthyHandler()(method, params);
+      },
+    });
+    const pool = new EthereumArchiveRpcPool({
+      endpoints: [ENDPOINT_A],
+      transport,
+      healthRefreshCooldownMs: 0,
+    });
+
+    await pool.initialize();
+    expect(pool.isHealthy(ENDPOINT_A.id)).toBe(false);
+
+    await pool.refreshIfNeeded();
+    expect(pool.isHealthy(ENDPOINT_A.id)).toBe(true);
+  });
+});
+
 describe("EthereumArchiveRpcPool.reportOutcome", () => {
   it("marks a healthy endpoint unhealthy after a reported failure", async () => {
     const transport = fakeTransport({ [ENDPOINT_A.url]: healthyHandler() });

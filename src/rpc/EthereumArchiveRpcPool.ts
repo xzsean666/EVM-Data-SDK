@@ -33,6 +33,8 @@ export interface EthereumArchiveRpcPoolOptions {
   /** Multicall3 deployment used by this chain. Defaults to the Ethereum deployment. */
   readonly multicall3Address?: string;
   readonly multicall3DeploymentBlock?: string;
+  /** Minimum delay between automatic empty-pool health refreshes. */
+  readonly healthRefreshCooldownMs?: number;
 }
 
 export type ArchiveRpcOutcome = "success" | "failure";
@@ -40,6 +42,7 @@ export type ArchiveRpcOutcome = "success" | "failure";
 const DEFAULT_PROBE_BLOCK_NUMBER = "18000000";
 const DEFAULT_HEALTH_CHECK_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_CONCURRENT_PROBES = 5;
+const DEFAULT_HEALTH_REFRESH_COOLDOWN_MS = 5_000;
 
 export class EthereumArchiveRpcPool {
   private readonly endpoints: readonly EthereumArchiveRpcEndpoint[];
@@ -50,7 +53,10 @@ export class EthereumArchiveRpcPool {
   readonly expectedChainId: number;
   readonly multicall3Address: string;
   readonly multicall3DeploymentBlock: bigint;
+  private readonly healthRefreshCooldownMs: number;
   private readonly healthy = new Map<string, boolean>();
+  private lastHealthRefreshAt = 0;
+  private healthRefreshPromise: Promise<void> | undefined;
 
   constructor(options: EthereumArchiveRpcPoolOptions) {
     const ids = new Set<string>();
@@ -68,6 +74,7 @@ export class EthereumArchiveRpcPool {
     this.expectedChainId = options.expectedChainId ?? 1;
     this.multicall3Address = options.multicall3Address ?? MULTICALL3_ADDRESS;
     this.multicall3DeploymentBlock = BigInt(options.multicall3DeploymentBlock ?? "14353601");
+    this.healthRefreshCooldownMs = Math.max(0, options.healthRefreshCooldownMs ?? DEFAULT_HEALTH_REFRESH_COOLDOWN_MS);
     for (const endpoint of this.endpoints) {
       this.healthy.set(endpoint.id, false);
     }
@@ -81,10 +88,23 @@ export class EthereumArchiveRpcPool {
    * there is no automatic interval.
    */
   async initialize(signal?: AbortSignal): Promise<void> {
+    this.lastHealthRefreshAt = Date.now();
     await runBounded(this.endpoints, this.maxConcurrentProbes, async (endpoint) => {
       const healthy = await this.probeEndpoint(endpoint, signal);
       this.healthy.set(endpoint.id, healthy);
     });
+  }
+
+  /** Re-probe an empty pool after a transient startup/provider failure. */
+  async refreshIfNeeded(signal?: AbortSignal): Promise<void> {
+    if ([...this.healthy.values()].some(Boolean)) return;
+    const now = Date.now();
+    if (this.healthRefreshPromise !== undefined) return this.healthRefreshPromise;
+    if (now - this.lastHealthRefreshAt < this.healthRefreshCooldownMs) return;
+    this.healthRefreshPromise = this.initialize(signal).finally(() => {
+      this.healthRefreshPromise = undefined;
+    });
+    return this.healthRefreshPromise;
   }
 
   /**

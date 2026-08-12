@@ -32,5 +32,6 @@ describe("Uniswap V3 token registry", () => {
       `${entry.poolAddress}|${entry.tokenAddress}|${entry.quoteTokenAddress}|${entry.feeTier}`,
     );
     expect(new Set(identities).size).toBe(identities.length);
+    expect(UNISWAP_V3_TOKEN_REGISTRY.every((entry) => !entry.id.includes("chainlink"))).toBe(true);
   });
 });

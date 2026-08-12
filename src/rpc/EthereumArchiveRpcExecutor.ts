@@ -80,7 +80,7 @@ export class EthereumArchiveRpcExecutor implements ArchiveRpcMulticallExecutor {
     signal?: AbortSignal,
   ): Promise<{ readonly blockNumber: string; readonly rpcEndpointId: string }> {
     const deadline = this.now() + this.totalTimeoutMs;
-    const snapshot = this.pool.healthySnapshot(this.randomSource);
+    const snapshot = await this.healthySnapshotWithRefresh(signal);
     if (snapshot.length === 0) {
       throw archiveRpcUnavailable("No healthy Ethereum Archive RPC endpoint is available.");
     }
@@ -105,7 +105,7 @@ export class EthereumArchiveRpcExecutor implements ArchiveRpcMulticallExecutor {
    */
   async findLatestBlockNumber(signal?: AbortSignal): Promise<{ readonly blockNumber: string; readonly rpcEndpointId: string }> {
     const deadline = this.now() + this.totalTimeoutMs;
-    const snapshot = this.pool.healthySnapshot(this.randomSource);
+    const snapshot = await this.healthySnapshotWithRefresh(signal);
     if (snapshot.length === 0) {
       throw archiveRpcUnavailable("No healthy Ethereum Archive RPC endpoint is available.");
     }
@@ -191,7 +191,7 @@ export class EthereumArchiveRpcExecutor implements ArchiveRpcMulticallExecutor {
     readonly batchReturnData: readonly string[];
   }> {
     const deadline = this.now() + this.totalTimeoutMs;
-    const snapshot = this.pool.healthySnapshot(this.randomSource);
+    const snapshot = await this.healthySnapshotWithRefresh(request.signal);
     if (snapshot.length === 0) {
       throw archiveRpcUnavailable("No healthy Ethereum Archive RPC endpoint is available.");
     }
@@ -217,13 +217,21 @@ export class EthereumArchiveRpcExecutor implements ArchiveRpcMulticallExecutor {
     readonly rpcEndpointId: string;
   }> {
     const deadline = this.now() + this.totalTimeoutMs;
-    const snapshot = this.pool.healthySnapshot(this.randomSource);
+    const snapshot = await this.healthySnapshotWithRefresh(request.signal);
     if (snapshot.length === 0) {
       throw archiveRpcUnavailable("No healthy Ethereum Archive RPC endpoint is available.");
     }
     return this.runEndpointAttempts(snapshot, request.signal, deadline, (endpoint, attemptSignal) =>
       this.getNativeBalanceOnEndpoint(endpoint, { ...request, signal: attemptSignal }, deadline),
     );
+  }
+
+  private async healthySnapshotWithRefresh(signal?: AbortSignal): Promise<readonly EthereumArchiveRpcEndpoint[]> {
+    const snapshot = this.pool.healthySnapshot(this.randomSource);
+    if (snapshot.length > 0) return snapshot;
+    const refresh = (this.pool as unknown as { refreshIfNeeded?: (signal?: AbortSignal) => Promise<void> }).refreshIfNeeded;
+    if (refresh !== undefined) await refresh.call(this.pool, signal);
+    return this.pool.healthySnapshot(this.randomSource);
   }
 
   /**
