@@ -158,6 +158,7 @@ export class EvmDataClient {
       maxRangeRecords: this.configuration.maxRangeRecords,
       maxRangeWindows: this.configuration.maxRangeWindows,
     });
+    const defiRpcServices = new Map<1 | 8453, RpcService>();
     this.token = new TokenService(
       executor,
       new BlockRangeScanner({
@@ -169,13 +170,13 @@ export class EvmDataClient {
       priceAggregator,
       priceConfiguration.tokenAliases,
       this.binanceKlines,
+      (chainId) => (chainId === 1 ? this.rpc ?? defiRpcServices.get(chainId) : defiRpcServices.get(chainId)) ?? null,
     );
 
     const chainlinkConfiguration = this.configuration.chainlink;
     const defiConfiguration = this.configuration.defi;
     const uniswapV3Configuration = this.configuration.uniswapV3;
     const uniswapV4Configuration = this.configuration.uniswapV4;
-    const defiRpcServices = new Map<1 | 8453, RpcService>();
     const defiPools: EthereumArchiveRpcPool[] = [];
     if (chainlinkConfiguration.enabled) {
       const builtinEndpoints: readonly EthereumArchiveRpcEndpoint[] = chainlinkConfiguration.useBuiltinEthereumArchiveRpcs

@@ -1,9 +1,11 @@
 import type { ChainReference } from '../domain/chains'
 import type {
   BeaconWithdrawalBlockRange,
+  BeaconWithdrawalPage,
   Erc20BalancesAtBlock,
   Erc20TokenHoldings,
   InternalNativeTransferBlockRange,
+  InternalNativeTransferPage,
   TransactionContext,
   TransactionContextsByHashResult,
 } from '../domain/models'
@@ -241,6 +243,22 @@ export class ApiChainService {
     )
   }
 
+  async getInternalNativeTransfersPage(input: {
+    chain: ChainReference
+    address: string
+    startBlock: string
+    endBlock: string
+    page: number
+    signal?: AbortSignal
+  }): Promise<InternalNativeTransferPage> {
+    const chain = this.registry.resolve(input.chain)
+    return this.withInternalNativeCandidates(chain, input.signal, 'No configured indexed API can list internal native transfers.', async (adapter, context) => {
+      const pageMethod = (adapter as DataProviderAdapter).getInternalNativeTransfersPage
+      if (typeof pageMethod !== 'function') throw new EvmDataError({ code: 'UNSUPPORTED_OPERATION', message: 'Provider page method is unavailable.', retryable: false, provider: adapter.name, chainId: chain.chainId })
+      return pageMethod.call(adapter, input, context)
+    })
+  }
+
   async getBeaconWithdrawalsByBlockRange(input: {
     chain: ChainReference
     address: string
@@ -255,6 +273,22 @@ export class ApiChainService {
       'No configured indexed API can list Beacon withdrawals.',
       (adapter, context) => adapter.getBeaconWithdrawalsByBlockRange(input, context),
     )
+  }
+
+  async getBeaconWithdrawalsPage(input: {
+    chain: ChainReference
+    address: string
+    startBlock: string
+    endBlock: string
+    page: number
+    signal?: AbortSignal
+  }): Promise<BeaconWithdrawalPage> {
+    const chain = this.registry.resolve(input.chain)
+    return this.withEtherscanCandidates(chain, input.signal, 'No configured indexed API can list Beacon withdrawals.', async (adapter, context) => {
+      const pageMethod = (adapter as DataProviderAdapter).getBeaconWithdrawalsPage
+      if (typeof pageMethod !== 'function') throw new EvmDataError({ code: 'UNSUPPORTED_OPERATION', message: 'Provider page method is unavailable.', retryable: false, provider: adapter.name, chainId: chain.chainId })
+      return pageMethod.call(adapter, input, context)
+    })
   }
 
   private async withEtherscanCandidates<T>(

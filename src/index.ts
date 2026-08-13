@@ -63,6 +63,13 @@ export type {
   NativeBalanceAtBlockResult,
 } from "./domain/rpcModels";
 export type {
+  Erc20ReadMethod,
+  Erc20MulticallCall,
+  Erc20MulticallAtBlockRequest,
+  Erc20MulticallAtBlockResult,
+  Erc20MulticallCallResult,
+} from "./domain/erc20MulticallModels";
+export type {
   AlchemyRoute,
   BlockscoutRoute,
   BuiltinProviderName,
@@ -103,6 +110,7 @@ export type {
   TokenPriceProviderResult,
 } from "./domain/priceModels";
 export type { BinanceFiveMinuteKlineRequest, BinanceFiveMinuteKlinePoint, BinanceFiveMinuteKlineResult } from "./domain/binanceKlineModels";
+export type { GateKlineRequest, GateKlinePoint } from "./domain/gateKlineModels";
 export type { PageInfo } from "./domain/pagination";
 export type {
   BlockRange,
@@ -110,15 +118,18 @@ export type {
   Erc20BlockRangeStats,
   Erc20BlockRangeWindow,
   Erc20Transfer,
+  Erc20TransferPage,
   Erc20BalanceAtBlock,
   Erc20BalancesAtBlock,
   Erc20TokenHolding,
   Erc20TokenHoldings,
   InternalNativeTransfer,
   InternalNativeTransferBlockRange,
+  InternalNativeTransferPage,
   InternalNativeTransferBlockRangeWindow,
   BeaconWithdrawal,
   BeaconWithdrawalBlockRange,
+  BeaconWithdrawalPage,
   BeaconWithdrawalBlockRangeWindow,
   NativeBalance,
   Page,
@@ -128,6 +139,7 @@ export type {
   TransactionReceipt,
   TransactionReceiptLog,
   TransactionBlockRange,
+  TransactionBlockPage,
   TransactionBlockRangeWindow,
 } from "./domain/models";
 export { ApiChainService } from './services/ApiChainService';
@@ -144,6 +156,7 @@ export type {
 } from "./price/TokenPriceProviderAdapter";
 export { RpcService } from "./rpc/RpcService";
 export type { ArchiveRpcMulticallExecutor, RpcServiceOptions } from "./rpc/RpcService";
+export { ERC20_READ_SELECTORS, encodeErc20Read, decodeErc20Read } from "./rpc/Erc20MulticallCodec";
 export { ChainlinkService } from "./chainlink/ChainlinkService";
 export type { ChainlinkMulticallService, ChainlinkServiceOptions } from "./chainlink/ChainlinkService";
 export type { ChainlinkFeedDefinition } from "./chainlink/ChainlinkFeedDefinition";

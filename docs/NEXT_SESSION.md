@@ -1,5 +1,18 @@
 # Current Progress
 
+## 2026-08-13 ERC-20 Multicall reads
+
+Added `client.token.multicallErc20AtBlock()` / `getErc20MulticallAtBlock()`.
+The operation reuses `RpcService.multicallAtBlock()` and supports standard
+ERC-20 `balanceOf`, `allowance`, `decimals`, `name`, `symbol`, and
+`totalSupply` calls with exact-block results, deterministic batching, stable
+endpoint provenance, and per-call failure values. Added strict domain parsing,
+pure ABI codec, public exports, and `tests/unit/erc20-multicall.test.ts`.
+`blockNumber` is optional; omission resolves the latest Archive RPC head before
+the Multicall3 call.
+The operation is available when Chainlink or DeFi Archive RPC is enabled;
+otherwise it returns the existing typed unsupported-operation error.
+
 ## 2026-08-10 Blockscout provider extension
 
 Added built-in `blockscout` configuration, chain route metadata, a thin

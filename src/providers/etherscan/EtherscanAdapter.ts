@@ -407,6 +407,35 @@ export class EtherscanAdapter implements DataProviderAdapter {
     };
   }
 
+  async getInternalNativeTransfersPage(
+    request: { readonly address: string; readonly startBlock: string; readonly endBlock: string; readonly page: number },
+    context: ProviderAttemptContext,
+  ): Promise<import("../../domain/models").InternalNativeTransferPage> {
+    const body = await this.call("txlistinternal", {
+      address: request.address, page: request.page, offset: ETHERSCAN_MAX_PAGE_SIZE,
+      sort: "asc", startblock: request.startBlock, endblock: request.endBlock,
+    }, context);
+    const envelope = etherscanInternalTransactionEnvelopeSchema.safeParse(body);
+    if (!envelope.success) throw invalidResponse(context, undefined, this.name);
+    if (envelope.data.status === "0") {
+      if (isEmptyMessage(envelope.data.message, envelope.data.result, "internal transfers")) {
+        return { chainId: context.chain.chainId, address: request.address, items: [], provider: this.name, page: request.page, hasNext: false };
+      }
+      throw classifyEtherscanEnvelopeError(envelope.data.message, envelope.data.result, context.chain.chainId, this.name);
+    }
+    if (!Array.isArray(envelope.data.result)) throw invalidResponse(context, undefined, this.name);
+    const seen = new Set<string>();
+    const items = envelope.data.result.map((raw) => mapEtherscanInternalTransaction(raw, context.chain, this.name))
+      .filter((item) => {
+        if (item.from !== request.address && item.to !== request.address) return false;
+        const key = `${item.transactionHash}:${item.traceId ?? ""}:${item.from}:${item.to}:${item.value}:${item.blockNumber}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    return { chainId: context.chain.chainId, address: request.address, items, provider: this.name, page: request.page, hasNext: envelope.data.result.length >= ETHERSCAN_MAX_PAGE_SIZE };
+  }
+
   /** EIP-4895 withdrawal history from Etherscan's indexed account endpoint. */
   async getBeaconWithdrawalsByBlockRange(
     request: { readonly address: string; readonly startBlock: string; readonly endBlock: string },
@@ -461,6 +490,32 @@ export class EtherscanAdapter implements DataProviderAdapter {
       pages: page,
       upstreamRequests: page,
     };
+  }
+
+  async getBeaconWithdrawalsPage(
+    request: { readonly address: string; readonly startBlock: string; readonly endBlock: string; readonly page: number },
+    context: ProviderAttemptContext,
+  ): Promise<import("../../domain/models").BeaconWithdrawalPage> {
+    if (context.chain.chainId !== 1) throw new EvmDataError({ code: "UNSUPPORTED_CHAIN", message: "Beacon withdrawals are only available on Ethereum.", retryable: false, provider: this.name, chainId: context.chain.chainId });
+    const body = await this.call("txsBeaconWithdrawal", {
+      address: request.address, page: request.page, offset: ETHERSCAN_MAX_PAGE_SIZE,
+      sort: "asc", startblock: request.startBlock, endblock: request.endBlock,
+    }, context);
+    const envelope = etherscanBeaconWithdrawalEnvelopeSchema.safeParse(body);
+    if (!envelope.success) throw invalidResponse(context, undefined, this.name);
+    if (envelope.data.status === "0") {
+      if (isEmptyMessage(envelope.data.message, envelope.data.result, "beacon withdrawals")) return { chainId: context.chain.chainId, address: request.address, items: [], provider: this.name, page: request.page, hasNext: false };
+      throw classifyEtherscanEnvelopeError(envelope.data.message, envelope.data.result, context.chain.chainId, this.name);
+    }
+    if (!Array.isArray(envelope.data.result)) throw invalidResponse(context, undefined, this.name);
+    const seen = new Set<string>();
+    const items = envelope.data.result.map((raw) => mapEtherscanBeaconWithdrawal(raw, context.chain, this.name))
+      .filter((item) => {
+        if (item.address !== request.address || seen.has(item.withdrawalIndex)) return false;
+        seen.add(item.withdrawalIndex);
+        return true;
+      });
+    return { chainId: context.chain.chainId, address: request.address, items, provider: this.name, page: request.page, hasNext: envelope.data.result.length >= ETHERSCAN_MAX_PAGE_SIZE };
   }
 
   /**

@@ -116,6 +116,16 @@ its own chosen frontend data source. Each call accepts at most 20 hashes; a
 client caches normalized mined contexts for 60 seconds and coalesces identical
 in-flight reads, without a background refresh timer.
 
+`token.multicallErc20AtBlock` batches standard ERC-20 read-only calls through
+Multicall3 at one exact historical block. Supported methods are `balanceOf`
+(with `owner`), `allowance` (with `owner` and `spender`), `decimals`, `name`,
+`symbol`, and `totalSupply`. Quantities are decimal strings. Calls are split
+according to the configured Multicall3 batch limit; a target revert or malformed
+return value is represented on that call as `success: false` while other calls
+remain usable. This operation requires the opt-in Archive RPC configuration.
+When `blockNumber` is omitted, the SDK resolves the current Archive RPC head
+first and then executes the same pinned exact-block Multicall3 operation.
+
 ### 2.5 Request normalization
 
 - List requests default to `pageSize: 50` and `order: "desc"`. Accepted page sizes are integers from 1 through 10,000. Provider eligibility is page-size-aware: Moralis accepts 1–100, Alchemy accepts 1–1,000 for ERC-20 operations, and Etherscan accepts 1–10,000 for list operations.

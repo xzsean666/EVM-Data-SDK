@@ -5,7 +5,7 @@ import {
   MULTICALL3_BASE_MAINNET_DEPLOYMENT_BLOCK,
   MULTICALL3_ETHEREUM_MAINNET_DEPLOYMENT_BLOCK,
 } from "./EthereumMulticall3Codec";
-import { multicallNotDeployedAtBlock, unsupportedChain } from "../domain/errors";
+import { multicallNotDeployedAtBlock, unsupportedChain, unsupportedOperation } from "../domain/errors";
 import {
   parseMulticallAtBlockRequest,
   type MulticallAtBlockCallResult,
@@ -13,6 +13,13 @@ import {
   type MulticallAtBlockResult,
   type NormalizedMulticallAtBlockCall,
 } from "../domain/rpcModels";
+import {
+  parseErc20MulticallAtBlockRequest,
+  type Erc20MulticallAtBlockRequest,
+  type Erc20MulticallAtBlockResult,
+  type Erc20MulticallCallResult,
+} from "../domain/erc20MulticallModels";
+import { decodeErc20Read, encodeErc20Read } from "./Erc20MulticallCodec";
 
 /**
  * Port implemented by `EthereumArchiveRpcExecutor` (P3). This service owns
@@ -22,6 +29,8 @@ import {
  * executor.
  */
 export interface ArchiveRpcMulticallExecutor {
+  /** Resolves the current chain head without pinning a historical block. */
+  readonly findLatestBlockNumber?: (signal?: AbortSignal) => Promise<{ readonly blockNumber: string; readonly rpcEndpointId: string }>;
   /**
    * Executes one or more independent `aggregate3` `eth_call` batches at the
    * exact same historical block, pinned to one endpoint for the whole
@@ -142,6 +151,38 @@ export class RpcService {
       multicallBatches: batches.length,
       results: Object.freeze(results),
     });
+  }
+
+  /**
+   * Encodes and decodes common ERC-20 view methods through the same exact-block
+   * Multicall3 path. Individual token call failures remain in the result.
+   */
+  async multicallErc20AtBlock(request: Erc20MulticallAtBlockRequest): Promise<Erc20MulticallAtBlockResult> {
+    const normalized = parseErc20MulticallAtBlockRequest(request);
+    let blockNumber = normalized.blockNumber;
+    if (blockNumber === undefined) {
+      if (this.executor.findLatestBlockNumber === undefined) {
+        throw unsupportedOperation("This Archive RPC executor cannot resolve the latest block.");
+      }
+      blockNumber = (await this.executor.findLatestBlockNumber(normalized.signal)).blockNumber;
+    }
+    const raw = await this.multicallAtBlock({
+      chain: normalized.chainId,
+      blockNumber,
+      calls: normalized.calls.map((call) => ({ id: call.id, target: call.tokenAddress, callData: encodeErc20Read(call), allowFailure: true })),
+      ...(normalized.signal === undefined ? {} : { signal: normalized.signal }),
+    });
+    const byId = new Map(raw.results.map((result) => [result.id, result]));
+    const results: Erc20MulticallCallResult[] = normalized.calls.map((call) => {
+      const result = byId.get(call.id)!;
+      if (!result.success) return Object.freeze({ id: call.id, tokenAddress: call.tokenAddress, method: call.method, success: false, value: null, error: "CALL_FAILED" as const });
+      try {
+        return Object.freeze({ id: call.id, tokenAddress: call.tokenAddress, method: call.method, success: true, value: decodeErc20Read(call.method, result.returnData), error: null });
+      } catch {
+        return Object.freeze({ id: call.id, tokenAddress: call.tokenAddress, method: call.method, success: false, value: null, error: "DECODE_FAILED" as const });
+      }
+    });
+    return Object.freeze({ ...raw, results: Object.freeze(results) });
   }
 }
 

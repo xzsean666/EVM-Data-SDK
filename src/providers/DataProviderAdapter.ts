@@ -9,7 +9,7 @@ import type {
   OperationName,
 } from "../domain/operations";
 import type { ProviderPageResult } from "../domain/pagination";
-import type { Erc20BalanceAtBlock, Erc20TokenHoldings, Erc20Transfer, NativeBalance, Transaction, TransactionContext } from "../domain/models";
+import type { BeaconWithdrawalPage, Erc20BalanceAtBlock, Erc20TokenHoldings, Erc20Transfer, InternalNativeTransferPage, NativeBalance, Transaction, TransactionContext } from "../domain/models";
 
 export interface CredentialLease {
   readonly id: string;
@@ -102,6 +102,16 @@ export interface DataProviderAdapter {
     request: NormalizedErc20BlockRangeRequest,
     context: ProviderAttemptContext,
   ): Promise<ProviderBlockRangeWindowResult>;
+
+  getInternalNativeTransfersPage?(
+    request: { readonly address: string; readonly startBlock: string; readonly endBlock: string; readonly page: number },
+    context: ProviderAttemptContext,
+  ): Promise<InternalNativeTransferPage>;
+
+  getBeaconWithdrawalsPage?(
+    request: { readonly address: string; readonly startBlock: string; readonly endBlock: string; readonly page: number },
+    context: ProviderAttemptContext,
+  ): Promise<BeaconWithdrawalPage>;
 
   /** Indexed API only: one contract's balance at an exact historical block. */
   getErc20BalanceAtBlock?(

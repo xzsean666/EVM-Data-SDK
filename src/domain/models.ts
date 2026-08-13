@@ -96,6 +96,16 @@ export interface Erc20Transfer {
   provider: ProviderName;
 }
 
+/** One provider page of ERC-20 transfers for a caller-owned block cursor. */
+export interface Erc20TransferPage {
+  readonly chainId: number;
+  readonly address: string;
+  readonly items: readonly Erc20Transfer[];
+  readonly provider: ProviderName;
+  readonly page: number;
+  readonly hasNext: boolean;
+}
+
 /** One ERC-20 contract balance at an exact canonical historical block. */
 export interface Erc20BalanceAtBlock {
   chainId: number;
@@ -183,6 +193,16 @@ export interface TransactionBlockRange {
   readonly upstreamRequests: number;
 }
 
+/** One provider page of transactions for a caller-owned block cursor. */
+export interface TransactionBlockPage {
+  readonly chainId: number;
+  readonly address: string;
+  readonly items: readonly Transaction[];
+  readonly provider: ProviderName;
+  readonly page: number;
+  readonly hasNext: boolean;
+}
+
 /** One complete, closed transaction range window emitted during a streamed scan. */
 export interface TransactionBlockRangeWindow {
   readonly chainId: number;
@@ -219,6 +239,16 @@ export interface InternalNativeTransferBlockRange {
   readonly upstreamRequests: number;
 }
 
+/** One provider page of internal-native transfers. */
+export interface InternalNativeTransferPage {
+  readonly chainId: number;
+  readonly address: string;
+  readonly items: readonly InternalNativeTransfer[];
+  readonly provider: ProviderName;
+  readonly page: number;
+  readonly hasNext: boolean;
+}
+
 /** One complete, closed internal-native range window emitted during a scan. */
 export interface InternalNativeTransferBlockRangeWindow {
   readonly chainId: number;
@@ -250,6 +280,16 @@ export interface BeaconWithdrawalBlockRange {
   readonly provider: ProviderName;
   readonly pages: number;
   readonly upstreamRequests: number;
+}
+
+/** One provider page of Beacon withdrawals. */
+export interface BeaconWithdrawalPage {
+  readonly chainId: number;
+  readonly address: string;
+  readonly items: readonly BeaconWithdrawal[];
+  readonly provider: ProviderName;
+  readonly page: number;
+  readonly hasNext: boolean;
 }
 
 /** One complete, closed Beacon-withdrawal range window emitted during a scan. */
