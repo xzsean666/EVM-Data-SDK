@@ -234,6 +234,8 @@ export interface UniswapV3Configuration {
   readonly maxCallsPerMulticall?: number;
   readonly maxRpcAttempts?: number;
 }
+export interface UniswapV4Configuration extends UniswapV3Configuration {}
+export interface NormalizedUniswapV4Configuration extends NormalizedUniswapV3Configuration {}
 
 export interface NormalizedUniswapV3Configuration {
   readonly enabled: boolean;
@@ -275,6 +277,7 @@ export interface ClientConfiguration {
   /** Opt-in exact-block DeFi exchange-rate snapshot feature (v0.5). */
   readonly defi?: DeFiConfiguration;
   readonly uniswapV3?: UniswapV3Configuration;
+  readonly uniswapV4?: UniswapV4Configuration;
   readonly logger?: ObservationCallback;
   readonly telemetry?: ObservationCallback;
 }
@@ -291,6 +294,7 @@ export interface NormalizedClientConfiguration {
   readonly chainlink: NormalizedChainlinkConfiguration;
   readonly defi: NormalizedDeFiConfiguration;
   readonly uniswapV3: NormalizedUniswapV3Configuration;
+  readonly uniswapV4: NormalizedUniswapV4Configuration;
   readonly logger?: ObservationCallback;
   readonly telemetry?: ObservationCallback;
 }
@@ -392,6 +396,7 @@ const uniswapV3Schema = z.object({
   maxCallsPerMulticall: z.number().int().min(1).max(1000).default(100),
   maxRpcAttempts: z.number().int().min(1).max(20).default(5),
 }).strict();
+const uniswapV4Schema = uniswapV3Schema;
 const clientShapeSchema = z
   .object({
     providers: z.array(providerSchema).max(32).optional().default([]),
@@ -405,6 +410,7 @@ const clientShapeSchema = z
     chainlink: chainlinkSchema.optional(),
     defi: defiSchema.optional(),
     uniswapV3: uniswapV3Schema.optional(),
+    uniswapV4: uniswapV4Schema.optional(),
     logger: z.custom<ObservationCallback>((value) => typeof value === "function").optional(),
     telemetry: z.custom<ObservationCallback>((value) => typeof value === "function").optional(),
   })
@@ -431,7 +437,8 @@ export function parseClientConfiguration(input: unknown): NormalizedClientConfig
   );
   const defi = normalizeDeFiConfiguration(parsed.data.defi ?? { enabled: false, rpcEndpoints: { ethereum: [], base: [] }, healthCheckTimeoutMs: DEFAULT_ATTEMPT_TIMEOUT_MS, attemptTimeoutMs: DEFAULT_ATTEMPT_TIMEOUT_MS, totalTimeoutMs: DEFAULT_TOTAL_TIMEOUT_MS, maxCallsPerMulticall: 100, maxRpcAttempts: 5, maxConcurrentRpcAttempts: 1 });
   const uniswapV3 = normalizeUniswapV3Configuration(parsed.data.uniswapV3 ?? { enabled: false, rpcEndpoints: [], healthCheckTimeoutMs: DEFAULT_ATTEMPT_TIMEOUT_MS, attemptTimeoutMs: DEFAULT_ATTEMPT_TIMEOUT_MS, totalTimeoutMs: DEFAULT_TOTAL_TIMEOUT_MS, maxCallsPerMulticall: 100, maxRpcAttempts: 5 });
-  if (parsed.data.providers.length === 0 && parsed.data.price === undefined && !chainlink.enabled && !defi.enabled && !uniswapV3.enabled) throw invalidConfiguration("Configure at least one blockchain or price provider, or enable Chainlink, DeFi, or Uniswap V3.");
+  const uniswapV4 = normalizeUniswapV3Configuration(parsed.data.uniswapV4 ?? { enabled: false, rpcEndpoints: [], healthCheckTimeoutMs: DEFAULT_ATTEMPT_TIMEOUT_MS, attemptTimeoutMs: DEFAULT_ATTEMPT_TIMEOUT_MS, totalTimeoutMs: DEFAULT_TOTAL_TIMEOUT_MS, maxCallsPerMulticall: 100, maxRpcAttempts: 5 });
+  if (parsed.data.providers.length === 0 && parsed.data.price === undefined && !chainlink.enabled && !defi.enabled && !uniswapV3.enabled && !uniswapV4.enabled) throw invalidConfiguration("Configure at least one blockchain or price provider, or enable Chainlink, DeFi, or Uniswap.");
   const price = normalizePriceConfiguration(parsed.data.price ?? {
     routeMode: "direct",
     attemptTimeoutMs: DEFAULT_ATTEMPT_TIMEOUT_MS,
@@ -440,7 +447,7 @@ export function parseClientConfiguration(input: unknown): NormalizedClientConfig
     tokenAliases: {},
     geckoNetworks: ["eth", "bsc", "polygon_pos", "arbitrum", "base", "optimism"],
   });
-  if (providers.length === 0 && price.providers.length === 0 && !chainlink.enabled && !defi.enabled && !uniswapV3.enabled) throw invalidConfiguration("Configure at least one blockchain or price provider, or enable Chainlink, DeFi, or Uniswap V3.");
+  if (providers.length === 0 && price.providers.length === 0 && !chainlink.enabled && !defi.enabled && !uniswapV3.enabled && !uniswapV4.enabled) throw invalidConfiguration("Configure at least one blockchain or price provider, or enable Chainlink, DeFi, or Uniswap.");
   const chains = parsed.data.chains.map((chain) => parseChainDefinition(chain));
   const requestPolicy = normalizeRequestPolicy(parsed.data.requestPolicy ?? {});
   const proxies = parsed.data.proxies.map((proxy) => normalizeProxy(proxy));
@@ -460,6 +467,7 @@ export function parseClientConfiguration(input: unknown): NormalizedClientConfig
     chainlink,
     defi,
     uniswapV3,
+    uniswapV4,
     ...(parsed.data.logger === undefined ? {} : { logger: parsed.data.logger }),
     ...(parsed.data.telemetry === undefined ? {} : { telemetry: parsed.data.telemetry }),
   };

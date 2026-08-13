@@ -9,6 +9,7 @@ export type {
   ChainlinkConfiguration,
   DeFiConfiguration,
   UniswapV3Configuration,
+  UniswapV4Configuration,
   ClientConfiguration,
   EtherscanConfiguration,
   EthereumArchiveRpcEndpointConfiguration,
@@ -36,6 +37,7 @@ export type {
   UniswapV3PriceFailure,
   UniswapV3PriceFailureCode,
 } from "./domain/uniswapV3HistoricalPriceModels";
+export type { UniswapV4HistoricalPriceRequest, UniswapV4HistoricalPriceResult, UniswapV4HistoricalPrice, UniswapV4TokenPriceAtBlockRequest, UniswapV4TokenPriceAtBlockResult, UniswapV4TokenPricesAtBlockRequest, UniswapV4TokenPricesAtBlockResult, UniswapV4Currency, UniswapV4PriceFailure, UniswapV4PriceFailureCode } from "./domain/uniswapV4HistoricalPriceModels";
 export type {
   DeFiExchangeRate,
   DeFiExchangeRateFailure,
@@ -100,6 +102,7 @@ export type {
   TokenPriceProviderName,
   TokenPriceProviderResult,
 } from "./domain/priceModels";
+export type { BinanceFiveMinuteKlineRequest, BinanceFiveMinuteKlinePoint, BinanceFiveMinuteKlineResult } from "./domain/binanceKlineModels";
 export type { PageInfo } from "./domain/pagination";
 export type {
   BlockRange,
@@ -161,3 +164,7 @@ export type { UniswapV3TokenDefinition } from "./defi/UniswapV3TokenDefinition";
 export { UNISWAP_V3_TOKEN_REGISTRY, UNISWAP_V3_TOKEN_REGISTRY_VERSION, uniswapV3RegistryVersion } from "./defi/uniswapV3TokenRegistry";
 export { decodeUniswapV3Slot0, UNISWAP_V3_SLOT0_SELECTOR } from "./defi/UniswapV3Slot0Codec";
 export { getSqrtRatioAtTick, ratioForSqrtPrice } from "./defi/UniswapV3PriceMath";
+export { UniswapV4HistoricalPriceService } from "./defi/uniswap/v4/UniswapV4HistoricalPriceService";
+export type { UniswapV4PoolDefinition } from "./defi/uniswap/v4/UniswapV4PoolDefinition";
+export { UNISWAP_V4_TOKEN_REGISTRY, UNISWAP_V4_TOKEN_REGISTRY_VERSION, uniswapV4RegistryVersion } from "./defi/uniswap/v4/uniswapV4PoolRegistry";
+export { encodeStateViewSlot0, decodeUniswapV4StateViewSlot0, UNISWAP_V4_STATE_VIEW_SLOT0_SELECTOR } from "./defi/uniswap/v4/UniswapV4StateViewCodec";

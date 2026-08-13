@@ -10,6 +10,9 @@ import type { RequestExecutor } from "../execution/RequestExecutor";
 import type { BlockRangeScanner } from "../execution/BlockRangeScanner";
 import type { TokenPriceAggregator } from "../price/TokenPriceAggregator";
 import type { ApiChainService } from "./ApiChainService";
+import type { BinanceFiveMinuteKlineRequest, BinanceFiveMinuteKlineResult } from "../domain/binanceKlineModels";
+import { normalizeBinanceFiveMinuteKlineRequest } from "../domain/binanceKlineModels";
+import type { BinanceAdapter } from "../providers/price/binance/BinanceAdapter";
 
 export class TokenService {
   constructor(
@@ -18,6 +21,7 @@ export class TokenService {
     private readonly indexedApi: ApiChainService,
     private readonly priceAggregator: TokenPriceAggregator | null = null,
     private readonly tokenAliases: Readonly<Record<string, string>> = {},
+    private readonly binanceAdapter: BinanceAdapter | null = null,
   ) {}
 
   getErc20Transfers(request: Erc20TransfersRequest): Promise<Page<Erc20Transfer>> {
@@ -53,5 +57,15 @@ export class TokenService {
     return this.priceAggregator.getPriceHistory(normalizeTokenPriceHistoryRequest(request, {
       aliases: this.tokenAliases,
     }));
+  }
+
+  getBinanceKlines(request: BinanceFiveMinuteKlineRequest): Promise<BinanceFiveMinuteKlineResult> {
+    if (this.binanceAdapter === null) return Promise.reject(unsupportedOperation("Binance price provider is not configured."));
+    const normalized = normalizeBinanceFiveMinuteKlineRequest(request);
+    return this.binanceAdapter.getFiveMinuteKlines(normalized.symbol, normalized.startMs, normalized.endMs, { proxy: null, timeoutMs: 30_000, nowMs: Date.now(), correlationId: "binance-5m", ...(normalized.signal === undefined ? {} : { signal: normalized.signal }) }, normalized.interval).then((points) => Object.freeze({ provider: "binance" as const, symbol: normalized.symbol, quoteAsset: "USDT" as const, interval: normalized.interval, start: new Date(normalized.startMs).toISOString(), end: new Date(normalized.endMs).toISOString(), points }));
+  }
+
+  getBinanceKlinesPrices(request: BinanceFiveMinuteKlineRequest): Promise<BinanceFiveMinuteKlineResult["points"]> {
+    return this.getBinanceKlines(request).then((result) => result.points);
   }
 }

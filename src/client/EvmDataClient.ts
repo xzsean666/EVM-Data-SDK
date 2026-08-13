@@ -18,6 +18,7 @@ import { AlchemyAdapter } from "../providers/alchemy/AlchemyAdapter";
 import { MoralisAdapter } from "../providers/moralis/MoralisAdapter";
 import type { DataProviderAdapter } from "../providers/DataProviderAdapter";
 import { BinanceAdapter } from "../providers/price/binance/BinanceAdapter";
+import { normalizeBinanceFiveMinuteKlineRequest, type BinanceFiveMinuteKlineRequest, type BinanceFiveMinuteKlineResult } from "../domain/binanceKlineModels";
 import { CoinbaseAdapter } from "../providers/price/coinbase/CoinbaseAdapter";
 import { GeckoTerminalAdapter } from "../providers/price/geckoterminal/GeckoTerminalAdapter";
 import { OkxAdapter } from "../providers/price/okx/OkxAdapter";
@@ -36,6 +37,7 @@ import { ChainlinkService } from "../chainlink/ChainlinkService";
 import { DeFiExchangeRateService } from "../defi/DeFiExchangeRateService";
 import { MULTICALL3_ADDRESS, MULTICALL3_BASE_MAINNET_DEPLOYMENT_BLOCK, MULTICALL3_ETHEREUM_MAINNET_DEPLOYMENT_BLOCK } from "../rpc/EthereumMulticall3Codec";
 import { UniswapV3HistoricalPriceService } from "../defi/UniswapV3HistoricalPriceService";
+import { UniswapV4HistoricalPriceService } from "../defi/uniswap/v4/UniswapV4HistoricalPriceService";
 import {
   parseNativeBalanceAtBlockRequest,
   type NativeBalanceAtBlockRequest,
@@ -66,6 +68,8 @@ export class EvmDataClient {
   readonly chainlink: ChainlinkService | null;
   readonly defi: DeFiExchangeRateService | null;
   readonly uniswapV3: UniswapV3HistoricalPriceService | null;
+  readonly uniswapV4: UniswapV4HistoricalPriceService | null;
+  private readonly binanceKlines: BinanceAdapter;
 
   private readonly configuration: NormalizedClientConfiguration;
   private readonly advancedProxyManager: SingBoxProxyManager | null;
@@ -82,6 +86,7 @@ export class EvmDataClient {
 
   constructor(configuration: ClientConfiguration, options: EvmDataClientOptions = {}) {
     this.configuration = parseClientConfiguration(configuration);
+    this.binanceKlines = options.priceAdapters?.binance instanceof BinanceAdapter ? options.priceAdapters.binance : new BinanceAdapter(options.transport === undefined ? {} : { transport: options.transport });
     const registry = new ChainRegistry(this.configuration.chains);
     const entries = this.configuration.providers.map((provider, index) => {
       const configurationId = `${provider.kind}-${index + 1}`;
@@ -163,11 +168,13 @@ export class EvmDataClient {
       this.chain,
       priceAggregator,
       priceConfiguration.tokenAliases,
+      this.binanceKlines,
     );
 
     const chainlinkConfiguration = this.configuration.chainlink;
     const defiConfiguration = this.configuration.defi;
     const uniswapV3Configuration = this.configuration.uniswapV3;
+    const uniswapV4Configuration = this.configuration.uniswapV4;
     const defiRpcServices = new Map<1 | 8453, RpcService>();
     const defiPools: EthereumArchiveRpcPool[] = [];
     if (chainlinkConfiguration.enabled) {
@@ -244,7 +251,24 @@ export class EvmDataClient {
       this.uniswapV3ArchiveRpcPool = null;
       this.uniswapV3 = null;
     }
+    if (uniswapV4Configuration.enabled) {
+      const builtin = uniswapV4Configuration.useBuiltinEthereumArchiveRpcs ? BUILTIN_ETHEREUM_ARCHIVE_RPCS : [];
+      const custom = uniswapV4Configuration.rpcEndpoints.filter((endpoint) => endpoint.enabled).map((endpoint) => ({ id: endpoint.id, url: endpoint.url }));
+      const pool = options.uniswapV3ArchiveRpcPool ?? this.uniswapV3ArchiveRpcPool ?? new EthereumArchiveRpcPool({ endpoints: mergeArchiveRpcEndpoints([...builtin, ...custom]), healthCheckTimeoutMs: uniswapV4Configuration.healthCheckTimeoutMs, expectedChainId: 1, multicall3Address: MULTICALL3_ADDRESS, multicall3DeploymentBlock: MULTICALL3_ETHEREUM_MAINNET_DEPLOYMENT_BLOCK.toString() });
+      const executor = new EthereumArchiveRpcExecutor({ pool, randomSource: options.archiveRpcRandomSource ?? systemRandom, attemptTimeoutMs: uniswapV4Configuration.attemptTimeoutMs, totalTimeoutMs: uniswapV4Configuration.totalTimeoutMs, maxRpcAttempts: uniswapV4Configuration.maxRpcAttempts });
+      this.uniswapV4 = new UniswapV4HistoricalPriceService({ rpcService: new RpcService({ executor, maxCallsPerMulticall: uniswapV4Configuration.maxCallsPerMulticall, chainId: 1, multicall3Address: MULTICALL3_ADDRESS, multicall3DeploymentBlock: MULTICALL3_ETHEREUM_MAINNET_DEPLOYMENT_BLOCK.toString() }) });
+    } else this.uniswapV4 = null;
   }
+
+  async getBinanceKlines(input: BinanceFiveMinuteKlineRequest): Promise<BinanceFiveMinuteKlineResult> {
+    const request = normalizeBinanceFiveMinuteKlineRequest(input);
+    const points = await this.binanceKlines.getFiveMinuteKlines(request.symbol, request.startMs, request.endMs, {
+      proxy: null, timeoutMs: 30_000, nowMs: Date.now(), correlationId: "binance-5m",
+      ...(request.signal === undefined ? {} : { signal: request.signal }),
+    }, request.interval);
+    return Object.freeze({ provider: "binance", symbol: request.symbol, quoteAsset: "USDT", interval: request.interval, start: new Date(request.startMs).toISOString(), end: new Date(request.endMs).toISOString(), points });
+  }
+
 
   /**
    * Finds the highest block whose timestamp is less than or equal to
