@@ -611,3 +611,14 @@ and pagination semantics require a separate verified adapter contract.
 and individual Blockscout deployments may not implement every optional
 Etherscan action. Capability must remain explicit and production instances
 need bounded verification before optional actions are relied upon.
+
+## ADR-033: Node 24 SQLite is the default persistence driver
+
+**Decision:** Use the built-in `node:sqlite` `DatabaseSync` API for the default
+storage URL and keep SQL behind `StorageAdapter`. Do not add a second ORM or
+HTTP client. PostgreSQL uses the same domain contract through the bundled `pg`
+pool; live availability remains an environment concern.
+
+**Reason:** SQLite is available in the supported Node runtime, keeps the SDK
+offline-testable, and avoids shipping a native dependency. The adapter uses
+prepared statements, bounded transactions, and versioned migrations.

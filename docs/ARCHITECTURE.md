@@ -752,3 +752,12 @@ Implementation is authorized for the accepted v0.3 architecture and, as of
 future material design change must be applied consistently to `SPEC.md`,
 this file, `DECISIONS.md`, and `NEXT_SESSION.md` before creating source for
 that change.
+
+## Persistent facts and replay
+
+`EvmDataClient` composes `StorageAdapter`, `SyncService`, `PriceSyncService`,
+and `HistoryService` alongside the existing provider services. Sync writes
+normalized facts and the durable block cursor in one transaction; replay reads
+facts only and publishes a revisioned snapshot pointer. Provider page cursors
+remain request-local. SQLite is the tested default; PostgreSQL remains an
+explicit optional-driver boundary.

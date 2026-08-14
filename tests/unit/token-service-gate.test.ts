@@ -13,7 +13,7 @@ describe("TokenService Gate endpoint defaults", () => {
 
   it("uses the built-in Gate endpoint when the environment variable is blank", async () => {
     process.env.GATE_API_BASE_URLS = "";
-    const fetchMock = vi.fn(async () => new Response(
+    const fetchMock = vi.fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>(async () => new Response(
       JSON.stringify([["1786623480", "1870", "1879.1", "1865", "1875", "100"]]),
       { status: 200, headers: { "content-type": "application/json" } },
     ));

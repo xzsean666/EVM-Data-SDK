@@ -262,6 +262,9 @@ export interface NormalizedDeFiConfiguration {
 }
 
 export interface ClientConfiguration {
+  readonly storage?: StorageConfiguration;
+  readonly sync?: SyncConfiguration;
+  readonly replay?: ReplayConfiguration;
   readonly providers?: readonly ProviderConfiguration[];
   readonly price?: PriceConfiguration;
   readonly chains?: readonly ChainDefinition[];
@@ -282,7 +285,28 @@ export interface ClientConfiguration {
   readonly telemetry?: ObservationCallback;
 }
 
+export interface StorageConfiguration {
+  /** sqlite:./path, sqlite://absolute/path, postgres:// or postgresql:// */
+  readonly url?: string;
+  readonly busyTimeoutMs?: number;
+}
+
+export interface SyncConfiguration { readonly reorgOverlapBlocks?: number; readonly maxWindowBlocks?: number; }
+export interface ReplayConfiguration { readonly enabled?: boolean; readonly snapshotEveryEvents?: number; readonly snapshotEveryBlocks?: number; readonly leaseMs?: number; }
+export interface NormalizedSyncConfiguration { readonly reorgOverlapBlocks: number; readonly maxWindowBlocks: number; }
+export interface NormalizedReplayConfiguration { readonly enabled: boolean; readonly snapshotEveryEvents: number; readonly snapshotEveryBlocks: number; readonly leaseMs: number; }
+
+export interface NormalizedStorageConfiguration {
+  readonly driver: "sqlite" | "postgres";
+  readonly url: string;
+  readonly path?: string;
+  readonly busyTimeoutMs: number;
+}
+
 export interface NormalizedClientConfiguration {
+  readonly storage: NormalizedStorageConfiguration;
+  readonly sync: NormalizedSyncConfiguration;
+  readonly replay: NormalizedReplayConfiguration;
   readonly providers: readonly NormalizedProviderConfiguration[];
   readonly chains: readonly ChainDefinition[];
   readonly requestPolicy: NormalizedRequestPolicy;
@@ -399,6 +423,9 @@ const uniswapV3Schema = z.object({
 const uniswapV4Schema = uniswapV3Schema;
 const clientShapeSchema = z
   .object({
+    storage: z.object({ url: z.string().trim().min(1).max(4096).optional(), busyTimeoutMs: z.number().int().min(0).max(120000).optional() }).strict().optional(),
+    sync: z.object({ reorgOverlapBlocks: z.number().int().min(0).max(100000).optional(), maxWindowBlocks: z.number().int().positive().max(10000000).optional() }).strict().optional(),
+    replay: z.object({ enabled: z.boolean().optional(), snapshotEveryEvents: z.number().int().positive().max(10000000).optional(), snapshotEveryBlocks: z.number().int().positive().max(10000000).optional(), leaseMs: z.number().int().positive().max(86400000).optional() }).strict().optional(),
     providers: z.array(providerSchema).max(32).optional().default([]),
     price: priceSchema.optional(),
     chains: z.array(z.unknown()).max(256).optional().default([]),
@@ -423,6 +450,9 @@ export function parseClientConfiguration(input: unknown): NormalizedClientConfig
   }
 
   const providers = parsed.data.providers.map((provider) => normalizeProvider(provider));
+  const storage = normalizeStorageConfiguration(parsed.data.storage);
+  const sync = Object.freeze({ reorgOverlapBlocks: parsed.data.sync?.reorgOverlapBlocks ?? 12, maxWindowBlocks: parsed.data.sync?.maxWindowBlocks ?? 100_000 });
+  const replay = Object.freeze({ enabled: parsed.data.replay?.enabled ?? false, snapshotEveryEvents: parsed.data.replay?.snapshotEveryEvents ?? 10_000, snapshotEveryBlocks: parsed.data.replay?.snapshotEveryBlocks ?? 10_000, leaseMs: parsed.data.replay?.leaseMs ?? 60_000 });
   const chainlink = normalizeChainlinkConfiguration(
     parsed.data.chainlink ?? {
       enabled: false,
@@ -438,7 +468,7 @@ export function parseClientConfiguration(input: unknown): NormalizedClientConfig
   const defi = normalizeDeFiConfiguration(parsed.data.defi ?? { enabled: false, rpcEndpoints: { ethereum: [], base: [] }, healthCheckTimeoutMs: DEFAULT_ATTEMPT_TIMEOUT_MS, attemptTimeoutMs: DEFAULT_ATTEMPT_TIMEOUT_MS, totalTimeoutMs: DEFAULT_TOTAL_TIMEOUT_MS, maxCallsPerMulticall: 100, maxRpcAttempts: 5, maxConcurrentRpcAttempts: 1 });
   const uniswapV3 = normalizeUniswapV3Configuration(parsed.data.uniswapV3 ?? { enabled: false, rpcEndpoints: [], healthCheckTimeoutMs: DEFAULT_ATTEMPT_TIMEOUT_MS, attemptTimeoutMs: DEFAULT_ATTEMPT_TIMEOUT_MS, totalTimeoutMs: DEFAULT_TOTAL_TIMEOUT_MS, maxCallsPerMulticall: 100, maxRpcAttempts: 5 });
   const uniswapV4 = normalizeUniswapV3Configuration(parsed.data.uniswapV4 ?? { enabled: false, rpcEndpoints: [], healthCheckTimeoutMs: DEFAULT_ATTEMPT_TIMEOUT_MS, attemptTimeoutMs: DEFAULT_ATTEMPT_TIMEOUT_MS, totalTimeoutMs: DEFAULT_TOTAL_TIMEOUT_MS, maxCallsPerMulticall: 100, maxRpcAttempts: 5 });
-  if (parsed.data.providers.length === 0 && parsed.data.price === undefined && !chainlink.enabled && !defi.enabled && !uniswapV3.enabled && !uniswapV4.enabled) throw invalidConfiguration("Configure at least one blockchain or price provider, or enable Chainlink, DeFi, or Uniswap.");
+  if (parsed.data.providers.length === 0 && parsed.data.price === undefined && !chainlink.enabled && !defi.enabled && !uniswapV3.enabled && !uniswapV4.enabled && parsed.data.storage === undefined) throw invalidConfiguration("Configure at least one blockchain or price provider, or enable Chainlink, DeFi, Uniswap, or storage.");
   const price = normalizePriceConfiguration(parsed.data.price ?? {
     routeMode: "direct",
     attemptTimeoutMs: DEFAULT_ATTEMPT_TIMEOUT_MS,
@@ -447,7 +477,7 @@ export function parseClientConfiguration(input: unknown): NormalizedClientConfig
     tokenAliases: {},
     geckoNetworks: ["eth", "bsc", "polygon_pos", "arbitrum", "base", "optimism"],
   });
-  if (providers.length === 0 && price.providers.length === 0 && !chainlink.enabled && !defi.enabled && !uniswapV3.enabled && !uniswapV4.enabled) throw invalidConfiguration("Configure at least one blockchain or price provider, or enable Chainlink, DeFi, or Uniswap.");
+  if (providers.length === 0 && price.providers.length === 0 && !chainlink.enabled && !defi.enabled && !uniswapV3.enabled && !uniswapV4.enabled && parsed.data.storage === undefined) throw invalidConfiguration("Configure at least one blockchain or price provider, or enable Chainlink, DeFi, Uniswap, or storage.");
   const chains = parsed.data.chains.map((chain) => parseChainDefinition(chain));
   const requestPolicy = normalizeRequestPolicy(parsed.data.requestPolicy ?? {});
   const proxies = parsed.data.proxies.map((proxy) => normalizeProxy(proxy));
@@ -457,6 +487,9 @@ export function parseClientConfiguration(input: unknown): NormalizedClientConfig
 
   const configuration: NormalizedClientConfiguration = {
     providers: Object.freeze(providers),
+    storage,
+    sync,
+    replay,
     chains: Object.freeze(chains),
     requestPolicy,
     proxies: Object.freeze(proxies),
@@ -473,6 +506,24 @@ export function parseClientConfiguration(input: unknown): NormalizedClientConfig
   };
 
   return Object.freeze(configuration);
+}
+
+function normalizeStorageConfiguration(value: z.output<typeof clientShapeSchema>['storage']): NormalizedStorageConfiguration {
+  const raw = value?.url ?? "sqlite:./data/evm-data-sdk.db";
+  const busyTimeoutMs = value?.busyTimeoutMs ?? 5_000;
+  if (raw.startsWith("postgres://") || raw.startsWith("postgresql://")) {
+    try { new URL(raw); } catch { throw invalidConfiguration("storage.url must be a valid PostgreSQL URL."); }
+    return Object.freeze({ driver: "postgres", url: raw, busyTimeoutMs });
+  }
+  let path: string;
+  if (raw.startsWith("file:")) {
+    try { path = decodeURIComponent(new URL(raw).pathname); } catch { throw invalidConfiguration("storage.url must be a valid SQLite file URL."); }
+  } else if (raw.startsWith("sqlite:")) {
+    const suffix = raw.slice("sqlite:".length);
+    path = suffix.startsWith("//") ? decodeURIComponent(suffix.slice(1)) : suffix;
+  } else path = raw;
+  if (!path || path === ":memory:") path = ":memory:";
+  return Object.freeze({ driver: "sqlite", url: `sqlite:${path}`, path, busyTimeoutMs });
 }
 
 function normalizeUniswapV3Configuration(value: z.output<typeof uniswapV3Schema>): NormalizedUniswapV3Configuration {

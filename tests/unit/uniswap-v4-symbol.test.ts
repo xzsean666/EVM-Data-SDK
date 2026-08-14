@@ -22,6 +22,8 @@ describe("Uniswap V4 symbol lookup", () => {
       },
     });
     await expect(service.getTokenPricesAtBlockUsd({ chain: 1, blockNumber: "1", tokens: ["ASTR"] })).rejects.toMatchObject({ code: "UNISWAP_V4_PRICE_DATA_UNAVAILABLE" });
+    expect(calls).toHaveLength(0);
+    await expect(service.getTokenPricesAtBlockUsd({ chain: 1, blockNumber: "25707989", tokens: ["ASTR"] })).rejects.toMatchObject({ code: "UNISWAP_V4_PRICE_DATA_UNAVAILABLE" });
     expect(calls[0]?.callData).toMatch(/^0xc815641c/);
   });
 });

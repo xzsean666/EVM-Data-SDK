@@ -12,5 +12,5 @@ export default defineConfig({
   target: "node24",
   treeshake: true,
   minify: false,
-  external: ["axios", "zod"],
+  external: ["axios", "zod", "node:sqlite"],
 });

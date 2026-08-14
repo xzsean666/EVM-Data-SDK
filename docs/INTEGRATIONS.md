@@ -631,3 +631,12 @@ fields or assume unverified endpoints are semantically equivalent. The current
 implementation is covered by deterministic fixtures. No authenticated live
 smoke was run in this work package, so each production instance should be
 checked with the bounded procedure in `docs/BLOCKSCOUT_PROVIDER/UPGRADE.md`.
+
+## Persistent sync storage
+
+The replay upgrade uses Node 24's built-in `node:sqlite` driver for the default
+`sqlite:./data/evm-data-sdk.db` URL. `initialize()` creates the parent directory
+and applies versioned migrations; `close()` releases the handle. PostgreSQL uses
+the `pg` pool through the same `StorageAdapter` contract and migration versions;
+the PostgreSQL live contract requires an explicitly supplied test database.
+Storage URLs and SQL are never logged.

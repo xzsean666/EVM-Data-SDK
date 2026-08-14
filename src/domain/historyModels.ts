@@ -1,0 +1,10 @@
+import type { ChainReference } from "./chains";
+export interface HistoryAddressRequest { readonly chain: ChainReference; readonly address: string; }
+export interface ReplayStatus { readonly requested: boolean; readonly runId: string | null; readonly status: "disabled" | "not_requested" | "queued" | "running" | "completed" | "failed"; readonly fromBlock: string | null; readonly toBlock: string | null; readonly processedEvents: number; readonly snapshotBlock: string | null; readonly revision: string | null; }
+export interface UserStateAtBlockRequest extends HistoryAddressRequest { readonly blockNumber: string; readonly tokenAddresses?: readonly string[]; }
+export interface UserStateAtBlockResult { readonly state: "ready" | "building" | "partial" | "unavailable"; readonly revision: string | null; readonly asOfBlock: string | null; readonly balances: readonly { tokenAddress: string; amount: string; incoming: string; outgoing: string }[]; readonly nativeIn: string; readonly nativeOut: string; readonly transactionCount: number; readonly warnings: readonly string[]; }
+export interface TokenFlowHistoryRequest extends HistoryAddressRequest { readonly startBlock: string; readonly endBlock: string; readonly tokenAddress?: string; readonly direction?: "incoming" | "outgoing" | "both"; readonly limit?: number; readonly cursor?: string; }
+export interface HistoryReplayRequest extends HistoryAddressRequest { readonly fromBlock?: string; readonly toBlock?: string; readonly force?: boolean; readonly reason?: string; }
+export interface HistoryRebuildRequest extends HistoryReplayRequest { readonly mode?: "targeted" | "full"; }
+export interface HistoryReplayResult { readonly status: "busy" | "completed" | "failed"; readonly jobId: string; readonly revision: string; readonly chainId: number; readonly address: string; readonly targetBlock: string | null; }
+export interface HistoryRebuildResult extends HistoryReplayResult { readonly mode: "targeted" | "full"; readonly invalidatedFromBlock: string | null; readonly snapshotsInvalidated: number; readonly factsRevision: string; readonly replayRevision: string | null; }

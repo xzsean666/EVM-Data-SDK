@@ -11,6 +11,10 @@ export type {
   UniswapV3Configuration,
   UniswapV4Configuration,
   ClientConfiguration,
+  StorageConfiguration,
+  NormalizedStorageConfiguration,
+  SyncConfiguration,
+  ReplayConfiguration,
   EtherscanConfiguration,
   EthereumArchiveRpcEndpointConfiguration,
   MoralisConfiguration,
@@ -97,6 +101,9 @@ export type {
   TransactionsRequest,
   TransferDirection,
 } from "./domain/operations";
+export type { DatasetUpdateRequest, DatasetUpdateResult, RecollectRequest, RecollectResult, SyncAuditRequest, SyncAuditResult, SyncDataset, SyncStatus } from "./domain/syncModels";
+export type { HistoryAddressRequest, ReplayStatus, UserStateAtBlockRequest, UserStateAtBlockResult, TokenFlowHistoryRequest, HistoryReplayRequest, HistoryRebuildRequest, HistoryReplayResult, HistoryRebuildResult } from "./domain/historyModels";
+export type { PriceUpdateRequest, PriceUpdateResult, PriceRecollectRequest, PricePointQuery, PriceAtResult, PriceSyncScopeRequest } from "./domain/priceSyncModels";
 export type {
   NormalizedTokenPriceRequest,
   TokenPriceHistoryRequest,
@@ -144,6 +151,7 @@ export type {
 } from "./domain/models";
 export { ApiChainService } from './services/ApiChainService';
 export { EvmDataClient } from "./client/EvmDataClient";
+export { SqliteStorageAdapter, PostgresStorageAdapter } from "./storage/StorageAdapter";
 export type { EvmDataClientOptions } from "./client/EvmDataClient";
 export { prewarmSingBox, SUPPORTED_SING_BOX_VERSION } from "./proxy/SingBoxBinaryManager";
 export type { PrewarmSingBoxOptions } from "./proxy/SingBoxBinaryManager";

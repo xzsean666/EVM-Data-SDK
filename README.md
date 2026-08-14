@@ -2,6 +2,18 @@
 
 Node.js-first TypeScript access to indexed EVM data plus provider-separated daily token price history. Blockchain reads use Etherscan V2, Moralis, and scoped Alchemy; price history uses public Binance Spot, OKX Spot, Coinbase Exchange, and GeckoTerminal endpoints.
 
+Persistent sync is enabled with `storage: { url: "sqlite:./data/evm-data-sdk.db" }`.
+Call `initialize()` before `sync.update()` and `close()` when finished. The
+client exposes durable `sync`, `price`, and revisioned `history` operations;
+chain quantities are returned as decimal strings. PostgreSQL URLs use the
+bundled `pg` adapter and require a reachable database at initialization time.
+
+Use `client.sync.getStatus()` and `client.price.getSyncStatus()` for scoped
+progress inspection. Price ranges continue from the persisted timestamp when
+`fromTimestamp` is omitted; use `client.price.resetPriceSync()` only for an
+explicitly selected token/market scope. Binance supports configured candle
+intervals; other configured price exchanges support daily (`1d`) persistence.
+
 ```ts
 import { EvmDataClient } from "evm-data-sdk";
 

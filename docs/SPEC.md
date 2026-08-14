@@ -816,3 +816,15 @@ canonicalizes all integer quantities to decimal strings, filters transfer
 direction in the SDK, and redacts credentials and upstream text from errors.
 Blockscout v2 REST-only endpoints and operations without verified semantic
 equivalence remain out of scope.
+
+## Persistent sync and history API
+
+The public client exposes `storage`, `sync.update/getStatus/recollect/audit`,
+`price.update/recollect/getSyncStatus/resetPriceSync/getPriceAt/getPricesAt`, and
+`history.replay/rebuild/getUserStateAtBlock/getTokenFlowHistory`. Block and
+amount values remain decimal strings. `dryRun` is read-only, facts and cursor
+advance atomically, and historical state is reported as `unavailable`,
+`building`, or `ready` rather than fabricated beyond replay coverage.
+History fact queries apply range, token, and direction filters before limiting
+results and expose SDK-owned `nextCursor` properties bound to the semantic
+query.

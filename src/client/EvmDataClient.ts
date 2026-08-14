@@ -43,6 +43,11 @@ import {
   type NativeBalanceAtBlockRequest,
   type NativeBalanceAtBlockResult,
 } from "../domain/rpcModels";
+import { createStorageAdapter, type StorageAdapter } from "../storage/StorageAdapter";
+import { SyncService } from "../sync/SyncService";
+import { HistoryService } from "../history/HistoryService";
+import { PriceSyncService } from "../price/PriceSyncService";
+import { ChainRegistry as PublicChainRegistry } from "../chains/ChainRegistry";
 
 export interface EvmDataClientOptions {
   readonly transport?: HttpTransport;
@@ -76,6 +81,10 @@ export class EvmDataClient {
   private readonly archiveRpcPool: EthereumArchiveRpcPool | null;
   private readonly defiArchiveRpcPools: readonly EthereumArchiveRpcPool[];
   private readonly uniswapV3ArchiveRpcPool: EthereumArchiveRpcPool | null;
+  private readonly storage: StorageAdapter;
+  readonly sync: SyncService;
+  readonly history: HistoryService;
+  readonly price: PriceSyncService;
   /**
    * Per-chain Archive RPC executors, keyed by chain, reused to serve
    * `getBlockNumberByTimestamp` via pure public RPC binary search. Populated
@@ -86,6 +95,7 @@ export class EvmDataClient {
 
   constructor(configuration: ClientConfiguration, options: EvmDataClientOptions = {}) {
     this.configuration = parseClientConfiguration(configuration);
+    this.storage = createStorageAdapter(this.configuration.storage);
     this.binanceKlines = options.priceAdapters?.binance instanceof BinanceAdapter ? options.priceAdapters.binance : new BinanceAdapter(options.transport === undefined ? {} : { transport: options.transport });
     const registry = new ChainRegistry(this.configuration.chains);
     const entries = this.configuration.providers.map((provider, index) => {
@@ -125,8 +135,7 @@ export class EvmDataClient {
     if (priceConfiguration === undefined) {
       throw invalidConfiguration("Price configuration was not normalized.");
     }
-    const priceAggregator = new TokenPriceAggregator(
-        new PriceProviderRouter(priceConfiguration.providers.map((provider) => {
+    const priceAdapters = priceConfiguration.providers.map((provider) => {
           try {
             return options.priceAdapters?.[provider.kind] ?? createPriceAdapter(
               provider.kind,
@@ -138,7 +147,9 @@ export class EvmDataClient {
           } catch (error: unknown) {
             throw invalidConfiguration("Invalid price provider configuration.", error);
           }
-        })),
+        });
+    const priceAggregator = new TokenPriceAggregator(
+        new PriceProviderRouter(priceAdapters),
         new PriceRequestExecutor({
           configuration: priceConfiguration,
           proxies: this.configuration.proxies,
@@ -172,6 +183,10 @@ export class EvmDataClient {
       this.binanceKlines,
       (chainId) => (chainId === 1 ? this.rpc ?? defiRpcServices.get(chainId) : defiRpcServices.get(chainId)) ?? null,
     );
+    const publicRegistry = new PublicChainRegistry(this.configuration.chains);
+    this.sync = new SyncService({ storage: this.storage, address: this.address, token: this.token, chain: this.chain, resolveChain: (chain) => publicRegistry.resolve(chain), maxWindowBlocks: this.configuration.sync.maxWindowBlocks, reorgOverlapBlocks: this.configuration.sync.reorgOverlapBlocks });
+    this.history = new HistoryService({ storage: this.storage, resolveChain: (chain) => publicRegistry.resolve(chain), snapshotEveryEvents: this.configuration.replay.snapshotEveryEvents, snapshotEveryBlocks: this.configuration.replay.snapshotEveryBlocks, leaseMs: this.configuration.replay.leaseMs });
+    this.price = new PriceSyncService(this.storage, this.binanceKlines, priceConfiguration.tokenAliases, new Map(priceAdapters.map((adapter) => [adapter.name, adapter])));
 
     const chainlinkConfiguration = this.configuration.chainlink;
     const defiConfiguration = this.configuration.defi;
@@ -366,11 +381,13 @@ export class EvmDataClient {
     }
     for (const pool of this.defiArchiveRpcPools) tasks.push(pool.initialize(signal));
     if (this.uniswapV3ArchiveRpcPool !== null && !this.defiArchiveRpcPools.includes(this.uniswapV3ArchiveRpcPool) && this.uniswapV3ArchiveRpcPool !== this.archiveRpcPool) tasks.push(this.uniswapV3ArchiveRpcPool.initialize(signal));
+    await this.storage.initialize();
     await Promise.all(tasks);
   }
 
   async close(): Promise<void> {
     await this.advancedProxyManager?.close();
+    await this.storage.close();
   }
 }
 

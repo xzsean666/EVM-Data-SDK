@@ -345,7 +345,7 @@ function internalTransfer(uniqueId: string, blockNum: string, from: string, to: 
     asset: "ETH",
     from,
     to,
-    hash: `0x${uniqueId[0].repeat(64)}`,
+    hash: `0x${uniqueId.charAt(0).repeat(64)}`,
     blockNum,
     rawContract: { value },
     metadata: { blockTimestamp: "2026-01-02T03:04:05.000Z" },

@@ -43,7 +43,18 @@ export type ErrorCode =
   | "CHAINLINK_PRICE_DATA_UNAVAILABLE"
   | "DEFI_EXCHANGE_RATE_DATA_UNAVAILABLE"
   | "UNISWAP_V3_PRICE_DATA_UNAVAILABLE"
-  | "UNISWAP_V4_PRICE_DATA_UNAVAILABLE";
+  | "UNISWAP_V4_PRICE_DATA_UNAVAILABLE"
+  | "STORAGE_NOT_CONFIGURED"
+  | "STORAGE_NOT_INITIALIZED"
+  | "STORAGE_MIGRATION_FAILED"
+  | "STORAGE_BUSY"
+  | "SYNC_SCOPE_CONFLICT"
+  | "SYNC_CURSOR_INVALID"
+  | "PROVIDER_STALLED"
+  | "REPLAY_IN_PROGRESS"
+  | "REPLAY_INCOMPLETE"
+  | "PRICE_RANGE_INVALID"
+  | "PRICE_NOT_FOUND";
   
 
 export interface EvmDataErrorOptions {
@@ -131,6 +142,10 @@ export function invalidRequest(message: string, cause?: unknown): EvmDataError {
     retryable: false,
     ...(cause === undefined ? {} : { cause }),
   });
+}
+
+export function storageError(code: Extract<ErrorCode, "STORAGE_NOT_CONFIGURED" | "STORAGE_NOT_INITIALIZED" | "STORAGE_MIGRATION_FAILED" | "STORAGE_BUSY">, message: string, cause?: unknown): EvmDataError {
+  return new EvmDataError({ code, message, retryable: code === "STORAGE_BUSY", ...(cause === undefined ? {} : { cause }) });
 }
 
 export function invalidBlockRange(message: string, cause?: unknown): EvmDataError {

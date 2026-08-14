@@ -734,3 +734,8 @@ After Work Package 9, perform Step 5 before adding any v0.2 feature:
 7. Run `pnpm check` and opt-in live smoke tests.
 8. Resolve npm name, license, ownership, Node support, and publishing workflow before release.
 9. Update this handoff and create a focused review/refactor commit if changes were needed.
+## EVM Data Sync Replay
+
+首版已加入 Node 24 `node:sqlite` storage、版本迁移、三类事实同步/recollect/audit、价格点同步和基础 replay/state/flow 查询。`EvmDataClient.initialize()` 负责迁移，`close()` 幂等关闭；默认路径为 `./data/evm-data-sdk.db`。
+
+回放仍是调用方驱动的同步 reducer，rebuild 尚未对重组事实做按范围的派生失效；provider page 单块超量仍缺少真实 provider fixture。PostgreSQL transaction callback 通过 AsyncLocalStorage 路由到租约 client，避免 service-level storage calls 绕过事务；mock-pg contract 和本地 PostgreSQL 16.9 临时容器 contract 均覆盖初始化、迁移、事务回滚/提交、upsert 和幂等关闭。回放现在会从最新同 revision 快照继续，事实查询 cursor 绑定 semantic query hash；价格同步支持 Binance candle intervals 和已配置其它交易所的 daily candles。已加入 SQLite/PostgreSQL 方言 seam、事务回滚、BigInt、nearest/tie-break、dry-run、窗口重叠、replay lease、过期租约恢复、失败 run、重组替换、缺失 log/trace identity 哈希、语义 cursor 和快照阈值离线测试。
