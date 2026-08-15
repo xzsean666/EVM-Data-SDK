@@ -197,11 +197,12 @@ delta、gas 统计、交易数、最后事实 block 和 warnings。reducer 接�
 - per-user lease + heartbeat + stale recovery；
 - 只从 `blockNumber <= fromBlock` 的最新同 revision snapshot 开始；
 - 事件排序稳定，按完整区块提交；
+- 特殊资产流向校准：`facts()` 自动合成 WETH `deposit()` / `withdraw()` 事实并排重；`reduceFacts()` 过滤伴随提现转出的 0x0 内部结息铸造；
 - 每 `snapshotEveryEvents` 或 `snapshotEveryBlocks` 先到即做快照，默认 10,000；
 - 快照和 current revision publish 必须原子；失败时旧 revision 仍可读；
 - 回放起点发生重组时失效之后的派生快照并重建。
 
-验收：事件顺序、快照恢复、阈值、负余额 warning、job 合并、lease recovery、失败
+验收：事件顺序、快照恢复、WETH 流水合成、Rebasing 结息过滤、阈值、负余额 warning、job 合并、lease recovery、失败
 重试、revision 隔离和大历史分块均有离线测试。
 
 ## Package 9：历史查询 API

@@ -225,4 +225,50 @@ describe("persistent EVM sync and replay", () => {
     expect(result.provider).toBe("coinbase"); expect(result.recordsWritten).toBe(1);
     await storage.close();
   });
+
+  it("synthesizes WETH deposit and withdrawal facts from transaction payloads", async () => {
+    const storage = new SqliteStorageAdapter(":memory:"); await storage.initialize();
+    const wethAddress = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2";
+    const depositPayload = JSON.stringify({ hash: "0x1111", blockNumber: "100", from: address, to: wethAddress, value: "1803965000000000000", input: "0xd0e30db0" });
+    const withdrawPayload = JSON.stringify({ hash: "0x2222", blockNumber: "101", from: address, to: wethAddress, value: "0", input: "0x2e1a7d4d0000000000000000000000000000000000000000000000001908f89c143cd000" }); // 1.803965 ETH in hex
+
+    await storage.run("INSERT INTO sdk_transactions(identity,chain_id,address,tx_hash,block_number,payload,provider,ingestion_source) VALUES(?,?,?,?,?,?,?,?)", ["tx-1", 1, address, "0x1111", "100", depositPayload, "etherscan", "sdk"]);
+    await storage.run("INSERT INTO sdk_transactions(identity,chain_id,address,tx_hash,block_number,payload,provider,ingestion_source) VALUES(?,?,?,?,?,?,?,?)", ["tx-2", 1, address, "0x2222", "101", withdrawPayload, "etherscan", "sdk"]);
+
+    const history = new HistoryService({ storage, resolveChain: () => ({ chainId: 1 }) });
+    await history.replay({ chain: "ethereum", address });
+
+    const atDeposit = await history.getUserStateAtBlock({ chain: "ethereum", address, blockNumber: "100" });
+    expect(atDeposit.balances.find((b) => b.tokenAddress.toLowerCase() === wethAddress)?.amount).toBe("1803965000000000000");
+    expect(atDeposit.nativeOut).toBe("1803965000000000000");
+
+    const atWithdraw = await history.getUserStateAtBlock({ chain: "ethereum", address, blockNumber: "101" });
+    expect(atWithdraw.balances.find((b) => b.tokenAddress.toLowerCase() === wethAddress)?.amount).toBe("0");
+    expect(atWithdraw.warnings).toHaveLength(0);
+    await storage.close();
+  });
+
+  it("filters internal 0x0 interest settlement mints accompanying Rebasing token withdrawals", async () => {
+    const storage = new SqliteStorageAdapter(":memory:"); await storage.initialize();
+    const aToken = "0x4d5f47fa6a74757f35c14fd3a6ef8e3c9bc514e8";
+    const zeroAddr = "0x0000000000000000000000000000000000000000";
+
+    // Initial deposit: mint 1.0 aToken
+    await storage.run("INSERT INTO sdk_erc20_transfers(identity,chain_id,address,token_address,tx_hash,transaction_index,log_index,block_number,from_address,to_address,amount,provider,ingestion_source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", ["mint-1", 1, address, aToken, "0xaaaa", "0", "1", "10", zeroAddr, address, "1000000000000000000", "etherscan", "sdk"]);
+
+    // Withdrawal tx: 0x0 interest settlement 0.05 aToken + burn 1.05 aToken in the same tx
+    await storage.run("INSERT INTO sdk_erc20_transfers(identity,chain_id,address,token_address,tx_hash,transaction_index,log_index,block_number,from_address,to_address,amount,provider,ingestion_source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", ["interest-mint", 1, address, aToken, "0xbbbb", "0", "1", "20", zeroAddr, address, "50000000000000000", "etherscan", "sdk"]);
+    await storage.run("INSERT INTO sdk_erc20_transfers(identity,chain_id,address,token_address,tx_hash,transaction_index,log_index,block_number,from_address,to_address,amount,provider,ingestion_source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", ["burn-all", 1, address, aToken, "0xbbbb", "0", "2", "20", address, zeroAddr, "1050000000000000000", "etherscan", "sdk"]);
+
+    const history = new HistoryService({ storage, resolveChain: () => ({ chainId: 1 }) });
+    await history.replay({ chain: "ethereum", address });
+
+    const state = await history.getUserStateAtBlock({ chain: "ethereum", address, blockNumber: "20" });
+    const holding = state.balances.find((b) => b.tokenAddress.toLowerCase() === aToken);
+
+    // Initial incoming 1.0, 0x0 internal interest mint in withdrawal tx is ignored from external incoming, total outgoing = 1.05
+    expect(holding?.incoming).toBe("1000000000000000000");
+    expect(holding?.outgoing).toBe("1050000000000000000");
+    await storage.close();
+  });
 });

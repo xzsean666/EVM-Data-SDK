@@ -8,6 +8,16 @@ interface Deps { storage: StorageAdapter; resolveChain: (chain: ChainReference) 
 interface Fact { block: bigint; tx: string; index: bigint; identity: string; kind: "erc20" | "tx" | "internal"; row: any; }
 interface Identity { chainId: number; address: string; }
 
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+const WRAPPED_NATIVE_ADDRESSES: Record<number, string> = {
+  1: "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+  8453: "0x4200000000000000000000000000000000000006",
+  10: "0x4200000000000000000000000000000000000006",
+  42161: "0x82af49447d8a07e3bd95bd0d56f35241523fbab1",
+  137: "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619",
+  56: "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+};
+
 /** Facts-only reducer. Derived snapshots are revisioned and can always be rebuilt. */
 export class HistoryService {
   constructor(private readonly deps: Deps) {}
@@ -32,13 +42,141 @@ export class HistoryService {
   async getInternalNativeTransfers(input: HistoryAddressRequest & { startBlock?: string; endBlock?: string; limit?: number; cursor?: string }) { return this.queryPayload("sdk_internal_native_transfers", input, "transactionHash"); }
 
   private async queryPayload(table: string, input: HistoryAddressRequest & { startBlock?: string; endBlock?: string; limit?: number; cursor?: string }, key: string) { const id = this.identity(input); const queryHash = historyQueryHash([table, id.chainId, id.address, input.startBlock ?? null, input.endBlock ?? null]); const cursor = decodeCursor(input.cursor); validateCursor(cursor, queryHash); const clauses = ["chain_id=?", "address=?"]; const params: unknown[] = [id.chainId, id.address]; if (input.startBlock !== undefined) { clauses.push("CAST(block_number AS INTEGER)>=CAST(? AS INTEGER)"); params.push(input.startBlock); } if (input.endBlock !== undefined) { clauses.push("CAST(block_number AS INTEGER)<=CAST(? AS INTEGER)"); params.push(input.endBlock); } appendCursor(clauses, params, cursor); const limit = input.limit ?? 100; params.push(limit); const rows = await this.deps.storage.all<any>(`SELECT payload,block_number,identity FROM ${table} WHERE ${clauses.join(" AND ")} ORDER BY CAST(block_number AS INTEGER),identity LIMIT ?`, params); const result = rows.map((row: any) => JSON.parse(row.payload)).map((row: any) => ({ ...row, [key]: row[key] })); return withNextCursor(result, rows.length === limit && rows.at(-1) !== undefined ? encodeCursor({ block: rows.at(-1)!.block_number, identity: rows.at(-1)!.identity, queryHash }) : null); }
-  private async facts(id: Identity): Promise<Fact[]> { const transfers = (await this.deps.storage.all<any>("SELECT * FROM sdk_erc20_transfers WHERE chain_id=? AND address=?", [id.chainId, id.address])).map((row: any) => ({ block: BigInt(row.block_number), tx: row.tx_hash, index: decimalIndex(row.log_index), identity: row.identity, kind: "erc20" as const, row })); const transactions = (await this.deps.storage.all<any>("SELECT * FROM sdk_transactions WHERE chain_id=? AND address=?", [id.chainId, id.address])).map((row: any) => ({ block: BigInt(row.block_number), tx: row.tx_hash, index: decimalIndex(row.transaction_index), identity: row.identity, kind: "tx" as const, row })); const internals = (await this.deps.storage.all<any>("SELECT * FROM sdk_internal_native_transfers WHERE chain_id=? AND address=?", [id.chainId, id.address])).map((row: any) => ({ block: BigInt(row.block_number), tx: row.tx_hash, index: decimalIndex(row.trace_id), identity: row.identity, kind: "internal" as const, row })); return [...transfers, ...transactions, ...internals].sort(compareFacts); }
+
+  private async facts(id: Identity): Promise<Fact[]> {
+    const transfers = (await this.deps.storage.all<any>("SELECT * FROM sdk_erc20_transfers WHERE chain_id=? AND address=?", [id.chainId, id.address])).map((row: any) => ({ block: BigInt(row.block_number), tx: row.tx_hash, index: decimalIndex(row.log_index), identity: row.identity, kind: "erc20" as const, row }));
+    const transactions = (await this.deps.storage.all<any>("SELECT * FROM sdk_transactions WHERE chain_id=? AND address=?", [id.chainId, id.address])).map((row: any) => ({ block: BigInt(row.block_number), tx: row.tx_hash, index: decimalIndex(row.transaction_index), identity: row.identity, kind: "tx" as const, row }));
+    const internals = (await this.deps.storage.all<any>("SELECT * FROM sdk_internal_native_transfers WHERE chain_id=? AND address=?", [id.chainId, id.address])).map((row: any) => ({ block: BigInt(row.block_number), tx: row.tx_hash, index: decimalIndex(row.trace_id), identity: row.identity, kind: "internal" as const, row }));
+
+    const wrappedNative = WRAPPED_NATIVE_ADDRESSES[id.chainId]?.toLowerCase();
+    const synthesized: Fact[] = [];
+
+    if (wrappedNative) {
+      for (const tx of transactions) {
+        try {
+          const payload = typeof tx.row.payload === "string" ? JSON.parse(tx.row.payload) : tx.row.payload;
+          const toAddr = payload?.to?.toLowerCase();
+          const fromAddr = payload?.from?.toLowerCase();
+          const inputData = String(payload?.input ?? payload?.data ?? "").toLowerCase();
+          const val = BigInt(payload?.value ?? "0");
+
+          if (toAddr === wrappedNative && fromAddr === id.address) {
+            if ((inputData.startsWith("0xd0e30db0") || inputData === "" || inputData === "0x") && val > 0n) {
+              const hasCanonical = transfers.some((t) => t.tx.toLowerCase() === tx.tx.toLowerCase() && t.row.token_address.toLowerCase() === wrappedNative && t.row.to_address.toLowerCase() === id.address);
+              if (!hasCanonical) {
+                synthesized.push({
+                  block: tx.block,
+                  tx: tx.tx,
+                  index: -1100000001n,
+                  identity: `${id.chainId}:${tx.tx}:weth_deposit`,
+                  kind: "erc20",
+                  row: {
+                    block_number: tx.block.toString(),
+                    tx_hash: tx.tx,
+                    token_address: wrappedNative,
+                    from_address: ZERO_ADDRESS,
+                    to_address: id.address,
+                    amount: val.toString(),
+                    log_index: -1100000001,
+                    ingestion_source: "sdk_weth_deposit",
+                  },
+                });
+              }
+            }
+
+            if (inputData.startsWith("0x2e1a7d4d") && inputData.length >= 74) {
+              const amountRaw = BigInt("0x" + inputData.slice(10, 74));
+              if (amountRaw > 0n) {
+                const hasCanonical = transfers.some((t) => t.tx.toLowerCase() === tx.tx.toLowerCase() && t.row.token_address.toLowerCase() === wrappedNative && t.row.from_address.toLowerCase() === id.address);
+                if (!hasCanonical) {
+                  synthesized.push({
+                    block: tx.block,
+                    tx: tx.tx,
+                    index: -1100000000n,
+                    identity: `${id.chainId}:${tx.tx}:weth_withdrawal`,
+                    kind: "erc20",
+                    row: {
+                      block_number: tx.block.toString(),
+                      tx_hash: tx.tx,
+                      token_address: wrappedNative,
+                      from_address: id.address,
+                      to_address: ZERO_ADDRESS,
+                      amount: amountRaw.toString(),
+                      log_index: -1100000000,
+                      ingestion_source: "sdk_weth_withdrawal",
+                    },
+                  });
+                }
+              }
+            }
+          }
+        } catch {
+          // ignore malformed payloads
+        }
+      }
+    }
+
+    return [...transfers, ...synthesized, ...transactions, ...internals].sort(compareFacts);
+  }
   private identity(input: HistoryAddressRequest): Identity { return { chainId: this.deps.resolveChain(input.chain).chainId, address: input.address.toLowerCase() }; }
 }
 
 function emptyState(state: UserStateAtBlockResult["state"]): UserStateAtBlockResult { return { state, revision: null, asOfBlock: null, balances: [], nativeIn: "0", nativeOut: "0", transactionCount: 0, warnings: [] }; }
 function buildSnapshots(facts: readonly Fact[], address: string, eventThreshold: number, blockThreshold: number): { block: string; state: Omit<UserStateAtBlockResult, "state" | "revision" | "asOfBlock"> }[] { if (facts.length === 0) return []; const result: { block: string; state: Omit<UserStateAtBlockResult, "state" | "revision" | "asOfBlock"> }[] = []; let blockStart = facts[0]!.block; let eventStart = 0; let index = 0; while (index < facts.length) { const block = facts[index]!.block; while (index < facts.length && facts[index]!.block === block) index++; const reached = index - eventStart >= Math.max(1, eventThreshold) || block - blockStart + 1n >= BigInt(Math.max(1, blockThreshold)) || index === facts.length; if (reached) { result.push({ block: block.toString(), state: reduceFacts(facts.slice(0, index), address) }); blockStart = block + 1n; eventStart = index; } } return result; }
-function reduceFacts(facts: Fact[], address: string): Omit<UserStateAtBlockResult, "state" | "revision" | "asOfBlock"> { const balances = new Map<string, bigint>(); const incoming = new Map<string, bigint>(); const outgoing = new Map<string, bigint>(); let nativeIn = 0n; let nativeOut = 0n; let transactionCount = 0; const warnings: string[] = []; for (const fact of facts) { if (fact.kind === "erc20") { const row = fact.row; const amount = BigInt(row.amount); const token = row.token_address; if (row.to_address === address) { balances.set(token, (balances.get(token) ?? 0n) + amount); incoming.set(token, (incoming.get(token) ?? 0n) + amount); } if (row.from_address === address) { balances.set(token, (balances.get(token) ?? 0n) - amount); outgoing.set(token, (outgoing.get(token) ?? 0n) + amount); } } else if (fact.kind === "tx") { const row = JSON.parse(fact.row.payload); transactionCount++; if (row.from?.toLowerCase() === address) nativeOut += BigInt(row.value ?? "0"); if (row.to?.toLowerCase() === address) nativeIn += BigInt(row.value ?? "0"); } else { const row = JSON.parse(fact.row.payload); if (row.from?.toLowerCase() === address) nativeOut += BigInt(row.value ?? "0"); if (row.to?.toLowerCase() === address) nativeIn += BigInt(row.value ?? "0"); } } for (const [token, amount] of balances) if (amount < 0n) warnings.push(`negative_balance:${token}`); return { balances: [...balances].map(([tokenAddress, amount]) => ({ tokenAddress, amount: amount.toString(), incoming: (incoming.get(tokenAddress) ?? 0n).toString(), outgoing: (outgoing.get(tokenAddress) ?? 0n).toString() })), nativeIn: nativeIn.toString(), nativeOut: nativeOut.toString(), transactionCount, warnings }; }
+function reduceFacts(facts: Fact[], address: string): Omit<UserStateAtBlockResult, "state" | "revision" | "asOfBlock"> {
+  const normalizedAddress = address.toLowerCase();
+  const balances = new Map<string, bigint>();
+  const incoming = new Map<string, bigint>();
+  const outgoing = new Map<string, bigint>();
+  let nativeIn = 0n;
+  let nativeOut = 0n;
+  let transactionCount = 0;
+  const warnings: string[] = [];
+
+  const txTokenOutflows = new Set<string>();
+  for (const fact of facts) {
+    if (fact.kind === "erc20" && fact.row.from_address?.toLowerCase() === normalizedAddress) {
+      txTokenOutflows.add(`${fact.tx.toLowerCase()}:${fact.row.token_address?.toLowerCase()}`);
+    }
+  }
+
+  for (const fact of facts) {
+    if (fact.kind === "erc20") {
+      const row = fact.row;
+      const amount = BigInt(row.amount);
+      const token = String(row.token_address ?? "").toLowerCase();
+      const from = String(row.from_address ?? "").toLowerCase();
+      const to = String(row.to_address ?? "").toLowerCase();
+
+      const isInternalInterestMint =
+        from === ZERO_ADDRESS &&
+        to === normalizedAddress &&
+        txTokenOutflows.has(`${fact.tx.toLowerCase()}:${token}`);
+
+      if (to === normalizedAddress) {
+        if (!isInternalInterestMint) {
+          balances.set(token, (balances.get(token) ?? 0n) + amount);
+          incoming.set(token, (incoming.get(token) ?? 0n) + amount);
+        }
+      }
+      if (from === normalizedAddress) {
+        balances.set(token, (balances.get(token) ?? 0n) - amount);
+        outgoing.set(token, (outgoing.get(token) ?? 0n) + amount);
+      }
+    } else if (fact.kind === "tx") {
+      const row = typeof fact.row.payload === "string" ? JSON.parse(fact.row.payload) : fact.row.payload;
+      transactionCount++;
+      if (row.from?.toLowerCase() === normalizedAddress) nativeOut += BigInt(row.value ?? "0");
+      if (row.to?.toLowerCase() === normalizedAddress) nativeIn += BigInt(row.value ?? "0");
+    } else {
+      const row = typeof fact.row.payload === "string" ? JSON.parse(fact.row.payload) : fact.row.payload;
+      if (row.from?.toLowerCase() === normalizedAddress) nativeOut += BigInt(row.value ?? "0");
+      if (row.to?.toLowerCase() === normalizedAddress) nativeIn += BigInt(row.value ?? "0");
+    }
+  }
+  for (const [token, amount] of balances) if (amount < 0n) warnings.push(`negative_balance:${token}`);
+  return { balances: [...balances].map(([tokenAddress, amount]) => ({ tokenAddress, amount: amount.toString(), incoming: (incoming.get(tokenAddress) ?? 0n).toString(), outgoing: (outgoing.get(tokenAddress) ?? 0n).toString() })), nativeIn: nativeIn.toString(), nativeOut: nativeOut.toString(), transactionCount, warnings };
+}
 
 function decimalIndex(value: unknown): bigint { return typeof value === "string" && /^\d+$/.test(value) ? BigInt(value) : typeof value === "number" && Number.isSafeInteger(value) ? BigInt(value) : 0n; }
 function compareFacts(a: Fact, b: Fact): number { if (a.block !== b.block) return a.block < b.block ? -1 : 1; const tx = a.tx.localeCompare(b.tx); if (tx !== 0) return tx; if (a.index !== b.index) return a.index < b.index ? -1 : 1; return a.identity.localeCompare(b.identity); }

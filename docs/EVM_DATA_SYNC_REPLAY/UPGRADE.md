@@ -366,7 +366,23 @@ client.history.getInternalNativeTransfers({ chain, address, startBlock?, endBloc
 最新已完成回放区块时不能返回假装完整的状态。`getTokenFlowHistory` 直接读取规范化
 事实，区块号、交易哈希、log/trace identity 均保留，适合精确审计和分页。
 
-### 4.5 修复、重采集和重建 API
+### 4.5 特殊资产流向与回放校准规范 (Wrapped Native 与 Rebasing 计息资产)
+
+#### 1. Wrapped Native (WETH/WBNB 等) 流水合成与排重
+* **协议特性**：WETH9 合约在 `deposit()` 存入原生代币（或直接转入 ETH 铸造 WETH）时发出 `Deposit(dst, wad)` 事件（Topic0: `0xe1fffcc4923d04b559f4d29a8bfc6cda04eb5b0d3c460751c2402c5c5cc9109c`），不发出标准 ERC-20 `Transfer(0x0, dst, wad)`；在 `withdraw(wad)` 提现时发出 `Withdrawal(src, wad)` 并通过内部交易发送原生代币。
+* **回放合成规则**：
+  * 在 `facts()` 加载交易日志时，识别目标为各链 Wrapped Native 合约（如 Ethereum Mainnet WETH `0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2`、Base WETH `0x4200000000000000000000000000000000000006`、Optimism WETH、Arbitrum WETH、Polygon WETH、BSC WBNB 等）的交易。
+  * `deposit()` / Direct Wrap（`input` 以 `0xd0e30db0` 开头或为空、且 `value > 0`）：合成 `ZERO_ADDRESS -> user` 的 WETH 转账事实（`index: -1100000001n`, `ingestion_source: 'sdk_weth_deposit'`），若存在 canonical 转账则去重。
+  * `withdraw(wad)` / Unwrap（`input` 以 `0x2e1a7d4d` 开头）：提取销毁数量，合成 `user -> ZERO_ADDRESS` 的 WETH 销毁事实（`index: -1100000000n`, `ingestion_source: 'sdk_weth_withdrawal'`），与 internal native transfer 配合闭环。
+
+#### 2. Rebasing 计息代币 (Aave aToken 等) 0x0 内部结息过滤
+* **协议特性**：Aave 等 Vault 在提现交易开始时先发出一条 `Transfer(0x0, user, interest)` 内部结息铸造事件，紧接着发出 `Transfer(user, 0x0, total)` 全额销毁本息。
+* **回放归约规则**：
+  * 在 `reduceFacts()` 中识别伴随同币转出的 0x0 内部结息（即转入来源为 `ZERO_ADDRESS`，且同一笔交易中用户存在该代币的转出 `from_address === user`）。
+  * 该内部结息不计入用户的外部 `incoming` 流入，防止基准快照利息重复累加与 FIFO 开仓 Lot 无法全额核销（产生幽灵仓位）。
+  * 普通存款铸造（无同币转出）正常保留 `incoming`，DEX 滑点退款（来源于 Router 地址而非 0x0）正常保留净额对冲。
+
+### 4.6 修复、重采集和重建 API
 
 增量 `update` 适合正常追赶数据；当 SDK 的 mapper、provider 适配器、去重规则或
 回放 reducer 修复后，需要一组明确的修复 API。修复 API 必须带有显式范围，不能
