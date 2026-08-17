@@ -43,6 +43,14 @@ interface AlchemyBothPageState {
   readonly outgoingExhausted: boolean;
 }
 
+interface AlchemyTransactionBothPageState {
+  readonly mode: "transactions-both";
+  readonly incomingPageKey: string | null;
+  readonly incomingExhausted: boolean;
+  readonly outgoingPageKey: string | null;
+  readonly outgoingExhausted: boolean;
+}
+
 interface AlchemyTransferPage {
   readonly transfers: readonly AlchemyMappedTransfer[];
   readonly nextPageKey: string | null;
@@ -79,15 +87,55 @@ export class AlchemyAdapter implements DataProviderAdapter {
     return false;
   }
 
-  async getTransactions(request: NormalizedTransactionsRequest, context: ProviderAttemptContext): Promise<ProviderPageResult<Transaction>> {
+  async getTransactions(request: NormalizedTransactionsRequest, context: ProviderAttemptContext): Promise<ProviderPageResult<Transaction, AlchemySinglePageState | AlchemyTransactionBothPageState>> {
+    // Alchemy's fromAddress filter omits external deposits. Address history
+    // must consume independent from/to streams, just like ERC-20 transfers,
+    // otherwise txlist-backed native acquisitions never reach the ledger.
+    if (request.address !== undefined) {
+      const state = readTransactionBothPageState(context.providerPageState);
+      const [incoming, outgoing] = await Promise.all([
+        state.incomingExhausted ? null : this.getTransactionPage(request, context, "incoming", state.incomingPageKey),
+        state.outgoingExhausted ? null : this.getTransactionPage(request, context, "outgoing", state.outgoingPageKey),
+      ]);
+      const nextPageState = (incoming === null || incoming.nextPageKey === null) &&
+        (outgoing === null || outgoing.nextPageKey === null)
+        ? null
+        : {
+          mode: "transactions-both" as const,
+          incomingPageKey: incoming?.nextPageKey ?? null,
+          incomingExhausted: incoming === null || incoming.nextPageKey === null,
+          outgoingPageKey: outgoing?.nextPageKey ?? null,
+          outgoingExhausted: outgoing === null || outgoing.nextPageKey === null,
+        };
+      const unique = new Map<string, Transaction>();
+      for (const item of [...(incoming?.items ?? []), ...(outgoing?.items ?? [])]) unique.set(item.hash, item);
+      const items = [...unique.values()].sort((first, second) => {
+        const block = BigInt(first.blockNumber) < BigInt(second.blockNumber) ? -1 : BigInt(first.blockNumber) > BigInt(second.blockNumber) ? 1 : 0;
+        const identity = first.hash < second.hash ? -1 : first.hash > second.hash ? 1 : 0;
+        const comparison = block === 0 ? identity : block;
+        return request.order === "asc" ? comparison : -comparison;
+      });
+      return { items, nextPageState, pageInfo: { provider: "alchemy", chainId: context.chain.chainId } };
+    }
+
     const pageState = readSinglePageState(context.providerPageState);
+    const page = await this.getTransactionPage(request, context, null, pageState?.pageKey ?? null);
+    return { items: page.items, nextPageState: page.nextPageKey === null ? null : { pageKey: page.nextPageKey }, pageInfo: { provider: "alchemy", chainId: context.chain.chainId } };
+  }
+
+  private async getTransactionPage(
+    request: NormalizedTransactionsRequest,
+    context: ProviderAttemptContext,
+    direction: "incoming" | "outgoing" | null,
+    pageKey: string | null,
+  ): Promise<{ items: Transaction[]; nextPageKey: string | null }> {
     const filter: Record<string, unknown> = {
       category: ["external", "internal"], withMetadata: true,
       order: request.order, maxCount: `0x${Math.min(request.pageSize, ALCHEMY_MAX_PAGE_SIZE).toString(16)}`,
-      ...(request.address === undefined ? {} : { fromAddress: request.address }),
+      ...(direction === "incoming" ? { toAddress: request.address } : direction === "outgoing" ? { fromAddress: request.address } : {}),
       ...(request.startBlock === null ? {} : { fromBlock: decimalToHex(request.startBlock) }),
       ...(request.endBlock === null ? {} : { toBlock: decimalToHex(request.endBlock) }),
-      ...(pageState === null ? {} : { pageKey: pageState.pageKey }),
+      ...(pageKey === null ? {} : { pageKey }),
     };
     const body = await this.call("alchemy_getAssetTransfers", [filter], context);
     const parsed = alchemyTransfersResultSchema.safeParse(parseResult(body, context));
@@ -98,7 +146,7 @@ export class AlchemyAdapter implements DataProviderAdapter {
       from: item.from.toLowerCase(), to: item.to.toLowerCase(), nonce: null, value: item.rawContract.value ? hexQuantityToDecimal(item.rawContract.value) : "0",
       gasLimit: null, gasUsed: null, gasPrice: null, input: null, status: "unknown", provider: "alchemy",
     }));
-    return { items, nextPageState: parsed.data.pageKey ? { pageKey: parsed.data.pageKey } : null, pageInfo: { provider: "alchemy", chainId: context.chain.chainId } };
+    return { items, nextPageKey: normalizeNextPageKey(parsed.data.pageKey) };
   }
 
   async getInternalNativeTransfersByBlockRange(request: { readonly address: string; readonly startBlock: string; readonly endBlock: string }, context: ProviderAttemptContext): Promise<import("../../domain/models").InternalNativeTransferBlockRange> {
@@ -498,6 +546,37 @@ function readBothPageState(value: unknown): AlchemyBothPageState {
   ) throw invalidBothPageState();
   return {
     mode: "both",
+    incomingPageKey: state.incomingPageKey,
+    incomingExhausted: state.incomingExhausted,
+    outgoingPageKey: state.outgoingPageKey,
+    outgoingExhausted: state.outgoingExhausted,
+  };
+}
+
+function readTransactionBothPageState(value: unknown): AlchemyTransactionBothPageState {
+  if (value === undefined || value === null) {
+    return {
+      mode: "transactions-both",
+      incomingPageKey: null,
+      incomingExhausted: false,
+      outgoingPageKey: null,
+      outgoingExhausted: false,
+    };
+  }
+  if (typeof value !== "object" || Array.isArray(value) || value === null) throw invalidBothPageState();
+  const state = value as Partial<AlchemyTransactionBothPageState>;
+  if (
+    Object.keys(value).length !== 5 ||
+    state.mode !== "transactions-both" ||
+    !isPageKey(state.incomingPageKey) ||
+    !isPageKey(state.outgoingPageKey) ||
+    typeof state.incomingExhausted !== "boolean" ||
+    typeof state.outgoingExhausted !== "boolean" ||
+    state.incomingExhausted && state.incomingPageKey !== null ||
+    state.outgoingExhausted && state.outgoingPageKey !== null
+  ) throw invalidBothPageState();
+  return {
+    mode: "transactions-both",
     incomingPageKey: state.incomingPageKey,
     incomingExhausted: state.incomingExhausted,
     outgoingPageKey: state.outgoingPageKey,
