@@ -16,6 +16,7 @@ import type { BinanceAdapter } from "../providers/price/binance/BinanceAdapter";
 import type { GateKlineRequest, GateKlinePoint } from "../domain/gateKlineModels";
 import { normalizeGateKlineRequest } from "../domain/gateKlineModels";
 import type { Erc20MulticallAtBlockRequest, Erc20MulticallAtBlockResult } from "../domain/erc20MulticallModels";
+import type { MulticallAtBlockRequest, MulticallAtBlockResult } from "../domain/rpcModels";
 import type { RpcService } from "../rpc/RpcService";
 
 export class TokenService {
@@ -68,6 +69,24 @@ export class TokenService {
 
   multicallErc20AtBlock(request: Erc20MulticallAtBlockRequest): Promise<Erc20MulticallAtBlockResult> {
     return this.getErc20MulticallAtBlock(request);
+  }
+
+  /**
+   * Batch provider-neutral contract view calls through Multicall3 at one
+   * exact block. The SDK owns validation, batching, endpoint failover and
+   * block consistency; callers only provide calldata and decode the results.
+   */
+  getMulticallAtBlock(request: MulticallAtBlockRequest): Promise<MulticallAtBlockResult> {
+    const chainId = request.chain === 8453 || request.chain === "base" ? 8453 : 1;
+    const rpc = this.rpcResolver?.(chainId);
+    if (rpc === null || rpc === undefined) {
+      return Promise.reject(unsupportedOperation("Archive RPC is not enabled for contract multicall reads."));
+    }
+    return rpc.multicallAtBlock(request);
+  }
+
+  multicallAtBlock(request: MulticallAtBlockRequest): Promise<MulticallAtBlockResult> {
+    return this.getMulticallAtBlock(request);
   }
 
   getPriceHistory(request: TokenPriceHistoryRequest): Promise<TokenPriceAggregationResult> {

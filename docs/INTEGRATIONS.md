@@ -640,3 +640,14 @@ and applies versioned migrations; `close()` releases the handle. PostgreSQL uses
 the `pg` pool through the same `StorageAdapter` contract and migration versions;
 the PostgreSQL live contract requires an explicitly supplied test database.
 Storage URLs and SQL are never logged.
+
+## 20. Generic exact-block contract Multicall
+
+`client.token.getMulticallAtBlock()` and its `multicallAtBlock()` alias expose
+the provider-neutral Multicall3 primitive for application-specific read-only
+contract calls. Callers provide validated target addresses and ABI calldata;
+the SDK owns exact-block pinning, deterministic batch splitting, endpoint
+failover, block consistency, and per-call success/return-data mapping. This
+does not add ABI-specific protocol knowledge or token discovery. It requires
+the opt-in chain-scoped Archive RPC capability and returns the existing typed
+unsupported-operation error when that capability is disabled.

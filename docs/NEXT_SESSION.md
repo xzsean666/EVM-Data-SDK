@@ -1,5 +1,14 @@
 # Current Progress
 
+## 2026-08-17 Generic contract Multicall boundary
+
+Added `client.token.getMulticallAtBlock()` and `multicallAtBlock()` as an
+ABI-agnostic public wrapper over the existing exact-block Multicall3 service.
+The backend uses this for vault protocol reads; no provider-specific ABI or
+token discovery was added to the SDK. Documentation is recorded in
+`docs/INTEGRATIONS.md` section 20 and ADR-034. `pnpm test` (400 tests),
+`pnpm typecheck`, and `pnpm build` pass after the change.
+
 ## 2026-08-13 ERC-20 Multicall reads
 
 Added `client.token.multicallErc20AtBlock()` / `getErc20MulticallAtBlock()`.

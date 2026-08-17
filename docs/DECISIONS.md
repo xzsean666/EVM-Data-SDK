@@ -622,3 +622,21 @@ pool; live availability remains an environment concern.
 **Reason:** SQLite is available in the supported Node runtime, keeps the SDK
 offline-testable, and avoids shipping a native dependency. The adapter uses
 prepared statements, bounded transactions, and versioned migrations.
+
+## ADR-034: Expose the provider-neutral Multicall3 primitive
+
+**Status:** Accepted for the v0.5 implementation request
+
+**Decision:** Expose `TokenService.getMulticallAtBlock()` and its alias
+`multicallAtBlock()` as the public ABI-agnostic contract-read boundary. Keep
+encoding and decoding of protocol-specific calls in callers while retaining
+validation, batching, endpoint selection, retry budgets, and block consistency
+inside `RpcService`.
+
+**Reason:** Applications such as portfolio accounting need several unrelated
+view methods without adding a new SDK API for each protocol. A generic call
+description reuses the existing Multicall3 safety and provenance contract and
+does not enable token discovery.
+
+**Trade-off:** Callers own ABI codecs and must treat failed individual calls as
+unavailable; the SDK deliberately does not interpret arbitrary return data.
