@@ -67,6 +67,15 @@ export type {
   NativeBalanceAtBlockResult,
 } from "./domain/rpcModels";
 export type {
+  JsonRpcRequest,
+  JsonRpcError,
+  JsonRpcBatchItemResult,
+  JsonRpcBatchExecutionOptions,
+  NormalizedJsonRpcRequest,
+  NormalizedJsonRpcBatchRequest,
+} from "./domain/jsonRpcModels";
+export { parseJsonRpcRequests } from "./domain/jsonRpcModels";
+export type {
   Erc20ReadMethod,
   Erc20MulticallCall,
   Erc20MulticallAtBlockRequest,
@@ -162,6 +171,19 @@ export type {
   PriceProxyLease,
   TokenPriceProviderAdapter,
 } from "./price/TokenPriceProviderAdapter";
+export { ArchiveRpcTransport, JsonRpcCallError, isJsonRpcCallError } from "./rpc/ArchiveRpcTransport";
+export type {
+  ArchiveRpcCallOptions,
+  ArchiveRpcBatchCallOptions,
+  ArchiveRpcTransportOptions,
+  JsonRpcBatchResponseItem,
+} from "./rpc/ArchiveRpcTransport";
+export { JsonRpcBatchExecutor } from "./rpc/JsonRpcBatchExecutor";
+export type {
+  JsonRpcBatchExecutorOptions,
+  RpcPoolLike,
+  RpcEndpoint,
+} from "./rpc/JsonRpcBatchExecutor";
 export { RpcService } from "./rpc/RpcService";
 export type { ArchiveRpcMulticallExecutor, RpcServiceOptions } from "./rpc/RpcService";
 export { ERC20_READ_SELECTORS, encodeErc20Read, decodeErc20Read } from "./rpc/Erc20MulticallCodec";

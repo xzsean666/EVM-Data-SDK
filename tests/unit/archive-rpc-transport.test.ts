@@ -188,4 +188,118 @@ describe("ArchiveRpcTransport", () => {
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).not.toContain(ENDPOINT);
   });
+
+  describe("batchCall", () => {
+    it("returns empty array immediately if requests are empty", async () => {
+      const httpTransport = fakeTransport(() => ({ status: 200, headers: {}, body: [] }));
+      const transport = new ArchiveRpcTransport({ httpTransport });
+
+      const results = await transport.batchCall({
+        endpointUrl: ENDPOINT,
+        requests: [],
+        timeoutMs: 5_000,
+      });
+
+      expect(results).toEqual([]);
+      expect(httpTransport.request).not.toHaveBeenCalled();
+    });
+
+    it("sends a JSON-RPC batch POST and aligns out-of-order responses by id", async () => {
+      const httpTransport = fakeTransport((request) => {
+        expect(request.body).toEqual([
+          { jsonrpc: "2.0", id: "req-1", method: "eth_blockNumber", params: [] },
+          { jsonrpc: "2.0", id: "req-2", method: "eth_getBalance", params: ["0x1234", "latest"] },
+        ]);
+        return {
+          status: 200,
+          headers: {},
+          body: [
+            { jsonrpc: "2.0", id: "req-2", result: "0x100" },
+            { jsonrpc: "2.0", id: "req-1", result: "0x12" },
+          ],
+        };
+      });
+      const transport = new ArchiveRpcTransport({ httpTransport });
+
+      const results = await transport.batchCall({
+        endpointUrl: ENDPOINT,
+        requests: [
+          { id: "req-1", method: "eth_blockNumber", params: [] },
+          { id: "req-2", method: "eth_getBalance", params: ["0x1234", "latest"] },
+        ],
+        timeoutMs: 5_000,
+      });
+
+      expect(results).toHaveLength(2);
+      expect(results[0]).toEqual({ id: "req-1", success: true, result: "0x12" });
+      expect(results[1]).toEqual({ id: "req-2", success: true, result: "0x100" });
+    });
+
+    it("handles item-level errors without failing entire batch", async () => {
+      const httpTransport = fakeTransport(() => ({
+        status: 200,
+        headers: {},
+        body: [
+          { jsonrpc: "2.0", id: 1, result: "0xabc" },
+          { jsonrpc: "2.0", id: 2, error: { code: 3, message: "execution reverted", data: "0x" } },
+        ],
+      }));
+      const transport = new ArchiveRpcTransport({ httpTransport });
+
+      const results = await transport.batchCall({
+        endpointUrl: ENDPOINT,
+        requests: [
+          { id: 1, method: "eth_call", params: [] },
+          { id: 2, method: "eth_call", params: [] },
+        ],
+        timeoutMs: 5_000,
+      });
+
+      expect(results[0]).toEqual({ id: 1, success: true, result: "0xabc" });
+      expect(results[1]).toEqual({
+        id: 2,
+        success: false,
+        error: { code: 3, message: "execution reverted", data: "0x" },
+      });
+    });
+
+    it("throws JsonRpcCallError if node rejects the whole batch with a single error envelope", async () => {
+      const httpTransport = fakeTransport(() => ({
+        status: 200,
+        headers: {},
+        body: { jsonrpc: "2.0", error: { code: -32600, message: "Batch requests not supported" } },
+      }));
+      const transport = new ArchiveRpcTransport({ httpTransport });
+
+      await expect(
+        transport.batchCall({
+          endpointUrl: ENDPOINT,
+          requests: [{ id: 1, method: "eth_blockNumber" }],
+          timeoutMs: 5_000,
+        }),
+      ).rejects.toThrow(JsonRpcCallError);
+    });
+
+    it("handles missing item response from node as an item error", async () => {
+      const httpTransport = fakeTransport(() => ({
+        status: 200,
+        headers: {},
+        body: [{ jsonrpc: "2.0", id: 1, result: "0x1" }],
+      }));
+      const transport = new ArchiveRpcTransport({ httpTransport });
+
+      const results = await transport.batchCall({
+        endpointUrl: ENDPOINT,
+        requests: [
+          { id: 1, method: "eth_blockNumber" },
+          { id: 2, method: "eth_blockNumber" },
+        ],
+        timeoutMs: 5_000,
+      });
+
+      expect(results[0]?.success).toBe(true);
+      expect(results[1]?.success).toBe(false);
+      expect(results[1]?.error?.code).toBe(-32603);
+    });
+  });
 });

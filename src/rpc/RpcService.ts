@@ -20,6 +20,12 @@ import {
   type Erc20MulticallCallResult,
 } from "../domain/erc20MulticallModels";
 import { decodeErc20Read, encodeErc20Read } from "./Erc20MulticallCodec";
+import type { JsonRpcBatchExecutor } from "./JsonRpcBatchExecutor";
+import type {
+  JsonRpcBatchExecutionOptions,
+  JsonRpcBatchItemResult,
+  JsonRpcRequest,
+} from "../domain/jsonRpcModels";
 
 /**
  * Port implemented by `EthereumArchiveRpcExecutor` (P3). This service owns
@@ -54,6 +60,7 @@ export interface ArchiveRpcMulticallExecutor {
 
 export interface RpcServiceOptions {
   readonly executor: ArchiveRpcMulticallExecutor;
+  readonly batchExecutor?: JsonRpcBatchExecutor;
   readonly maxCallsPerMulticall?: number;
   /** Chain served by this RPC service. Defaults to Ethereum for compatibility. */
   readonly chainId?: 1 | 8453;
@@ -64,11 +71,11 @@ export interface RpcServiceOptions {
 const DEFAULT_MAX_CALLS_PER_MULTICALL = 100;
 
 /**
- * Public, provider-neutral read-only Multicall3 primitive. See
- * `docs/CHAINLINK_ETHEREUM_ARCHIVE_RPC_MULTICALL3_UPGRADE.md` section 3.2.
+ * Public, provider-neutral read-only Multicall3 and generic JSON-RPC Batch primitive.
  */
 export class RpcService {
   private readonly executor: ArchiveRpcMulticallExecutor;
+  private readonly batchExecutor: JsonRpcBatchExecutor | undefined;
   private readonly maxCallsPerMulticall: number;
   private readonly chainId: 1 | 8453;
   private readonly multicall3Address: string;
@@ -76,6 +83,7 @@ export class RpcService {
 
   constructor(options: RpcServiceOptions) {
     this.executor = options.executor;
+    this.batchExecutor = options.batchExecutor;
     this.maxCallsPerMulticall = options.maxCallsPerMulticall ?? DEFAULT_MAX_CALLS_PER_MULTICALL;
     this.chainId = options.chainId ?? 1;
     this.multicall3Address = options.multicall3Address ?? MULTICALL3_ADDRESS;
@@ -85,6 +93,46 @@ export class RpcService {
           ? MULTICALL3_ETHEREUM_MAINNET_DEPLOYMENT_BLOCK
           : MULTICALL3_BASE_MAINNET_DEPLOYMENT_BLOCK),
     );
+  }
+
+  /**
+   * Executes a batch of arbitrary JSON-RPC calls with automatic chunking, bounded concurrency,
+   * and random RPC pool selection.
+   */
+  async batch<TResult = unknown>(
+    requests: readonly JsonRpcRequest[],
+    options?: JsonRpcBatchExecutionOptions,
+  ): Promise<readonly JsonRpcBatchItemResult<TResult>[]> {
+    if (this.batchExecutor === undefined) {
+      throw unsupportedOperation("JSON-RPC batch executor is not configured for this RPC service.");
+    }
+    return this.batchExecutor.executeBatch<TResult>(requests, options);
+  }
+
+  /**
+   * Executes a batch of JSON-RPC calls and throws immediately if any call fails.
+   */
+  async strictBatch<TResult = unknown>(
+    requests: readonly JsonRpcRequest[],
+    options?: JsonRpcBatchExecutionOptions,
+  ): Promise<readonly TResult[]> {
+    if (this.batchExecutor === undefined) {
+      throw unsupportedOperation("JSON-RPC batch executor is not configured for this RPC service.");
+    }
+    return this.batchExecutor.executeStrictBatch<TResult>(requests, options);
+  }
+
+  /**
+   * Executes a single JSON-RPC call over a randomly selected healthy RPC endpoint from the pool.
+   */
+  async call<TResult = unknown>(
+    request: JsonRpcRequest,
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<TResult> {
+    if (this.batchExecutor === undefined) {
+      throw unsupportedOperation("JSON-RPC batch executor is not configured for this RPC service.");
+    }
+    return this.batchExecutor.call<TResult>(request, options);
   }
 
   async multicallAtBlock(request: MulticallAtBlockRequest): Promise<MulticallAtBlockResult> {

@@ -7,16 +7,15 @@ import { isHttpTransportError, type HttpTransport } from "../transport/HttpTrans
 
 /**
  * Direct-only JSON-RPC 2.0 HTTP mechanics and envelope validation for the
- * Ethereum Archive RPC feature (ADR-028/ADR-029).
+ * Ethereum Archive RPC and JSON-RPC Batch features (ADR-028/ADR-029).
  *
- * This module owns exactly one thing: sending one JSON-RPC request and
- * validating the shape of the response. It never accepts a proxy, never
+ * This module owns exactly one thing: sending JSON-RPC single/batch requests and
+ * validating the shape of the responses. It never accepts a proxy, never
  * reads `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY`, and never routes
  * through `ProxyPool` or `SingBoxProxyManager` — there is no proxy parameter
- * on `ArchiveRpcCallOptions` at all, so that boundary is enforced by the
+ * on call options at all, so that boundary is enforced by the
  * type signature, not just by convention. Endpoint health, retry, endpoint
- * selection, and Chainlink ABI knowledge belong to `EthereumArchiveRpcPool`
- * and `EthereumArchiveRpcExecutor`, not here.
+ * selection, and ABI knowledge belong to pool and executor layers, not here.
  */
 
 export interface ArchiveRpcTransportOptions {
@@ -30,6 +29,29 @@ export interface ArchiveRpcCallOptions {
   readonly params: readonly unknown[];
   readonly timeoutMs: number;
   readonly signal?: AbortSignal;
+}
+
+export interface ArchiveRpcBatchCallOptions {
+  /** Direct HTTPS JSON-RPC endpoint URL. Never logged or included in errors. */
+  readonly endpointUrl: string;
+  readonly requests: readonly {
+    readonly id: string | number;
+    readonly method: string;
+    readonly params?: readonly unknown[];
+  }[];
+  readonly timeoutMs: number;
+  readonly signal?: AbortSignal;
+}
+
+export interface JsonRpcBatchResponseItem {
+  readonly id: string | number;
+  readonly success: boolean;
+  readonly result?: unknown;
+  readonly error?: {
+    readonly code: number;
+    readonly message: string;
+    readonly data?: unknown;
+  };
 }
 
 /**
@@ -141,6 +163,120 @@ export class ArchiveRpcTransport {
     }
 
     return parsed.data.result;
+  }
+
+  /**
+   * Sends a JSON-RPC 2.0 batch payload `[ {...}, {...} ]` and returns array of
+   * results aligned by request identifier.
+   */
+  async batchCall(options: ArchiveRpcBatchCallOptions): Promise<readonly JsonRpcBatchResponseItem[]> {
+    if (options.requests.length === 0) {
+      return Object.freeze([]);
+    }
+
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(options.endpointUrl);
+    } catch {
+      throw archiveRpcUnavailable("Archive RPC endpoint URL is invalid.");
+    }
+    if (parsedUrl.protocol !== "https:") {
+      throw archiveRpcUnavailable("Archive RPC endpoints must use HTTPS.");
+    }
+
+    const body = options.requests.map((req) => ({
+      jsonrpc: "2.0",
+      id: req.id,
+      method: req.method,
+      params: req.params ?? [],
+    }));
+
+    let response;
+    try {
+      response = await this.httpTransport.request({
+        method: "POST",
+        url: options.endpointUrl,
+        headers: { "content-type": "application/json" },
+        body,
+        timeoutMs: options.timeoutMs,
+        proxy: null,
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+      });
+    } catch (error: unknown) {
+      throw mapTransportError(error);
+    }
+
+    if (response.status < 200 || response.status >= 300) {
+      throw archiveRpcUnavailable(
+        `Archive RPC endpoint returned an unexpected HTTP status ${response.status}.`,
+      );
+    }
+
+    // If the node rejects the entire batch request with a single error envelope
+    if (typeof response.body === "object" && response.body !== null && !Array.isArray(response.body)) {
+      const singleEnvelope = jsonRpcEnvelopeSchema.safeParse(response.body);
+      if (singleEnvelope.success && singleEnvelope.data.error !== undefined) {
+        throw new JsonRpcCallError(singleEnvelope.data.error.code, singleEnvelope.data.error.message);
+      }
+      throw rpcResponseInvalid("Archive RPC endpoint returned an unexpected non-array batch response.");
+    }
+
+    const parsed = z.array(jsonRpcEnvelopeSchema).safeParse(response.body);
+    if (!parsed.success) {
+      throw rpcResponseInvalid("Archive RPC endpoint returned a malformed JSON-RPC batch response.");
+    }
+
+    const responseById = new Map<string | number, z.infer<typeof jsonRpcEnvelopeSchema>>();
+    for (const item of parsed.data) {
+      if (item.id !== undefined && item.id !== null) {
+        responseById.set(item.id, item);
+      }
+    }
+
+    const results: JsonRpcBatchResponseItem[] = options.requests.map((req) => {
+      const item = responseById.get(req.id);
+      if (item === undefined) {
+        return Object.freeze({
+          id: req.id,
+          success: false,
+          error: Object.freeze({
+            code: -32603,
+            message: "Archive RPC endpoint omitted response for batch request id.",
+          }),
+        });
+      }
+
+      if (item.error !== undefined) {
+        return Object.freeze({
+          id: req.id,
+          success: false,
+          error: Object.freeze({
+            code: item.error.code,
+            message: item.error.message,
+            ...(item.error.data !== undefined ? { data: item.error.data } : {}),
+          }),
+        });
+      }
+
+      if (item.result === undefined) {
+        return Object.freeze({
+          id: req.id,
+          success: false,
+          error: Object.freeze({
+            code: -32603,
+            message: "Archive RPC endpoint returned neither a result nor an error for batch item.",
+          }),
+        });
+      }
+
+      return Object.freeze({
+        id: req.id,
+        success: true,
+        result: item.result,
+      });
+    });
+
+    return Object.freeze(results);
   }
 }
 

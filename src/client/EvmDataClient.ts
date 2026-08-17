@@ -32,6 +32,7 @@ import { BUILTIN_ETHEREUM_ARCHIVE_RPCS } from "../rpc/builtinEthereumArchiveRpcs
 import { BUILTIN_BASE_ARCHIVE_RPCS } from "../rpc/builtinBaseArchiveRpcs";
 import { EthereumArchiveRpcPool, type EthereumArchiveRpcEndpoint } from "../rpc/EthereumArchiveRpcPool";
 import { EthereumArchiveRpcExecutor } from "../rpc/EthereumArchiveRpcExecutor";
+import { JsonRpcBatchExecutor } from "../rpc/JsonRpcBatchExecutor";
 import { RpcService } from "../rpc/RpcService";
 import { ChainlinkService } from "../chainlink/ChainlinkService";
 import { DeFiExchangeRateService } from "../defi/DeFiExchangeRateService";
@@ -217,8 +218,16 @@ export class EvmDataClient {
         maxRpcAttempts: chainlinkConfiguration.maxRpcAttempts,
         maxConcurrentRpcAttempts: chainlinkConfiguration.maxConcurrentRpcAttempts,
       });
+      const batchExecutor = new JsonRpcBatchExecutor({
+        pool: this.archiveRpcPool,
+        randomSource: options.archiveRpcRandomSource ?? systemRandom,
+        attemptTimeoutMs: chainlinkConfiguration.attemptTimeoutMs,
+        totalTimeoutMs: chainlinkConfiguration.totalTimeoutMs,
+        maxRpcAttempts: chainlinkConfiguration.maxRpcAttempts,
+      });
       this.rpc = new RpcService({
         executor: archiveRpcExecutor,
+        batchExecutor,
         maxCallsPerMulticall: chainlinkConfiguration.maxCallsPerMulticall,
       });
       this.chainlink = new ChainlinkService({ rpcService: this.rpc });
@@ -244,7 +253,8 @@ export class EvmDataClient {
         });
       }
       const executor = new EthereumArchiveRpcExecutor({ pool, randomSource: options.archiveRpcRandomSource ?? systemRandom, attemptTimeoutMs: defiConfiguration.attemptTimeoutMs, totalTimeoutMs: defiConfiguration.totalTimeoutMs, maxRpcAttempts: defiConfiguration.maxRpcAttempts, maxConcurrentRpcAttempts: defiConfiguration.maxConcurrentRpcAttempts });
-      defiRpcServices.set(chainId, new RpcService({ executor, maxCallsPerMulticall: defiConfiguration.maxCallsPerMulticall, chainId, multicall3Address: MULTICALL3_ADDRESS, multicall3DeploymentBlock: (chainId === 1 ? MULTICALL3_ETHEREUM_MAINNET_DEPLOYMENT_BLOCK : MULTICALL3_BASE_MAINNET_DEPLOYMENT_BLOCK).toString() }));
+      const batchExecutor = new JsonRpcBatchExecutor({ pool, randomSource: options.archiveRpcRandomSource ?? systemRandom, attemptTimeoutMs: defiConfiguration.attemptTimeoutMs, totalTimeoutMs: defiConfiguration.totalTimeoutMs, maxRpcAttempts: defiConfiguration.maxRpcAttempts });
+      defiRpcServices.set(chainId, new RpcService({ executor, batchExecutor, maxCallsPerMulticall: defiConfiguration.maxCallsPerMulticall, chainId, multicall3Address: MULTICALL3_ADDRESS, multicall3DeploymentBlock: (chainId === 1 ? MULTICALL3_ETHEREUM_MAINNET_DEPLOYMENT_BLOCK : MULTICALL3_BASE_MAINNET_DEPLOYMENT_BLOCK).toString() }));
       this.chainRpcExecutors.set(chain, executor);
       if (pool !== this.archiveRpcPool) defiPools.push(pool);
     }
@@ -262,7 +272,8 @@ export class EvmDataClient {
       });
       this.uniswapV3ArchiveRpcPool = pool;
       const executor = new EthereumArchiveRpcExecutor({ pool, randomSource: options.archiveRpcRandomSource ?? systemRandom, attemptTimeoutMs: uniswapV3Configuration.attemptTimeoutMs, totalTimeoutMs: uniswapV3Configuration.totalTimeoutMs, maxRpcAttempts: uniswapV3Configuration.maxRpcAttempts });
-      this.uniswapV3 = new UniswapV3HistoricalPriceService({ rpcService: new RpcService({ executor, maxCallsPerMulticall: uniswapV3Configuration.maxCallsPerMulticall, chainId: 1, multicall3Address: MULTICALL3_ADDRESS, multicall3DeploymentBlock: MULTICALL3_ETHEREUM_MAINNET_DEPLOYMENT_BLOCK.toString() }) });
+      const batchExecutor = new JsonRpcBatchExecutor({ pool, randomSource: options.archiveRpcRandomSource ?? systemRandom, attemptTimeoutMs: uniswapV3Configuration.attemptTimeoutMs, totalTimeoutMs: uniswapV3Configuration.totalTimeoutMs, maxRpcAttempts: uniswapV3Configuration.maxRpcAttempts });
+      this.uniswapV3 = new UniswapV3HistoricalPriceService({ rpcService: new RpcService({ executor, batchExecutor, maxCallsPerMulticall: uniswapV3Configuration.maxCallsPerMulticall, chainId: 1, multicall3Address: MULTICALL3_ADDRESS, multicall3DeploymentBlock: MULTICALL3_ETHEREUM_MAINNET_DEPLOYMENT_BLOCK.toString() }) });
     } else {
       this.uniswapV3ArchiveRpcPool = null;
       this.uniswapV3 = null;
@@ -272,7 +283,8 @@ export class EvmDataClient {
       const custom = uniswapV4Configuration.rpcEndpoints.filter((endpoint) => endpoint.enabled).map((endpoint) => ({ id: endpoint.id, url: endpoint.url }));
       const pool = options.uniswapV3ArchiveRpcPool ?? this.uniswapV3ArchiveRpcPool ?? new EthereumArchiveRpcPool({ endpoints: mergeArchiveRpcEndpoints([...builtin, ...custom]), healthCheckTimeoutMs: uniswapV4Configuration.healthCheckTimeoutMs, expectedChainId: 1, multicall3Address: MULTICALL3_ADDRESS, multicall3DeploymentBlock: MULTICALL3_ETHEREUM_MAINNET_DEPLOYMENT_BLOCK.toString() });
       const executor = new EthereumArchiveRpcExecutor({ pool, randomSource: options.archiveRpcRandomSource ?? systemRandom, attemptTimeoutMs: uniswapV4Configuration.attemptTimeoutMs, totalTimeoutMs: uniswapV4Configuration.totalTimeoutMs, maxRpcAttempts: uniswapV4Configuration.maxRpcAttempts });
-      this.uniswapV4 = new UniswapV4HistoricalPriceService({ rpcService: new RpcService({ executor, maxCallsPerMulticall: uniswapV4Configuration.maxCallsPerMulticall, chainId: 1, multicall3Address: MULTICALL3_ADDRESS, multicall3DeploymentBlock: MULTICALL3_ETHEREUM_MAINNET_DEPLOYMENT_BLOCK.toString() }) });
+      const batchExecutor = new JsonRpcBatchExecutor({ pool, randomSource: options.archiveRpcRandomSource ?? systemRandom, attemptTimeoutMs: uniswapV4Configuration.attemptTimeoutMs, totalTimeoutMs: uniswapV4Configuration.totalTimeoutMs, maxRpcAttempts: uniswapV4Configuration.maxRpcAttempts });
+      this.uniswapV4 = new UniswapV4HistoricalPriceService({ rpcService: new RpcService({ executor, batchExecutor, maxCallsPerMulticall: uniswapV4Configuration.maxCallsPerMulticall, chainId: 1, multicall3Address: MULTICALL3_ADDRESS, multicall3DeploymentBlock: MULTICALL3_ETHEREUM_MAINNET_DEPLOYMENT_BLOCK.toString() }) });
     } else this.uniswapV4 = null;
   }
 
