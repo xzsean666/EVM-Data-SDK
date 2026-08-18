@@ -6,6 +6,7 @@ import type { AddressService } from "../services/AddressService";
 import type { TokenService } from "../services/TokenService";
 import type { ApiChainService } from "../services/ApiChainService";
 import { EvmDataError } from "../domain/errors";
+import { DEFAULT_MAX_WINDOW_BLOCKS } from "../domain/configuration";
 
 interface SyncDeps {
   storage: StorageAdapter;
@@ -34,14 +35,19 @@ export class SyncService {
     if (scope?.status === "running" && !isStale(scope.updated_at)) return this.result(input, identity, scope.next_block, scope.target_block ?? scope.next_block, null, 0, 0, 0, null, "busy");
     const cursor = normalizeBlock(scope?.next_block ?? "0");
     const explicitStart = input.fromBlock === undefined ? null : normalizeBlock(input.fromBlock);
-    if (scope !== undefined && explicitStart !== null && BigInt(explicitStart) !== BigInt(scope.next_block)) {
-      throw new EvmDataError({ code: "SYNC_SCOPE_CONFLICT", message: "Explicit fromBlock conflicts with persisted scope.", retryable: false, chainId: identity.chainId });
+    // A caller may explicitly rewind to an earlier closed block boundary when
+    // replacing a reorg overlap. The window writer removes only the SDK-owned
+    // facts in that range and commitScope keeps the high-water cursor. Starting
+    // after the persisted cursor is still forbidden because it would create a
+    // durable gap that the block-range API cannot infer or fill.
+    if (scope !== undefined && explicitStart !== null && BigInt(explicitStart) > BigInt(scope.next_block)) {
+      throw new EvmDataError({ code: "SYNC_SCOPE_CONFLICT", message: "Explicit fromBlock starts after the persisted scope cursor.", retryable: false, chainId: identity.chainId });
     }
     const target = normalizeBlock(input.toBlock ?? scope?.target_block ?? (await this.deps.chain.getLatestBlockNumber({ chain: input.chain, ...(input.signal === undefined ? {} : { signal: input.signal }) })).blockNumber);
     if (explicitStart === null && BigInt(cursor) > BigInt(target)) return this.result(input, identity, cursor, target, null, 0, 0, 0, null, "completed");
     const start = explicitStart ?? overlapStart(cursor, this.deps.reorgOverlapBlocks ?? 12);
     if (BigInt(start) > BigInt(target)) return this.result(input, identity, start, target, null, 0, 0, 0, null, "completed");
-    const requestedWindow = input.maxBlocks === undefined ? (this.deps.maxWindowBlocks ?? 100_000) : parsePositiveWindow(input.maxBlocks);
+    const requestedWindow = input.maxBlocks === undefined ? (this.deps.maxWindowBlocks ?? DEFAULT_MAX_WINDOW_BLOCKS) : parsePositiveWindow(input.maxBlocks);
     const windowEnd = boundedEnd(start, target, requestedWindow);
     return this.runWindow(input, identity, start, windowEnd, target, cursor);
   }
@@ -83,7 +89,17 @@ export class SyncService {
     for (const row of rows) { const block = BigInt(row.block_number); if (previous !== null && block > previous + 1n) gaps.push({ startBlock: (previous + 1n).toString(), endBlock: (block - 1n).toString() }); previous = block; }
     const cursorConsistent = scope === undefined ? null : scope.last_complete_block === null || BigInt(scope.next_block) === BigInt(scope.last_complete_block) + 1n;
     const issues = [...(gaps.length ? [{ code: "GAP", detail: "Persisted facts contain a block gap." }] : []), ...(cursorConsistent === false ? [{ code: "CURSOR", detail: "Persisted cursor is inconsistent with its last complete block." }] : [])];
-    const duplicateCount = Number((await this.deps.storage.get<{ count: number }>(`SELECT COALESCE(SUM(group_count-1),0) AS count FROM (SELECT COUNT(*) AS group_count FROM ${table} WHERE chain_id=? AND address=? GROUP BY ${dataset === "erc20" ? "tx_hash,COALESCE(log_index,'') ,token_address" : dataset === "transactions" ? "tx_hash" : "tx_hash,COALESCE(trace_id,'')"} HAVING COUNT(*)>1)`, [identity.chainId, identity.address]))?.count ?? 0);
+    // Providers may omit log/trace indexes. In that case the SDK identity
+    // includes a field hash so multiple legitimate transfers in one
+    // transaction remain distinct; grouping only by an empty index would
+    // report those facts as duplicates. Indexed records still use their
+    // semantic transaction/index identity for duplicate detection.
+    const duplicateGroup = dataset === "erc20"
+      ? "CASE WHEN NULLIF(log_index,'') IS NULL THEN identity ELSE tx_hash || ':' || log_index || ':' || token_address END"
+      : dataset === "transactions"
+        ? "tx_hash"
+        : "CASE WHEN NULLIF(trace_id,'') IS NULL THEN identity ELSE tx_hash || ':' || trace_id END";
+    const duplicateCount = Number((await this.deps.storage.get<{ count: number }>(`SELECT COALESCE(SUM(group_count-1),0) AS count FROM (SELECT COUNT(*) AS group_count FROM ${table} WHERE chain_id=? AND address=? GROUP BY ${duplicateGroup} HAVING COUNT(*)>1)`, [identity.chainId, identity.address]))?.count ?? 0);
     if (duplicateCount > 0) issues.push({ code: "DUPLICATES", detail: "Persisted facts contain duplicate semantic identities." });
     return { status: issues.length ? "issues_found" : "ok", chainId: identity.chainId, address: identity.address, dataset, checkedRange: input.fromBlock && input.toBlock ? { startBlock: normalizeBlock(input.fromBlock), endBlock: normalizeBlock(input.toBlock) } : null, gapRanges: gaps.slice(0, 50), duplicateCount, cursorConsistent, replayCoverage: await this.replayCoverage(identity), issues: issues.slice(0, 50) };
   }
@@ -101,7 +117,13 @@ export class SyncService {
     if (!claimed) return this.result(input, identity, start, overallTarget, null, 0, 0, 0, null, "busy", runId);
     try {
       const fetched = await this.fetch(input.dataset, input.chain, identity.address, start, windowEnd, input.signal);
-      if (BigInt(fetched.end) < BigInt(cursorStart)) throw new EvmDataError({ code: "PROVIDER_STALLED", message: "Provider did not cover the persisted cursor boundary.", retryable: true, provider: fetched.provider, chainId: identity.chainId });
+      // A rewind whose target is before the current high-water mark is a
+      // valid overlap replacement and does not need to cover that mark. For a
+      // forward update, however, a provider response that stops before the
+      // persisted cursor would leave a gap and must fail closed.
+      if (BigInt(overallTarget) >= BigInt(cursorStart) && BigInt(fetched.end) < BigInt(cursorStart)) {
+        throw new EvmDataError({ code: "PROVIDER_STALLED", message: "Provider did not cover the persisted cursor boundary.", retryable: true, provider: fetched.provider, chainId: identity.chainId });
+      }
       let replayStatus: "queued" | "running" | "not_requested" = "not_requested";
       const written = await this.deps.storage.transaction(async () => { let count = 0; if (BigInt(start) < BigInt(cursorStart)) { await this.deps.storage.run(`DELETE FROM ${tableFor(input.dataset)} WHERE chain_id=? AND address=? AND CAST(block_number AS INTEGER)>=CAST(? AS INTEGER) AND CAST(block_number AS INTEGER)<=CAST(? AS INTEGER) AND ingestion_source=?`, [identity.chainId, identity.address, start, fetched.end, "sdk"]); await this.invalidateReplay(identity, start); } for (const item of fetched.items) { if (!await this.factExists(input.dataset, identity, item)) count += await this.writeFact(input.dataset, identity, item, fetched.provider); else await this.writeFact(input.dataset, identity, item, fetched.provider); } replayStatus = await this.commitScope(identity, start, overallTarget, fetched, runId, input.replay === true, count, fetched.items.length - count); return count; });
       const next = (BigInt(fetched.end) + 1n).toString();

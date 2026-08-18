@@ -15,8 +15,26 @@ describe("persistent EVM sync and replay", () => {
   it("normalizes PostgreSQL upserts with nested values and positional parameters", () => {
     const normalized = normalizePostgresSql("INSERT OR REPLACE INTO sdk_replay_jobs(job_id,processed_events) VALUES(?,COALESCE((SELECT processed_events FROM sdk_replay_jobs WHERE job_id=?),0));").text;
     expect(normalized).toContain("INSERT INTO sdk_replay_jobs");
-    expect(normalized).toContain("ON CONFLICT DO UPDATE SET job_id=EXCLUDED.job_id,processed_events=EXCLUDED.processed_events;");
+    expect(normalized).toContain("ON CONFLICT (job_id) DO UPDATE SET job_id=EXCLUDED.job_id,processed_events=EXCLUDED.processed_events;");
     expect(normalized).toContain("VALUES($1,COALESCE((SELECT processed_events FROM sdk_replay_jobs WHERE job_id=$2),0))");
+  });
+
+  it("keeps every INSERT OR IGNORE value bound to its own PostgreSQL parameter", () => {
+    const normalized = normalizePostgresSql("INSERT OR IGNORE INTO sdk_sync_scopes(scope_key,chain_id,address,dataset,next_block,target_block,last_complete_block,status,updated_at) VALUES(?,?,?,?,?,?,?,?,?)").text;
+    expect(normalized).toContain("VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)");
+    expect(normalized).toContain("ON CONFLICT DO NOTHING");
+  });
+
+  it("does not flag distinct no-index ERC-20 facts as duplicates during audit", async () => {
+    const storage = new SqliteStorageAdapter(":memory:"); await storage.initialize();
+    const first = transfer("10", "1");
+    const second = { ...first, amount: "2", logIndex: null };
+    storage.run("INSERT INTO sdk_erc20_transfers(identity,chain_id,address,token_address,tx_hash,transaction_index,log_index,block_number,timestamp,token_name,token_symbol,token_decimals,from_address,to_address,amount,provider,ingestion_source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ["distinct-a", 1, address, token, first.transactionHash, "0", null, "10", null, null, "T", 18, first.from, first.to, first.amount, "etherscan", "sdk"]);
+    storage.run("INSERT INTO sdk_erc20_transfers(identity,chain_id,address,token_address,tx_hash,transaction_index,log_index,block_number,timestamp,token_name,token_symbol,token_decimals,from_address,to_address,amount,provider,ingestion_source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", ["distinct-b", 1, address, token, second.transactionHash, "0", null, "10", null, null, "T", 18, second.from, second.to, second.amount, "etherscan", "sdk"]);
+    const fake = { token: {}, address: {}, chain: {} } as any;
+    const sync = new SyncService({ storage, token: fake.token, address: fake.address, chain: fake.chain, resolveChain: () => ({ chainId: 1 }) });
+    await expect(sync.audit({ chain: "ethereum", address, dataset: "erc20" })).resolves.toMatchObject({ status: "ok", duplicateCount: 0 });
+    await storage.close();
   });
 
   it("commits facts and cursor idempotently, then replays balances", async () => {
@@ -140,6 +158,18 @@ describe("persistent EVM sync and replay", () => {
     expect(requests[1]).toEqual(["13", "17"]); expect(storage.get<any>("SELECT next_block FROM sdk_sync_scopes WHERE scope_key=?", ["1:" + address + ":erc20"])?.next_block).toBe("18");
     await sync.update({ chain: "ethereum", address, dataset: "erc20", toBlock: "17" });
     expect(requests).toHaveLength(2);
+    await storage.close();
+  });
+
+  it("allows an explicit block-range rewind for backend overlap replacement", async () => {
+    const storage = new SqliteStorageAdapter(":memory:"); await storage.initialize(); const requests: string[][] = [];
+    const fake = { token: { getErc20TransfersByBlockRange: async (request: any) => { requests.push([request.startBlock, request.endBlock]); return { items: [], range: { startBlock: request.startBlock, endBlock: request.endBlock }, providers: ["etherscan"] }; } }, address: {}, chain: {} } as any;
+    const sync = new SyncService({ storage, token: fake.token, address: fake.address, chain: fake.chain, maxWindowBlocks: 100, resolveChain: () => ({ chainId: 1 }) });
+    await sync.update({ chain: "ethereum", address, dataset: "erc20", fromBlock: "10", toBlock: "20" });
+    await sync.update({ chain: "ethereum", address, dataset: "erc20", fromBlock: "13", toBlock: "20" });
+    expect(requests).toEqual([["10", "20"], ["13", "20"]]);
+    expect(storage.get<any>("SELECT next_block FROM sdk_sync_scopes WHERE scope_key=?", ["1:" + address + ":erc20"])?.next_block).toBe("21");
+    await expect(sync.update({ chain: "ethereum", address, dataset: "erc20", fromBlock: "22", toBlock: "25" })).rejects.toMatchObject({ code: "SYNC_SCOPE_CONFLICT" });
     await storage.close();
   });
 

@@ -124,6 +124,20 @@ export class PostgresStorageAdapter implements StorageAdapter {
 }
 
 const POSTGRES_SCHEMA = SCHEMA.replace(/CREATE TABLE IF NOT EXISTS ([^;]+);/g, (_whole, definition: string) => `CREATE TABLE IF NOT EXISTS ${definition.replace(/INTEGER PRIMARY KEY/g, "BIGINT PRIMARY KEY").replace(/ INTEGER /g, " BIGINT ")};`).replace(/INSERT OR (REPLACE|IGNORE)/g, "INSERT");
-export function normalizePostgresSql(sql: string): { text: string } { const ignored = /^\s*INSERT OR IGNORE INTO/i.test(sql); const semicolon = /;\s*$/.test(sql); const source = sql.replace(/;\s*$/, ""); let text = source.replace(/CAST\(([^)]+) AS INTEGER\)/gi, "CAST($1 AS NUMERIC)"); text = text.replace(/INSERT OR IGNORE INTO/gi, "INSERT INTO"); const replace = /^\s*INSERT OR REPLACE INTO\s+([\w_]+)\s*\(([^)]*)\)\s*VALUES\s*/i.exec(source); if (replace) { const columns = replace[2]!.split(",").map((column) => column.trim()); const base = source.replace(/^\s*INSERT OR REPLACE INTO/i, "INSERT INTO"); text = base + " ON CONFLICT DO UPDATE SET " + columns.map((column) => `${column}=EXCLUDED.${column}`).join(","); } text = text.replace(/\?/g, (_, offset: number) => `$${countQuestionMarks(source.slice(0, offset)) + 1}`); if (ignored && !/ON CONFLICT/i.test(text)) text += " ON CONFLICT DO NOTHING"; return { text: semicolon ? `${text};` : text }; }
+const POSTGRES_CONFLICT_TARGETS: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  sdk_schema_migrations: ["version"],
+  sdk_sync_scopes: ["scope_key"],
+  sdk_sync_runs: ["run_id"],
+  sdk_sync_windows: ["scope_key", "start_block", "end_block"],
+  sdk_erc20_transfers: ["identity"],
+  sdk_transactions: ["identity"],
+  sdk_internal_native_transfers: ["identity"],
+  sdk_replay_jobs: ["job_id"],
+  sdk_user_state_snapshots: ["chain_id", "address", "revision", "block_number"],
+  sdk_replay_current: ["chain_id", "address"],
+  sdk_price_sync_scopes: ["scope_key"],
+  sdk_price_points: ["scope_key", "timestamp"],
+});
+export function normalizePostgresSql(sql: string): { text: string } { const ignored = /^\s*INSERT OR IGNORE INTO/i.test(sql); const semicolon = /;\s*$/.test(sql); const source = sql.replace(/;\s*$/, ""); let text = source.replace(/CAST\(([^)]+) AS INTEGER\)/gi, "CAST($1 AS NUMERIC)"); text = text.replace(/INSERT OR IGNORE INTO/gi, "INSERT INTO"); const replace = /^\s*INSERT OR REPLACE INTO\s+([\w_]+)\s*\(([^)]*)\)\s*VALUES\s*/i.exec(source); if (replace) { const table = replace[1]!.toLowerCase(); const columns = replace[2]!.split(",").map((column) => column.trim()); const target = POSTGRES_CONFLICT_TARGETS[table]; if (target === undefined) throw new Error(`Missing PostgreSQL conflict target for ${table}`); const base = source.replace(/^\s*INSERT OR REPLACE INTO/i, "INSERT INTO"); text = base + " ON CONFLICT (" + target.join(",") + ") DO UPDATE SET " + columns.map((column) => `${column}=EXCLUDED.${column}`).join(","); } text = text.replace(/\?/g, (_, offset: number) => `$${countQuestionMarks(text.slice(0, offset)) + 1}`); if (ignored && !/ON CONFLICT/i.test(text)) text += " ON CONFLICT DO NOTHING"; return { text: semicolon ? `${text};` : text }; }
 function countQuestionMarks(value: string): number { return (value.match(/\?/g) ?? []).length; }
 function queryArgs(sql: string, params?: Record<string, unknown> | unknown[]): [string, unknown[]?] { const normalized = normalizePostgresSql(sql); return params === undefined ? [normalized.text] : [normalized.text, Array.isArray(params) ? params : Object.values(params)]; }

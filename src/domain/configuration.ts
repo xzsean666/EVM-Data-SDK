@@ -11,6 +11,7 @@ export const DEFAULT_TOTAL_TIMEOUT_MS = 30_000;
 export const DEFAULT_MAX_TOTAL_ATTEMPTS = 6;
 export const DEFAULT_MAX_RANGE_RECORDS = 100_000;
 export const DEFAULT_MAX_RANGE_WINDOWS = 4_096;
+export const DEFAULT_MAX_WINDOW_BLOCKS = 999_999_999;
 
 export interface RequestPolicy {
   readonly attemptTimeoutMs?: number;
@@ -424,7 +425,7 @@ const uniswapV4Schema = uniswapV3Schema;
 const clientShapeSchema = z
   .object({
     storage: z.object({ url: z.string().trim().min(1).max(4096).optional(), busyTimeoutMs: z.number().int().min(0).max(120000).optional() }).strict().optional(),
-    sync: z.object({ reorgOverlapBlocks: z.number().int().min(0).max(100000).optional(), maxWindowBlocks: z.number().int().positive().max(10000000).optional() }).strict().optional(),
+    sync: z.object({ reorgOverlapBlocks: z.number().int().min(0).max(100000).optional(), maxWindowBlocks: z.number().int().positive().max(999_999_999).optional() }).strict().optional(),
     replay: z.object({ enabled: z.boolean().optional(), snapshotEveryEvents: z.number().int().positive().max(10000000).optional(), snapshotEveryBlocks: z.number().int().positive().max(10000000).optional(), leaseMs: z.number().int().positive().max(86400000).optional() }).strict().optional(),
     providers: z.array(providerSchema).max(32).optional().default([]),
     price: priceSchema.optional(),
@@ -451,7 +452,7 @@ export function parseClientConfiguration(input: unknown): NormalizedClientConfig
 
   const providers = parsed.data.providers.map((provider) => normalizeProvider(provider));
   const storage = normalizeStorageConfiguration(parsed.data.storage);
-  const sync = Object.freeze({ reorgOverlapBlocks: parsed.data.sync?.reorgOverlapBlocks ?? 12, maxWindowBlocks: parsed.data.sync?.maxWindowBlocks ?? 100_000 });
+  const sync = Object.freeze({ reorgOverlapBlocks: parsed.data.sync?.reorgOverlapBlocks ?? 12, maxWindowBlocks: parsed.data.sync?.maxWindowBlocks ?? DEFAULT_MAX_WINDOW_BLOCKS });
   const replay = Object.freeze({ enabled: parsed.data.replay?.enabled ?? false, snapshotEveryEvents: parsed.data.replay?.snapshotEveryEvents ?? 10_000, snapshotEveryBlocks: parsed.data.replay?.snapshotEveryBlocks ?? 10_000, leaseMs: parsed.data.replay?.leaseMs ?? 60_000 });
   const chainlink = normalizeChainlinkConfiguration(
     parsed.data.chainlink ?? {
