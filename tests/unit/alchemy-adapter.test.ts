@@ -117,13 +117,94 @@ describe("AlchemyAdapter", () => {
     expect(transport.requests[1]?.body).toMatchObject({ params: [{ toAddress: address, fromBlock: "0x28", toBlock: "0x2a" }] });
   });
 
+  it("consumes internal-native provider pages inside one fixed block range", async () => {
+    const incomingFirst = transfersResponse([
+      internalTransfer("b", "0x29", "0x1111111111111111111111111111111111111111", address, "0x2"),
+    ], "incoming-next");
+    const outgoingFirst = transfersResponse([
+      internalTransfer("a", "0x28", address, "0x3333333333333333333333333333333333333333", "0x1"),
+    ], "outgoing-next");
+    const incomingContinuation = transfersResponse([
+      internalTransfer("d", "0x2b", "0x1111111111111111111111111111111111111111", address, "0x4"),
+    ], null);
+    const outgoingContinuation = transfersResponse([
+      internalTransfer("c", "0x2a", address, "0x3333333333333333333333333333333333333333", "0x3"),
+    ], null);
+    const transport = new BothDirectionTransport(
+      incomingFirst,
+      outgoingFirst,
+      incomingContinuation,
+      outgoingContinuation,
+    );
+    let additionalRequests = 0;
+
+    const result = await new AlchemyAdapter({ transport }).getInternalNativeTransfersByBlockRange(
+      { address, startBlock: "40", endBlock: "43" },
+      context({ beforeProviderRequest: async () => { additionalRequests += 1; } }),
+    );
+
+    expect(result.range).toEqual({ startBlock: "40", endBlock: "43" });
+    expect(result.items.map((item) => item.blockNumber).sort()).toEqual(["40", "41", "42", "43"]);
+    expect(result.pages).toBe(4);
+    expect(result.upstreamRequests).toBe(4);
+    expect(additionalRequests).toBe(2);
+    expect(transport.requests).toHaveLength(4);
+    expect(transport.requests[2]?.body).toMatchObject({
+      params: [{ fromAddress: address, fromBlock: "0x28", toBlock: "0x2b", pageKey: "outgoing-next" }],
+    });
+    expect(transport.requests[3]?.body).toMatchObject({
+      params: [{ toAddress: address, fromBlock: "0x28", toBlock: "0x2b", pageKey: "incoming-next" }],
+    });
+  });
+
   it("maps directional ERC-20 transfers and preserves page key filters", async () => {
     const transport = new FixtureTransport(alchemyTransfersPage);
     const request = parseErc20TransfersRequest({ chain: 1, address, tokenAddress: "0x5555555555555555555555555555555555555555", direction: "incoming", pageSize: 2, order: "asc", startBlock: "10", endBlock: "42" });
     const result = await new AlchemyAdapter({ transport }).getErc20Transfers(request, context());
-    expect(result.items[0]).toMatchObject({ amount: "99", blockNumber: "42", tokenSymbol: "TOK", tokenDecimals: 18, timestamp: "2024-01-02T03:04:05.000Z" });
+    expect(result.items[0]).toMatchObject({ amount: "99", blockNumber: "42", logIndex: "1", tokenSymbol: "TOK", tokenDecimals: 18, timestamp: "2024-01-02T03:04:05.000Z" });
     expect(result.nextPageState).toEqual({ pageKey: "alchemy-page-key-2" });
     expect(transport.requests[0]?.body).toMatchObject({ method: "alchemy_getAssetTransfers", params: [{ category: ["erc20"], toAddress: address, contractAddresses: ["0x5555555555555555555555555555555555555555"], fromBlock: "0xa", toBlock: "0x2a", maxCount: "0x2", order: "asc" }] });
+  });
+
+  it("preserves repeated equal ERC-20 logs by their Alchemy event index", async () => {
+    const hash = `0x${"a".repeat(64)}`;
+    const repeated = (logIndex: number) => ({
+      category: "erc20",
+      uniqueId: `${hash}:log:${logIndex}`,
+      asset: "ENA",
+      from: "0x1111111111111111111111111111111111111111",
+      to: address,
+      hash,
+      blockNum: "0x144c284",
+      rawContract: {
+        address: "0x5555555555555555555555555555555555555555",
+        decimals: 18,
+        value: "0x1c0430ef885f3430780",
+      },
+    });
+    const adapter = new AlchemyAdapter({
+      transport: new FixtureTransport(transfersResponse([
+        repeated(191),
+        repeated(193),
+      ], null)),
+    });
+
+    const result = await adapter.getErc20TransfersByBlockRangeWindow(
+      normalizeErc20BlockRangeRequest({
+        chain: 1,
+        address,
+        startBlock: "21283460",
+        endBlock: "21283460",
+        direction: "incoming",
+      }),
+      context(),
+    );
+
+    expect(result.items).toHaveLength(2);
+    expect(result.items.map(({ item }) => item.logIndex)).toEqual(["191", "193"]);
+    expect(new Set(result.items.map(({ identityKey }) => identityKey))).toEqual(
+      new Set([`${hash}:log:191`, `${hash}:log:193`]),
+    );
   });
 
   it("maps Alchemy's legacy singular hexadecimal token decimal field", async () => {

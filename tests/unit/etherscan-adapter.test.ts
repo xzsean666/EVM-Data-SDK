@@ -126,6 +126,42 @@ describe("EtherscanAdapter", () => {
     expect(transport.requests[0]?.params).toMatchObject({ action: "tokentx", page: 1, offset: 1, sort: "desc" });
   });
 
+  it("preserves repeated equal ERC-20 events by their Etherscan log index", async () => {
+    const hash = `0x${"a".repeat(64)}`;
+    const row = (logIndex: string) => ({
+      blockNumber: "21283460",
+      hash,
+      transactionHash: hash,
+      logIndex,
+      from: "0x1111111111111111111111111111111111111111",
+      to: "0x2222222222222222222222222222222222222222",
+      contractAddress: "0x5555555555555555555555555555555555555555",
+      value: "8268973417726289840000",
+      tokenDecimal: "18",
+      tokenSymbol: "ENA",
+    });
+    const transport = new FixtureTransport({
+      status: "1",
+      message: "OK",
+      result: [row("191"), row("193")],
+    });
+
+    const result = await new EtherscanAdapter({ transport })
+      .getErc20TransfersByBlockRangeWindow(
+        normalizeErc20BlockRangeRequest({
+          chain: 1,
+          address: "0x2222222222222222222222222222222222222222",
+          startBlock: "21283460",
+          endBlock: "21283460",
+          direction: "incoming",
+        }),
+        context(),
+      );
+
+    expect(result.items).toHaveLength(2);
+    expect(result.items.map(({ item }) => item.logIndex)).toEqual(["191", "193"]);
+  });
+
   it("consumes all Etherscan physical pages for one multi-block range", async () => {
     const fullPage = {
       status: "1",

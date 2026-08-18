@@ -24,7 +24,11 @@ export function mapAlchemyTransfer(value: AlchemyTransfer, chain: ChainDefinitio
     chainId: chain.chainId,
     transactionHash: value.hash.toLowerCase(),
     transactionIndex: null,
-    logIndex: null,
+    // alchemy_getAssetTransfers does not expose logIndex as a standalone
+    // field, but its documented uniqueId is `<txHash>:log:<logIndex>` for
+    // ERC-20 events. Preserve that real event identity so repeated equal
+    // Transfer logs in one transaction are not collapsed by durable storage.
+    logIndex: alchemyTransferLogIndex(value),
     blockNumber: hexQuantityToDecimal(value.blockNum),
     timestamp: mapTimestamp(value.metadata?.blockTimestamp),
     tokenAddress: tokenAddress.toLowerCase(),
@@ -40,6 +44,19 @@ export function mapAlchemyTransfer(value: AlchemyTransfer, chain: ChainDefinitio
     amount: hexQuantityToDecimal(amount),
     provider: "alchemy",
   };
+}
+
+function alchemyTransferLogIndex(value: AlchemyTransfer): string | null {
+  const prefix = `${value.hash.toLowerCase()}:log:`;
+  const uniqueId = value.uniqueId.toLowerCase();
+  if (!uniqueId.startsWith(prefix)) return null;
+  const suffix = uniqueId.slice(prefix.length);
+  if (!/^(?:0|[1-9][0-9]*)$/.test(suffix)) return null;
+  try {
+    return BigInt(suffix).toString(10);
+  } catch {
+    return null;
+  }
 }
 
 function mapTokenDecimals(

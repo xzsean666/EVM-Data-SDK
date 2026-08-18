@@ -57,11 +57,17 @@ describe("persistent EVM sync and replay", () => {
   it("uses deterministic field hashes when provider identities omit log or trace indexes", async () => {
     const storage = new SqliteStorageAdapter(":memory:"); await storage.initialize();
     const first = { ...transfer("10", "1"), logIndex: null };
-    const second = { ...transfer("10", "2", false), logIndex: null };
+    // Some APIs omit logIndex even when one transaction contains repeated,
+    // byte-for-byte equal Transfer events. A complete range must retain both.
+    const second = { ...first };
     const fake = { token: { getErc20TransfersByBlockRange: async () => ({ items: [first, second], range: { startBlock: "10", endBlock: "10" }, providers: ["etherscan"] }) }, address: {}, chain: {} } as any;
     const sync = new SyncService({ storage, token: fake.token, address: fake.address, chain: fake.chain, resolveChain: () => ({ chainId: 1 }) });
     await sync.update({ chain: "ethereum", address, dataset: "erc20", fromBlock: "10", toBlock: "10" });
-    expect(storage.all("SELECT identity FROM sdk_erc20_transfers")).toHaveLength(2);
+    const firstPass = storage.all<{ identity: string }>("SELECT identity FROM sdk_erc20_transfers ORDER BY identity");
+    expect(firstPass).toHaveLength(2);
+    expect(firstPass[1]?.identity).toContain(":occurrence:1");
+    await sync.recollect({ chain: "ethereum", address, dataset: "erc20", fromBlock: "10", toBlock: "10", strategy: "replace" });
+    expect(storage.all("SELECT identity FROM sdk_erc20_transfers")).toEqual(firstPass);
     await storage.close();
   });
 
@@ -127,6 +133,38 @@ describe("persistent EVM sync and replay", () => {
     const sync = new SyncService({ storage, token: fake.token, address: fake.address, chain: fake.chain, maxWindowBlocks: 2, resolveChain: () => ({ chainId: 1 }) });
     const result = await sync.update({ chain: "ethereum", address, dataset: "erc20", fromBlock: "10", toBlock: "15" });
     expect(requested).toEqual(["10", "11"]); expect(result.targetBlock).toBe("15"); expect(result.nextBlock).toBe("12"); expect(result.hasNext).toBe(true);
+    await storage.close();
+  });
+
+  it("refreshes an implicit target when the chain head advances", async () => {
+    const storage = new SqliteStorageAdapter(":memory:"); await storage.initialize();
+    const requested: string[][] = []; let head = "11";
+    const fake = {
+      token: { getErc20TransfersByBlockRange: async (request: any) => { requested.push([request.startBlock, request.endBlock]); return { items: [], range: { startBlock: request.startBlock, endBlock: request.endBlock }, providers: ["etherscan"] }; } },
+      address: {},
+      chain: { getLatestBlockNumber: async () => ({ blockNumber: head }) },
+    } as any;
+    const sync = new SyncService({ storage, token: fake.token, address: fake.address, chain: fake.chain, reorgOverlapBlocks: 0, resolveChain: () => ({ chainId: 1 }) });
+
+    const first = await sync.update({ chain: "ethereum", address, dataset: "erc20", fromBlock: "10" });
+    head = "13";
+    const second = await sync.update({ chain: "ethereum", address, dataset: "erc20" });
+
+    expect(first).toMatchObject({ targetBlock: "11", nextBlock: "12", hasNext: false });
+    expect(second).toMatchObject({ targetBlock: "13", nextBlock: "14", hasNext: false });
+    expect(requested).toEqual([["10", "11"], ["12", "13"]]);
+    await storage.close();
+  });
+
+  it("computes hasNext from the committed cursor after an overlap update", async () => {
+    const storage = new SqliteStorageAdapter(":memory:"); await storage.initialize();
+    const fake = { token: { getErc20TransfersByBlockRange: async (request: any) => ({ items: [], range: { startBlock: request.startBlock, endBlock: request.endBlock }, providers: ["etherscan"] }) }, address: {}, chain: {} } as any;
+    const sync = new SyncService({ storage, token: fake.token, address: fake.address, chain: fake.chain, resolveChain: () => ({ chainId: 1 }) });
+    await sync.update({ chain: "ethereum", address, dataset: "erc20", fromBlock: "10", toBlock: "20" });
+
+    const result = await sync.update({ chain: "ethereum", address, dataset: "erc20", fromBlock: "13", toBlock: "18", maxBlocks: "3" });
+
+    expect(result).toMatchObject({ targetBlock: "18", nextBlock: "21", hasNext: false });
     await storage.close();
   });
 

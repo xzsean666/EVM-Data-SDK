@@ -43,7 +43,11 @@ export class SyncService {
     if (scope !== undefined && explicitStart !== null && BigInt(explicitStart) > BigInt(scope.next_block)) {
       throw new EvmDataError({ code: "SYNC_SCOPE_CONFLICT", message: "Explicit fromBlock starts after the persisted scope cursor.", retryable: false, chainId: identity.chainId });
     }
-    const target = normalizeBlock(input.toBlock ?? scope?.target_block ?? (await this.deps.chain.getLatestBlockNumber({ chain: input.chain, ...(input.signal === undefined ? {} : { signal: input.signal }) })).blockNumber);
+    // A stored target is only the high-water mark sampled for an earlier
+    // update. When the caller omits toBlock, sample the chain head again so a
+    // scope that previously caught up can discover newly produced blocks.
+    // The sampled value remains fixed for this update call.
+    const target = normalizeBlock(input.toBlock ?? (await this.deps.chain.getLatestBlockNumber({ chain: input.chain, ...(input.signal === undefined ? {} : { signal: input.signal }) })).blockNumber);
     if (explicitStart === null && BigInt(cursor) > BigInt(target)) return this.result(input, identity, cursor, target, null, 0, 0, 0, null, "completed");
     const start = explicitStart ?? overlapStart(cursor, this.deps.reorgOverlapBlocks ?? 12);
     if (BigInt(start) > BigInt(target)) return this.result(input, identity, start, target, null, 0, 0, 0, null, "completed");
@@ -66,15 +70,16 @@ export class SyncService {
     const runId = randomUUID();
     let deleted = 0;
     let replayStatus: "queued" | "running" | "not_requested" = "not_requested";
+    let committedNext = (BigInt(fetched.end) + 1n).toString();
     const written = await this.deps.storage.transaction(async () => {
       if (strategy === "replace") deleted = (await this.deps.storage.run(`DELETE FROM ${table} WHERE chain_id=? AND address=? AND CAST(block_number AS INTEGER)>=CAST(? AS INTEGER) AND CAST(block_number AS INTEGER)<=CAST(? AS INTEGER) AND ingestion_source=?`, [identity.chainId, identity.address, from, to, "sdk"])).changes;
-      let count = 0; for (const item of fetched.items) { if (!await this.factExists(input.dataset, identity, item)) count += await this.writeFact(input.dataset, identity, item, fetched.provider); else await this.writeFact(input.dataset, identity, item, fetched.provider); }
+      const count = await this.persistFacts(input.dataset, identity, fetched.items, fetched.provider);
       await this.invalidateReplay(identity, from);
-      replayStatus = await this.commitScope(identity, from, to, fetched, runId, input.replay === true, count, fetched.items.length - count);
+      const committed = await this.commitScope(identity, from, to, fetched, runId, input.replay === true, count, fetched.items.length - count);
+      replayStatus = committed.replayStatus;
+      committedNext = committed.nextBlock;
       return count;
     });
-    const persisted = await this.deps.storage.get<{ next_block: string }>("SELECT next_block FROM sdk_sync_scopes WHERE scope_key=?", [identity.key]);
-    const committedNext = persisted?.next_block ?? (BigInt(fetched.end) + 1n).toString();
     const base = this.result(input, identity, committedNext, to, { startBlock: fetched.start, endBlock: fetched.end }, fetched.items.length, written, fetched.items.length - written, fetched.provider, "completed", runId, BigInt(committedNext) <= BigInt(to));
     return { ...base, operation: "recollect", strategy, dryRun: false, recordsDeleted: deleted, affectedReplayFromBlock: from, replay: { ...base.replay, status: replayStatus } };
   }
@@ -125,9 +130,9 @@ export class SyncService {
         throw new EvmDataError({ code: "PROVIDER_STALLED", message: "Provider did not cover the persisted cursor boundary.", retryable: true, provider: fetched.provider, chainId: identity.chainId });
       }
       let replayStatus: "queued" | "running" | "not_requested" = "not_requested";
-      const written = await this.deps.storage.transaction(async () => { let count = 0; if (BigInt(start) < BigInt(cursorStart)) { await this.deps.storage.run(`DELETE FROM ${tableFor(input.dataset)} WHERE chain_id=? AND address=? AND CAST(block_number AS INTEGER)>=CAST(? AS INTEGER) AND CAST(block_number AS INTEGER)<=CAST(? AS INTEGER) AND ingestion_source=?`, [identity.chainId, identity.address, start, fetched.end, "sdk"]); await this.invalidateReplay(identity, start); } for (const item of fetched.items) { if (!await this.factExists(input.dataset, identity, item)) count += await this.writeFact(input.dataset, identity, item, fetched.provider); else await this.writeFact(input.dataset, identity, item, fetched.provider); } replayStatus = await this.commitScope(identity, start, overallTarget, fetched, runId, input.replay === true, count, fetched.items.length - count); return count; });
-      const next = (BigInt(fetched.end) + 1n).toString();
-      return this.result(input, identity, next, overallTarget, { startBlock: fetched.start, endBlock: fetched.end }, fetched.items.length, written, fetched.items.length - written, fetched.provider, input.replay ? ((replayStatus as string) === "running" ? "history_replay_running" : "history_replay_queued") : "completed", runId, BigInt(next) <= BigInt(overallTarget), replayStatus);
+      let committedNext = (BigInt(fetched.end) + 1n).toString();
+      const written = await this.deps.storage.transaction(async () => { if (BigInt(start) < BigInt(cursorStart)) { await this.deps.storage.run(`DELETE FROM ${tableFor(input.dataset)} WHERE chain_id=? AND address=? AND CAST(block_number AS INTEGER)>=CAST(? AS INTEGER) AND CAST(block_number AS INTEGER)<=CAST(? AS INTEGER) AND ingestion_source=?`, [identity.chainId, identity.address, start, fetched.end, "sdk"]); await this.invalidateReplay(identity, start); } const count = await this.persistFacts(input.dataset, identity, fetched.items, fetched.provider); const committed = await this.commitScope(identity, start, overallTarget, fetched, runId, input.replay === true, count, fetched.items.length - count); replayStatus = committed.replayStatus; committedNext = committed.nextBlock; return count; });
+      return this.result(input, identity, committedNext, overallTarget, { startBlock: fetched.start, endBlock: fetched.end }, fetched.items.length, written, fetched.items.length - written, fetched.provider, input.replay ? ((replayStatus as string) === "running" ? "history_replay_running" : "history_replay_queued") : "completed", runId, BigInt(committedNext) <= BigInt(overallTarget), replayStatus);
     } catch (error) {
       const safeError = error instanceof EvmDataError ? error : new EvmDataError({ code: "PROVIDER_UNAVAILABLE", message: "The configured data provider is unavailable.", retryable: true, chainId: identity.chainId, cause: error });
       await this.deps.storage.run("UPDATE sdk_sync_scopes SET status=?,updated_at=? WHERE scope_key=?", ["failed", new Date().toISOString(), identity.key]);
@@ -136,7 +141,7 @@ export class SyncService {
     }
   }
 
-  private async commitScope(identity: Identity, start: string, target: string, fetched: FetchedWindow, runId: string, replay = false, recordsWritten = fetched.items.length, duplicates = 0): Promise<"queued" | "running" | "not_requested"> {
+  private async commitScope(identity: Identity, start: string, target: string, fetched: FetchedWindow, runId: string, replay = false, recordsWritten = fetched.items.length, duplicates = 0): Promise<{ nextBlock: string; replayStatus: "queued" | "running" | "not_requested" }> {
     const current = await this.deps.storage.get<{ next_block: string; last_complete_block: string | null }>("SELECT next_block,last_complete_block FROM sdk_sync_scopes WHERE scope_key=?", [identity.key]);
     const fetchedNext = BigInt(fetched.end) + 1n;
     const next = current === undefined || fetchedNext > BigInt(current.next_block) ? fetchedNext.toString() : current.next_block;
@@ -145,7 +150,8 @@ export class SyncService {
     await this.deps.storage.run("UPDATE sdk_sync_scopes SET next_block=?,last_complete_block=?,target_block=?,status=?,updated_at=? WHERE scope_key=?", [next, lastComplete, target, "idle", new Date().toISOString(), identity.key]);
     await this.deps.storage.run("INSERT INTO sdk_sync_runs(run_id,scope_key,requested_from,requested_to,covered_from,covered_to,status,records_seen,records_written,duplicates,provider,error_code,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", [runId, identity.key, start, target, fetched.start, fetched.end, "completed", fetched.items.length, recordsWritten, duplicates, fetched.provider, null, new Date().toISOString()]);
     await this.deps.storage.run("INSERT OR IGNORE INTO sdk_sync_windows(scope_key,start_block,end_block,run_id,committed_at) VALUES(?,?,?,?,?)", [identity.key, fetched.start, fetched.end, runId, new Date().toISOString()]);
-    return replay ? await this.enqueueReplay(identity, fetched.start, fetched.end) : "not_requested";
+    const replayStatus = replay ? await this.enqueueReplay(identity, fetched.start, fetched.end) : "not_requested";
+    return { nextBlock: next, replayStatus };
   }
 
   private async enqueueReplay(identity: Identity, from: string, to: string): Promise<"queued" | "running"> {
@@ -167,15 +173,29 @@ export class SyncService {
     const result = await this.deps.address.getInternalNativeTransfersByBlockRange({ chain, address, startBlock: start, endBlock: end, ...options }); return { items: [...result.items], start: result.range.startBlock, end: result.range.endBlock, provider: result.provider };
   }
 
-  private async writeFact(dataset: SyncDataset, identity: Identity, item: any, provider: string): Promise<number> {
+  private async persistFacts(dataset: SyncDataset, identity: Identity, items: readonly any[], provider: string): Promise<number> {
+    const factIdentities = dataset === "erc20" ? erc20Identities(identity.chainId, items) : [];
+    let count = 0;
+    for (const [index, item] of items.entries()) {
+      const factIdentity = factIdentities[index];
+      if (!await this.factExists(dataset, identity, item, factIdentity)) {
+        count += await this.writeFact(dataset, identity, item, provider, factIdentity);
+      } else {
+        await this.writeFact(dataset, identity, item, provider, factIdentity);
+      }
+    }
+    return count;
+  }
+
+  private async writeFact(dataset: SyncDataset, identity: Identity, item: any, provider: string, exactIdentity?: string): Promise<number> {
     const source = "sdk";
-    if (dataset === "erc20") { const factIdentity = erc20Identity(identity.chainId, item); return (await this.deps.storage.run("INSERT OR REPLACE INTO sdk_erc20_transfers(identity,chain_id,address,token_address,tx_hash,transaction_index,log_index,block_number,timestamp,token_name,token_symbol,token_decimals,from_address,to_address,amount,provider,ingestion_source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [factIdentity, identity.chainId, identity.address, item.tokenAddress.toLowerCase(), item.transactionHash, item.transactionIndex, item.logIndex, item.blockNumber, item.timestamp, item.tokenName, item.tokenSymbol, item.tokenDecimals, item.from.toLowerCase(), item.to.toLowerCase(), item.amount, provider, source])).changes; }
+    if (dataset === "erc20") { const factIdentity = exactIdentity ?? erc20Identity(identity.chainId, item); return (await this.deps.storage.run("INSERT OR REPLACE INTO sdk_erc20_transfers(identity,chain_id,address,token_address,tx_hash,transaction_index,log_index,block_number,timestamp,token_name,token_symbol,token_decimals,from_address,to_address,amount,provider,ingestion_source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [factIdentity, identity.chainId, identity.address, item.tokenAddress.toLowerCase(), item.transactionHash, item.transactionIndex, item.logIndex, item.blockNumber, item.timestamp, item.tokenName, item.tokenSymbol, item.tokenDecimals, item.from.toLowerCase(), item.to.toLowerCase(), item.amount, provider, source])).changes; }
     const factIdentity = dataset === "internal_native" ? internalIdentity(identity.chainId, item) : `${identity.chainId}:${item.transactionHash ?? item.hash}`;
     if (dataset === "transactions") return (await this.deps.storage.run("INSERT OR REPLACE INTO sdk_transactions(identity,chain_id,address,tx_hash,block_number,payload,provider,ingestion_source) VALUES(?,?,?,?,?,?,?,?)", [factIdentity, identity.chainId, identity.address, item.hash, item.blockNumber, JSON.stringify(item), provider, source])).changes;
     return (await this.deps.storage.run("INSERT OR REPLACE INTO sdk_internal_native_transfers(identity,chain_id,address,tx_hash,trace_id,block_number,payload,provider,ingestion_source) VALUES(?,?,?,?,?,?,?,?,?)", [factIdentity, identity.chainId, identity.address, item.transactionHash, item.traceId, item.blockNumber, JSON.stringify(item), provider, source])).changes;
   }
 
-  private async factExists(dataset: SyncDataset, identity: Identity, item: any): Promise<boolean> { const factIdentity = dataset === "erc20" ? erc20Identity(identity.chainId, item) : dataset === "internal_native" ? internalIdentity(identity.chainId, item) : `${identity.chainId}:${item.transactionHash ?? item.hash}`; return (await this.deps.storage.get("SELECT 1 AS present FROM " + tableFor(dataset) + " WHERE identity=? LIMIT 1", [factIdentity])) !== undefined; }
+  private async factExists(dataset: SyncDataset, identity: Identity, item: any, exactIdentity?: string): Promise<boolean> { const factIdentity = exactIdentity ?? (dataset === "erc20" ? erc20Identity(identity.chainId, item) : dataset === "internal_native" ? internalIdentity(identity.chainId, item) : `${identity.chainId}:${item.transactionHash ?? item.hash}`); return (await this.deps.storage.get("SELECT 1 AS present FROM " + tableFor(dataset) + " WHERE identity=? LIMIT 1", [factIdentity])) !== undefined; }
 
   private identity(input: { chain: ChainReference; address: string; dataset?: SyncDataset }): Identity { const chainId = this.deps.resolveChain(input.chain).chainId; const address = input.address.toLowerCase(); return { chainId, address, key: `${chainId}:${address}:${input.dataset ?? ""}` }; }
   private async replayCoverage(identity: Identity): Promise<{ asOfBlock: string | null; revision: string | null }> { const row = await this.deps.storage.get<{ as_of_block: string | null; revision: string }>("SELECT as_of_block,revision FROM sdk_replay_current WHERE chain_id=? AND address=?", [identity.chainId, identity.address]); return { asOfBlock: row?.as_of_block ?? null, revision: row?.revision ?? null }; }
@@ -191,6 +211,18 @@ function boundedEnd(start: string, target: string, maxWindowBlocks: number): str
 function parsePositiveWindow(value: string): number { if (!/^\d+$/.test(value)) throw new EvmDataError({ code: "SYNC_CURSOR_INVALID", message: "maxBlocks must be a positive decimal string.", retryable: false }); const parsed = Number(value); if (!Number.isSafeInteger(parsed) || parsed < 1) throw new EvmDataError({ code: "SYNC_CURSOR_INVALID", message: "maxBlocks must be a positive decimal string.", retryable: false }); return parsed; }
 function errorCode(error: unknown): string { return error instanceof EvmDataError ? error.code : "PROVIDER_UNAVAILABLE"; }
 function erc20Identity(chainId: number, item: any): string { const token = String(item.tokenAddress ?? "").toLowerCase(); const tx = String(item.transactionHash ?? ""); if (item.logIndex !== undefined && item.logIndex !== null) return `${chainId}:${tx}:${item.logIndex}:${token}`; return `${chainId}:${tx}:hash:${fieldHash([token, item.transactionIndex ?? null, item.blockNumber ?? null, item.timestamp ?? null, String(item.from ?? "").toLowerCase(), String(item.to ?? "").toLowerCase(), item.amount ?? null])}`; }
+function erc20Identities(chainId: number, items: readonly any[]): string[] {
+  const occurrences = new Map<string, number>();
+  return items.map((item) => {
+    const base = erc20Identity(chainId, item);
+    if (item.logIndex !== undefined && item.logIndex !== null) return base;
+    const occurrence = occurrences.get(base) ?? 0;
+    occurrences.set(base, occurrence + 1);
+    // Keep the first identity backward-compatible. Further occurrences are
+    // stable within the provider's complete, ordered closed-range result.
+    return occurrence === 0 ? base : `${base}:occurrence:${occurrence}`;
+  });
+}
 function internalIdentity(chainId: number, item: any): string { const tx = String(item.transactionHash ?? item.hash ?? ""); if (item.traceId !== undefined && item.traceId !== null) return `${chainId}:${tx}:${item.traceId}`; return `${chainId}:${tx}:hash:${fieldHash([item.blockNumber ?? null, item.timestamp ?? null, item.type ?? null, item.status ?? null, item.value ?? null, String(item.from ?? "").toLowerCase(), String(item.to ?? "").toLowerCase()])}`; }
 function fieldHash(value: unknown): string { return createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 32); }
 function overlapStart(cursor: string, overlap: number): string { const value = BigInt(cursor) - BigInt(Math.max(0, overlap)); return value > 0n ? value.toString() : "0"; }

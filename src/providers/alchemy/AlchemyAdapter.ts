@@ -61,6 +61,11 @@ interface AlchemyMappedTransfer {
   readonly item: Erc20Transfer;
 }
 
+interface AlchemyInternalTransferPage {
+  readonly transfers: readonly AlchemyTransfer[];
+  readonly nextPageKey: string | null;
+}
+
 export class AlchemyAdapter implements DataProviderAdapter {
   readonly name = "alchemy" as const;
   private readonly transport: HttpTransport;
@@ -153,19 +158,96 @@ export class AlchemyAdapter implements DataProviderAdapter {
     // Query both directions. Alchemy's `fromAddress` filter misses native
     // deposits whose value reaches the wallet through an internal CALL (for
     // example Base/OP Stack type-0x7e deposits).
-    const baseFilter = { category: ["internal"], withMetadata: true, order: "asc", maxCount: "0x3e8", fromBlock: decimalToHex(request.startBlock), toBlock: decimalToHex(request.endBlock) };
-    const [outgoingBody, incomingBody] = await Promise.all([
-      this.call("alchemy_getAssetTransfers", [{ ...baseFilter, fromAddress: request.address }], context),
-      this.call("alchemy_getAssetTransfers", [{ ...baseFilter, toAddress: request.address }], context),
+    // Provider page keys are consumed only inside this fixed closed range.
+    // SyncService persists the range's end block, never provider pagination.
+    const [outgoing, incoming] = await Promise.all([
+      this.getCompleteInternalNativeRange(request, context, "outgoing"),
+      this.getCompleteInternalNativeRange(request, context, "incoming"),
     ]);
-    const outgoing = alchemyTransfersResultSchema.safeParse(parseResult(outgoingBody, context));
-    const incoming = alchemyTransfersResultSchema.safeParse(parseResult(incomingBody, context));
-    if (!outgoing.success) throw invalidResponse(context, outgoing.error);
-    if (!incoming.success) throw invalidResponse(context, incoming.error);
-    const items: InternalNativeTransfer[] = [...outgoing.data.transfers, ...incoming.data.transfers]
-      .map((item): InternalNativeTransfer => ({ chainId: context.chain.chainId, transactionHash: item.hash.toLowerCase(), traceId: item.uniqueId, blockNumber: hexQuantityToDecimal(item.blockNum), timestamp: item.metadata?.blockTimestamp ?? null, from: item.from.toLowerCase(), to: item.to.toLowerCase(), value: item.rawContract.value ? hexQuantityToDecimal(item.rawContract.value) : "0", type: "internal", status: "unknown", provider: "alchemy" }))
-      .filter((item, index, all) => all.findIndex((candidate) => `${candidate.transactionHash}:${candidate.traceId ?? ""}:${candidate.from}:${candidate.to}:${candidate.value}:${candidate.blockNumber}` === `${item.transactionHash}:${item.traceId ?? ""}:${item.from}:${item.to}:${item.value}:${item.blockNumber}`) === index);
-    return { chainId: context.chain.chainId, address: request.address, range: { startBlock: request.startBlock, endBlock: request.endBlock }, items, provider: "alchemy", pages: 1, upstreamRequests: 1 };
+    const unique = new Map<string, InternalNativeTransfer>();
+    for (const item of [...outgoing.transfers, ...incoming.transfers].map((transfer) => this.mapInternalNativeTransfer(transfer, context))) {
+      const key = `${item.transactionHash}:${item.traceId ?? ""}:${item.from}:${item.to}:${item.value}:${item.blockNumber}`;
+      if (!unique.has(key)) unique.set(key, item);
+    }
+    const items = [...unique.values()];
+    const pages = outgoing.pages + incoming.pages;
+    return { chainId: context.chain.chainId, address: request.address, range: { startBlock: request.startBlock, endBlock: request.endBlock }, items, provider: "alchemy", pages, upstreamRequests: pages };
+  }
+
+  private async getCompleteInternalNativeRange(
+    request: { readonly address: string; readonly startBlock: string; readonly endBlock: string },
+    context: ProviderAttemptContext,
+    direction: AlchemyStreamDirection,
+  ): Promise<{ readonly transfers: readonly AlchemyTransfer[]; readonly pages: number }> {
+    const transfers: AlchemyTransfer[] = [];
+    let pageKey: string | null = null;
+    for (let page = 0; page < ALCHEMY_MAX_RANGE_PAGES; page += 1) {
+      if (page > 0) await context.beforeProviderRequest?.();
+      const result = await this.getInternalNativeRangePage(request, context, direction, pageKey);
+      transfers.push(...result.transfers);
+      if (transfers.length > 100_000) {
+        throw new EvmDataError({
+          code: "RANGE_RESULT_TOO_LARGE",
+          message: "Alchemy internal-native block-range result exceeds the SDK record limit.",
+          retryable: false,
+          provider: this.name,
+          chainId: context.chain.chainId,
+        });
+      }
+      if (result.nextPageKey === null) return { transfers, pages: page + 1 };
+      if (result.nextPageKey === pageKey) {
+        throw invalidResponse(context, new Error("Alchemy returned the same internal-native page key twice."));
+      }
+      pageKey = result.nextPageKey;
+    }
+    throw new EvmDataError({
+      code: "INVALID_PROVIDER_RESPONSE",
+      message: "Alchemy internal-native block-range pagination exceeded the SDK page limit.",
+      retryable: false,
+      provider: this.name,
+      chainId: context.chain.chainId,
+    });
+  }
+
+  private async getInternalNativeRangePage(
+    request: { readonly address: string; readonly startBlock: string; readonly endBlock: string },
+    context: ProviderAttemptContext,
+    direction: AlchemyStreamDirection,
+    pageKey: string | null,
+  ): Promise<AlchemyInternalTransferPage> {
+    const filter = {
+      category: ["internal"],
+      withMetadata: true,
+      order: "asc",
+      maxCount: "0x3e8",
+      fromBlock: decimalToHex(request.startBlock),
+      toBlock: decimalToHex(request.endBlock),
+      ...(direction === "incoming" ? { toAddress: request.address } : { fromAddress: request.address }),
+      ...(pageKey === null ? {} : { pageKey }),
+    };
+    const body = await this.call("alchemy_getAssetTransfers", [filter], context);
+    const result = alchemyTransfersResultSchema.safeParse(parseResult(body, context));
+    if (!result.success) throw invalidResponse(context, result.error);
+    return {
+      transfers: result.data.transfers,
+      nextPageKey: normalizeNextPageKey(result.data.pageKey),
+    };
+  }
+
+  private mapInternalNativeTransfer(item: AlchemyTransfer, context: ProviderAttemptContext): InternalNativeTransfer {
+    return {
+      chainId: context.chain.chainId,
+      transactionHash: item.hash.toLowerCase(),
+      traceId: item.uniqueId,
+      blockNumber: hexQuantityToDecimal(item.blockNum),
+      timestamp: item.metadata?.blockTimestamp ?? null,
+      from: item.from.toLowerCase(),
+      to: item.to.toLowerCase(),
+      value: item.rawContract.value ? hexQuantityToDecimal(item.rawContract.value) : "0",
+      type: "internal",
+      status: "unknown",
+      provider: "alchemy",
+    };
   }
 
   /** Current inventory discovery only; callers must still query an explicit
