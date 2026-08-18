@@ -267,8 +267,110 @@ describe("persistent EVM sync and replay", () => {
     const holding = state.balances.find((b) => b.tokenAddress.toLowerCase() === aToken);
 
     // Initial incoming 1.0, 0x0 internal interest mint in withdrawal tx is ignored from external incoming, total outgoing = 1.05
+    expect(holding?.amount).toBe("0");
     expect(holding?.incoming).toBe("1000000000000000000");
     expect(holding?.outgoing).toBe("1050000000000000000");
+    expect(state.warnings).toHaveLength(0);
+    await storage.close();
+  });
+
+  it("deduplicates cross-source native transfer legs across sdk_transactions and sdk_internal_native_transfers", async () => {
+    const storage = new SqliteStorageAdapter(":memory:"); await storage.initialize();
+    const txHash = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const user = address;
+    const recipient = "0x3333333333333333333333333333333333333333";
+    const oneEth = "1000000000000000000";
+
+    // 1. Transaction stream records native transfer of 1 ETH
+    const txPayload = JSON.stringify({
+      hash: txHash,
+      blockNumber: "100",
+      from: user,
+      to: recipient,
+      value: oneEth,
+    });
+    await storage.run(
+      "INSERT INTO sdk_transactions(identity,chain_id,address,tx_hash,block_number,payload,provider,ingestion_source) VALUES(?,?,?,?,?,?,?,?)",
+      ["tx-1", 1, user, txHash, "100", txPayload, "etherscan", "sdk"]
+    );
+
+    // 2. Internal native stream also records the same native transfer leg
+    const internalPayload = JSON.stringify({
+      transactionHash: txHash,
+      blockNumber: "100",
+      from: user,
+      to: recipient,
+      value: oneEth,
+      traceId: "call_0",
+    });
+    await storage.run(
+      "INSERT INTO sdk_internal_native_transfers(identity,chain_id,address,tx_hash,trace_id,block_number,payload,provider,ingestion_source) VALUES(?,?,?,?,?,?,?,?,?)",
+      ["internal-1", 1, user, txHash, "call_0", "100", internalPayload, "etherscan", "sdk"]
+    );
+
+    const history = new HistoryService({ storage, resolveChain: () => ({ chainId: 1 }) });
+    await history.replay({ chain: "ethereum", address: user });
+
+    const state = await history.getUserStateAtBlock({ chain: "ethereum", address: user, blockNumber: "100" });
+    // Native out should be 1 ETH, NOT doubled to 2 ETH
+    expect(state.nativeOut).toBe(oneEth);
+    expect(state.transactionCount).toBe(1);
+    await storage.close();
+  });
+
+  it("preserves distinct same-source internal native traces when deduplicating cross-source overlap", async () => {
+    const storage = new SqliteStorageAdapter(":memory:"); await storage.initialize();
+    const txHash = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const user = address;
+    const recipient = "0x4444444444444444444444444444444444444444";
+    const oneEth = "1000000000000000000";
+
+    // 1. Transaction stream has 1 leg of 1 ETH
+    const txPayload = JSON.stringify({
+      hash: txHash,
+      blockNumber: "200",
+      from: user,
+      to: recipient,
+      value: oneEth,
+    });
+    await storage.run(
+      "INSERT INTO sdk_transactions(identity,chain_id,address,tx_hash,block_number,payload,provider,ingestion_source) VALUES(?,?,?,?,?,?,?,?)",
+      ["tx-2", 1, user, txHash, "200", txPayload, "etherscan", "sdk"]
+    );
+
+    // 2. Internal native stream has TWO distinct traces of 1 ETH each (e.g. split call traces)
+    const internalPayload1 = JSON.stringify({
+      transactionHash: txHash,
+      blockNumber: "200",
+      from: user,
+      to: recipient,
+      value: oneEth,
+      traceId: "call_0_0",
+    });
+    const internalPayload2 = JSON.stringify({
+      transactionHash: txHash,
+      blockNumber: "200",
+      from: user,
+      to: recipient,
+      value: oneEth,
+      traceId: "call_0_1",
+    });
+    await storage.run(
+      "INSERT INTO sdk_internal_native_transfers(identity,chain_id,address,tx_hash,trace_id,block_number,payload,provider,ingestion_source) VALUES(?,?,?,?,?,?,?,?,?)",
+      ["internal-2a", 1, user, txHash, "call_0_0", "200", internalPayload1, "etherscan", "sdk"]
+    );
+    await storage.run(
+      "INSERT INTO sdk_internal_native_transfers(identity,chain_id,address,tx_hash,trace_id,block_number,payload,provider,ingestion_source) VALUES(?,?,?,?,?,?,?,?,?)",
+      ["internal-2b", 1, user, txHash, "call_0_1", "200", internalPayload2, "etherscan", "sdk"]
+    );
+
+    const history = new HistoryService({ storage, resolveChain: () => ({ chainId: 1 }) });
+    await history.replay({ chain: "ethereum", address: user });
+
+    const state = await history.getUserStateAtBlock({ chain: "ethereum", address: user, blockNumber: "200" });
+    // Total should be 2 ETH (1 from tx, and the remaining 1 non-overlapping trace from internal)
+    expect(state.nativeOut).toBe("2000000000000000000");
+    expect(state.transactionCount).toBe(1);
     await storage.close();
   });
 });

@@ -130,7 +130,7 @@ export class AlchemyAdapter implements DataProviderAdapter {
     pageKey: string | null,
   ): Promise<{ items: Transaction[]; nextPageKey: string | null }> {
     const filter: Record<string, unknown> = {
-      category: ["external", "internal"], withMetadata: true,
+      category: ["external"], withMetadata: true,
       order: request.order, maxCount: `0x${Math.min(request.pageSize, ALCHEMY_MAX_PAGE_SIZE).toString(16)}`,
       ...(direction === "incoming" ? { toAddress: request.address } : direction === "outgoing" ? { fromAddress: request.address } : {}),
       ...(request.startBlock === null ? {} : { fromBlock: decimalToHex(request.startBlock) }),

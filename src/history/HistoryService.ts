@@ -45,8 +45,10 @@ export class HistoryService {
 
   private async facts(id: Identity): Promise<Fact[]> {
     const transfers = (await this.deps.storage.all<any>("SELECT * FROM sdk_erc20_transfers WHERE chain_id=? AND address=?", [id.chainId, id.address])).map((row: any) => ({ block: BigInt(row.block_number), tx: row.tx_hash, index: decimalIndex(row.log_index), identity: row.identity, kind: "erc20" as const, row }));
-    const transactions = (await this.deps.storage.all<any>("SELECT * FROM sdk_transactions WHERE chain_id=? AND address=?", [id.chainId, id.address])).map((row: any) => ({ block: BigInt(row.block_number), tx: row.tx_hash, index: decimalIndex(row.transaction_index), identity: row.identity, kind: "tx" as const, row }));
-    const internals = (await this.deps.storage.all<any>("SELECT * FROM sdk_internal_native_transfers WHERE chain_id=? AND address=?", [id.chainId, id.address])).map((row: any) => ({ block: BigInt(row.block_number), tx: row.tx_hash, index: decimalIndex(row.trace_id), identity: row.identity, kind: "internal" as const, row }));
+    const rawTransactions = (await this.deps.storage.all<any>("SELECT * FROM sdk_transactions WHERE chain_id=? AND address=?", [id.chainId, id.address])).map((row: any) => ({ block: BigInt(row.block_number), tx: row.tx_hash, index: decimalIndex(row.transaction_index), identity: row.identity, kind: "tx" as const, row }));
+    const rawInternals = (await this.deps.storage.all<any>("SELECT * FROM sdk_internal_native_transfers WHERE chain_id=? AND address=?", [id.chainId, id.address])).map((row: any) => ({ block: BigInt(row.block_number), tx: row.tx_hash, index: decimalIndex(row.trace_id), identity: row.identity, kind: "internal" as const, row }));
+
+    const { transactions, internals } = deduplicateCrossSourceNativeFacts(rawTransactions, rawInternals);
 
     const wrappedNative = WRAPPED_NATIVE_ADDRESSES[id.chainId]?.toLowerCase();
     const synthesized: Fact[] = [];
@@ -121,6 +123,62 @@ export class HistoryService {
   private identity(input: HistoryAddressRequest): Identity { return { chainId: this.deps.resolveChain(input.chain).chainId, address: input.address.toLowerCase() }; }
 }
 
+function deduplicateCrossSourceNativeFacts(
+  transactions: readonly Fact[],
+  internals: readonly Fact[],
+): { transactions: Fact[]; internals: Fact[] } {
+  const groups = new Map<string, { txs: Fact[]; internals: Fact[] }>();
+
+  for (const fact of transactions) {
+    try {
+      const payload = typeof fact.row.payload === "string" ? JSON.parse(fact.row.payload) : fact.row.payload;
+      const val = BigInt(payload?.value ?? "0");
+      if (val > 0n) {
+        const from = String(payload?.from ?? "").toLowerCase();
+        const to = String(payload?.to ?? "").toLowerCase();
+        const key = `${fact.tx.toLowerCase()}:${from}:${to}:${val.toString()}`;
+        const group = groups.get(key) ?? { txs: [], internals: [] };
+        group.txs.push(fact);
+        groups.set(key, group);
+      }
+    } catch {
+      // ignore malformed payload
+    }
+  }
+
+  for (const fact of internals) {
+    try {
+      const payload = typeof fact.row.payload === "string" ? JSON.parse(fact.row.payload) : fact.row.payload;
+      const val = BigInt(payload?.value ?? "0");
+      if (val > 0n) {
+        const from = String(payload?.from ?? "").toLowerCase();
+        const to = String(payload?.to ?? "").toLowerCase();
+        const key = `${fact.tx.toLowerCase()}:${from}:${to}:${val.toString()}`;
+        const group = groups.get(key) ?? { txs: [], internals: [] };
+        group.internals.push(fact);
+        groups.set(key, group);
+      }
+    } catch {
+      // ignore malformed payload
+    }
+  }
+
+  const internalIdsToExclude = new Set<string>();
+  for (const group of groups.values()) {
+    if (group.txs.length > 0 && group.internals.length > 0) {
+      const dropCount = Math.min(group.txs.length, group.internals.length);
+      for (let i = 0; i < dropCount; i++) {
+        internalIdsToExclude.add(group.internals[i]!.identity);
+      }
+    }
+  }
+
+  return {
+    transactions: [...transactions],
+    internals: internals.filter((f) => !internalIdsToExclude.has(f.identity)),
+  };
+}
+
 function emptyState(state: UserStateAtBlockResult["state"]): UserStateAtBlockResult { return { state, revision: null, asOfBlock: null, balances: [], nativeIn: "0", nativeOut: "0", transactionCount: 0, warnings: [] }; }
 function buildSnapshots(facts: readonly Fact[], address: string, eventThreshold: number, blockThreshold: number): { block: string; state: Omit<UserStateAtBlockResult, "state" | "revision" | "asOfBlock"> }[] { if (facts.length === 0) return []; const result: { block: string; state: Omit<UserStateAtBlockResult, "state" | "revision" | "asOfBlock"> }[] = []; let blockStart = facts[0]!.block; let eventStart = 0; let index = 0; while (index < facts.length) { const block = facts[index]!.block; while (index < facts.length && facts[index]!.block === block) index++; const reached = index - eventStart >= Math.max(1, eventThreshold) || block - blockStart + 1n >= BigInt(Math.max(1, blockThreshold)) || index === facts.length; if (reached) { result.push({ block: block.toString(), state: reduceFacts(facts.slice(0, index), address) }); blockStart = block + 1n; eventStart = index; } } return result; }
 function reduceFacts(facts: Fact[], address: string): Omit<UserStateAtBlockResult, "state" | "revision" | "asOfBlock"> {
@@ -154,8 +212,8 @@ function reduceFacts(facts: Fact[], address: string): Omit<UserStateAtBlockResul
         txTokenOutflows.has(`${fact.tx.toLowerCase()}:${token}`);
 
       if (to === normalizedAddress) {
+        balances.set(token, (balances.get(token) ?? 0n) + amount);
         if (!isInternalInterestMint) {
-          balances.set(token, (balances.get(token) ?? 0n) + amount);
           incoming.set(token, (incoming.get(token) ?? 0n) + amount);
         }
       }
