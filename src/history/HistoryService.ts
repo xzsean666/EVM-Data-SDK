@@ -33,7 +33,24 @@ export class HistoryService {
     try { const facts = await this.facts(id); const to = input.toBlock === undefined ? (facts.at(-1)?.block.toString() ?? null) : input.toBlock; const filtered = facts.filter((fact) => to === null || fact.block <= BigInt(to)); const snapshots = buildSnapshots(filtered, id.address, this.deps.snapshotEveryEvents ?? 10_000, this.deps.snapshotEveryBlocks ?? 10_000).filter((snapshot) => BigInt(snapshot.block) >= BigInt(requestedFrom)); const asOf = filtered.at(-1)?.block.toString() ?? null; const processed = filtered.filter((fact) => fact.block >= BigInt(requestedFrom)).length; await this.deps.storage.transaction(async () => { if (input.force !== true) await this.deps.storage.run("DELETE FROM sdk_user_state_snapshots WHERE chain_id=? AND address=? AND revision=? AND CAST(block_number AS INTEGER)>=CAST(? AS INTEGER)", [id.chainId, id.address, claimed.revision, requestedFrom]); await this.deps.storage.run("UPDATE sdk_replay_jobs SET status=?,updated_at=?,processed_events=?,lease_owner=NULL,lease_until=NULL,heartbeat_at=NULL WHERE job_id=? AND lease_owner=?", ["completed", new Date().toISOString(), processed, claimed.jobId, owner]); for (const snapshot of snapshots) await this.deps.storage.run("INSERT OR REPLACE INTO sdk_user_state_snapshots(chain_id,address,revision,block_number,payload,complete) VALUES(?,?,?,?,?,1)", [id.chainId, id.address, claimed.revision, snapshot.block, JSON.stringify(snapshot.state)]); if (asOf !== null) await this.deps.storage.run("INSERT OR REPLACE INTO sdk_replay_current(chain_id,address,revision,as_of_block) VALUES(?,?,?,?)", [id.chainId, id.address, claimed.revision, asOf]); }); return { status: "completed", jobId: claimed.jobId, revision: claimed.revision, chainId: id.chainId, address: id.address, targetBlock: to }; } catch (error) { await this.deps.storage.run("UPDATE sdk_replay_jobs SET status=?,updated_at=?,lease_owner=NULL,lease_until=NULL WHERE job_id=? AND lease_owner=?", ["failed", new Date().toISOString(), claimed.jobId, owner]); throw error; }
   }
 
-  async rebuild(input: HistoryRebuildRequest): Promise<HistoryRebuildResult> { const id = this.identity(input); const current = await this.deps.storage.get<{ revision: string }>("SELECT revision FROM sdk_replay_current WHERE chain_id=? AND address=?", [id.chainId, id.address]); const from = input.mode === "full" ? null : input.fromBlock ?? "0"; const invalidated = current === undefined ? 0 : Number((await this.deps.storage.get<{ count: number }>("SELECT COUNT(*) AS count FROM sdk_user_state_snapshots WHERE chain_id=? AND address=? AND revision=? AND (? IS NULL OR CAST(block_number AS INTEGER)>=CAST(? AS INTEGER))", [id.chainId, id.address, current.revision, from, from]))?.count ?? 0); const result = await this.replay({ ...input, force: true }); return { ...result, mode: input.mode ?? "targeted", invalidatedFromBlock: from, snapshotsInvalidated: invalidated, factsRevision: result.revision, replayRevision: result.revision }; }
+  async rebuild(input: HistoryRebuildRequest): Promise<HistoryRebuildResult> {
+    const id = this.identity(input);
+    const current = await this.deps.storage.get<{ revision: string }>("SELECT revision FROM sdk_replay_current WHERE chain_id=? AND address=?", [id.chainId, id.address]);
+    const from = input.mode === "full" ? null : input.fromBlock ?? "0";
+    const invalidated = current === undefined ? 0 : Number(
+      from === null
+        ? (await this.deps.storage.get<{ count: number }>(
+            "SELECT COUNT(*) AS count FROM sdk_user_state_snapshots WHERE chain_id=? AND address=? AND revision=?",
+            [id.chainId, id.address, current.revision],
+          ))?.count ?? 0
+        : (await this.deps.storage.get<{ count: number }>(
+            "SELECT COUNT(*) AS count FROM sdk_user_state_snapshots WHERE chain_id=? AND address=? AND revision=? AND CAST(block_number AS INTEGER)>=CAST(? AS INTEGER)",
+            [id.chainId, id.address, current.revision, from],
+          ))?.count ?? 0
+    );
+    const result = await this.replay({ ...input, force: true });
+    return { ...result, mode: input.mode ?? "targeted", invalidatedFromBlock: from, snapshotsInvalidated: invalidated, factsRevision: result.revision, replayRevision: result.revision };
+  }
 
   async getUserStateAtBlock(input: UserStateAtBlockRequest): Promise<UserStateAtBlockResult> { const id = this.identity(input); const target = BigInt(input.blockNumber); const current = await this.deps.storage.get<any>("SELECT * FROM sdk_replay_current WHERE chain_id=? AND address=?", [id.chainId, id.address]); if (current === undefined) return emptyState("unavailable"); const facts = (await this.facts(id)).filter((fact) => fact.block <= target); const state = reduceFacts(facts, id.address); const asOf = facts.at(-1)?.block.toString() ?? null; return { ...state, state: current.as_of_block !== null && BigInt(current.as_of_block) >= target ? "ready" : "building", revision: current.revision, asOfBlock: asOf }; }
 
