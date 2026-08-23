@@ -39,7 +39,7 @@ describe("persistent EVM sync and replay", () => {
 
   it("commits facts and cursor idempotently, then replays balances", async () => {
     const storage = new SqliteStorageAdapter(":memory:"); await storage.initialize();
-    expect(storage.all<{ version: number }>("SELECT version FROM sdk_schema_migrations ORDER BY version").map((row) => row.version)).toEqual([1, 2, 3]);
+    expect(storage.all<{ version: number }>("SELECT version FROM sdk_schema_migrations ORDER BY version").map((row) => row.version)).toEqual([1, 2, 3, 4]);
     const items = [transfer("10", "90071992547409931234567890"), transfer("11", "2", false)];
     const fake = { token: { getErc20TransfersByBlockRange: async () => ({ items, range: { startBlock: "10", endBlock: "11" }, providers: ["etherscan"], stats: {} }) }, address: {}, chain: { getLatestBlockNumber: async () => ({ blockNumber: "11" }) } } as any;
     const sync = new SyncService({ storage, token: fake.token, address: fake.address, chain: fake.chain, resolveChain: () => ({ chainId: 1 }) });
@@ -71,6 +71,20 @@ describe("persistent EVM sync and replay", () => {
     await storage.close();
   });
 
+  it("preserves multiple same-amount transfer legs with distinct log indexes in the same transaction", async () => {
+    const storage = new SqliteStorageAdapter(":memory:"); await storage.initialize();
+    const first = { ...transfer("10", "1000000", false), logIndex: "403" };
+    const second = { ...transfer("10", "1000000", false), logIndex: "404" };
+    const third = { ...transfer("10", "1000000", false), logIndex: "405" };
+    const fake = { token: { getErc20TransfersByBlockRange: async () => ({ items: [first, second, third], range: { startBlock: "10", endBlock: "10" }, providers: ["etherscan"] }) }, address: {}, chain: {} } as any;
+    const sync = new SyncService({ storage, token: fake.token, address: fake.address, chain: fake.chain, resolveChain: () => ({ chainId: 1 }) });
+    await sync.update({ chain: "ethereum", address, dataset: "erc20", fromBlock: "10", toBlock: "10" });
+    const records = storage.all<{ identity: string; log_index: string }>("SELECT identity, log_index FROM sdk_erc20_transfers ORDER BY log_index");
+    expect(records).toHaveLength(3);
+    expect(records.map((r) => r.log_index)).toEqual(["403", "404", "405"]);
+    await storage.close();
+  });
+
   it("provides stable history cursors after applying filters in SQL", async () => {
     const storage = new SqliteStorageAdapter(":memory:"); await storage.initialize();
     for (const [block, amount] of [[10, "1"], [11, "2"]] as const) {
@@ -90,6 +104,40 @@ describe("persistent EVM sync and replay", () => {
     }
     const history = new HistoryService({ storage, resolveChain: () => ({ chainId: 1 }), snapshotEveryEvents: 1, snapshotEveryBlocks: 100 }); await history.replay({ chain: "ethereum", address });
     expect(storage.all("SELECT block_number FROM sdk_user_state_snapshots")).toHaveLength(2);
+    await storage.close();
+  });
+
+  it("replays from an external initial state at boundary plus one", async () => {
+    const storage = new SqliteStorageAdapter(":memory:"); await storage.initialize();
+    for (const [block, amount, incoming] of [[100, "50", true], [100, "25", false], [101, "30", false], [102, "5", true]] as const) {
+      const row = transfer(String(block), amount, incoming);
+      storage.run("INSERT INTO sdk_erc20_transfers(identity,chain_id,address,token_address,tx_hash,transaction_index,log_index,block_number,timestamp,token_name,token_symbol,token_decimals,from_address,to_address,amount,provider,ingestion_source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [`initial-${block}-${amount}-${incoming}`, 1, address, token, row.transactionHash, "0", `${block}-${amount}`, String(block), null, null, "T", 18, row.from, row.to, amount, "etherscan", "sdk"]);
+    }
+    storage.run("INSERT INTO sdk_transactions(identity,chain_id,address,tx_hash,block_number,payload,provider,ingestion_source) VALUES(?,?,?,?,?,?,?,?)", [
+      "initial-native-101",
+      1,
+      address,
+      "0x" + "101".padStart(64, "0"),
+      "101",
+      JSON.stringify({ from: address, to: "0x3333333333333333333333333333333333333333", value: "10" }),
+      "etherscan",
+      "sdk",
+    ]);
+    const history = new HistoryService({ storage, resolveChain: () => ({ chainId: 1 }), snapshotEveryEvents: 1 });
+    const initialState = { blockNumber: "100", balances: [{ tokenAddress: token, amount: "100" }], nativeBalance: "1000", nativeIn: "7", nativeOut: "3", transactionCount: 4 };
+    const first = await history.replay({ chain: "ethereum", address, initialState, toBlock: "102" });
+    expect(first.targetBlock).toBe("102");
+    expect(storage.get<any>("SELECT from_block FROM sdk_replay_jobs WHERE job_id=?", [first.jobId])?.from_block).toBe("101");
+    await expect(history.getUserStateAtBlock({ chain: "ethereum", address, blockNumber: "99" })).resolves.toMatchObject({ state: "unavailable" });
+    await expect(history.getUserStateAtBlock({ chain: "ethereum", address, blockNumber: "100" })).resolves.toMatchObject({ state: "ready", asOfBlock: "100", balances: [{ tokenAddress: token, amount: "100" }], nativeBalance: "1000", nativeIn: "7", nativeOut: "3", transactionCount: 4 });
+    await expect(history.getUserStateAtBlock({ chain: "ethereum", address, blockNumber: "102" })).resolves.toMatchObject({ state: "ready", balances: [{ tokenAddress: token, amount: "75", incoming: "5", outgoing: "30" }], nativeBalance: "990", nativeIn: "7", nativeOut: "13", transactionCount: 5 });
+    const second = await history.replay({ chain: "ethereum", address, initialState, toBlock: "102" });
+    expect(second.revision).toBe(first.revision);
+    await expect(history.getUserStateAtBlock({ chain: "ethereum", address, blockNumber: "102" })).resolves.toMatchObject({ balances: [{ tokenAddress: token, amount: "75" }] });
+    const resumed = await history.replay({ chain: "ethereum", address, toBlock: "102" });
+    expect(resumed.revision).toBe(first.revision);
+    expect(storage.get<any>("SELECT from_block FROM sdk_replay_jobs WHERE job_id=?", [resumed.jobId])?.from_block).toBe("103");
+    await expect(history.getUserStateAtBlock({ chain: "ethereum", address, blockNumber: "102" })).resolves.toMatchObject({ balances: [{ tokenAddress: token, amount: "75" }] });
     await storage.close();
   });
 

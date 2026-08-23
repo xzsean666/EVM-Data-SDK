@@ -347,7 +347,7 @@ export class AlchemyAdapter implements DataProviderAdapter {
           chainId: context.chain.chainId,
         });
       }
-      if (result.nextPageKey === null) return transfers;
+      if (result.nextPageKey === null) return deduplicateCanonicalTransactionBlocks(transfers);
       if (result.nextPageKey === pageKey) {
         throw invalidResponse(context, new Error("Alchemy returned the same pagination page key twice."));
       }
@@ -568,7 +568,8 @@ function mergeBothDirectionPages(
   for (const transfer of [...(incoming?.transfers ?? []), ...(outgoing?.transfers ?? [])]) {
     uniqueTransfers.set(transfer.uniqueId, transfer);
   }
-  return [...uniqueTransfers.values()].sort((first, second) => compareTransfers(first, second, order));
+  const deduplicated = deduplicateCanonicalTransactionBlocks([...uniqueTransfers.values()]);
+  return deduplicated.sort((first, second) => compareTransfers(first, second, order));
 }
 
 function mergeBothDirectionTransfers(
@@ -578,7 +579,41 @@ function mergeBothDirectionTransfers(
 ): readonly AlchemyMappedTransfer[] {
   const uniqueTransfers = new Map<string, AlchemyMappedTransfer>();
   for (const transfer of [...incoming, ...outgoing]) uniqueTransfers.set(transfer.uniqueId, transfer);
-  return [...uniqueTransfers.values()].sort((first, second) => compareTransfers(first, second, order));
+  const deduplicated = deduplicateCanonicalTransactionBlocks([...uniqueTransfers.values()]);
+  return deduplicated.sort((first, second) => compareTransfers(first, second, order));
+}
+
+export function deduplicateCanonicalTransactionBlocks<T extends { item: { transactionHash: string; tokenAddress: string; from: string; to: string; amount: string; blockNumber: string; logIndex: string | null } }>(
+  transfers: readonly T[],
+): T[] {
+  const maxBlockBySemanticTransfer = new Map<string, bigint>();
+  for (const transfer of transfers) {
+    if (transfer.item.logIndex === null) continue;
+    const key = [
+      transfer.item.transactionHash.toLowerCase(),
+      transfer.item.tokenAddress.toLowerCase(),
+      transfer.item.from.toLowerCase(),
+      transfer.item.to.toLowerCase(),
+      transfer.item.amount,
+    ].join(":");
+    const block = BigInt(transfer.item.blockNumber);
+    const existing = maxBlockBySemanticTransfer.get(key);
+    if (existing === undefined || block > existing) {
+      maxBlockBySemanticTransfer.set(key, block);
+    }
+  }
+  return transfers.filter((transfer) => {
+    if (transfer.item.logIndex === null) return true;
+    const key = [
+      transfer.item.transactionHash.toLowerCase(),
+      transfer.item.tokenAddress.toLowerCase(),
+      transfer.item.from.toLowerCase(),
+      transfer.item.to.toLowerCase(),
+      transfer.item.amount,
+    ].join(":");
+    const maxBlock = maxBlockBySemanticTransfer.get(key);
+    return maxBlock === undefined || BigInt(transfer.item.blockNumber) === maxBlock;
+  });
 }
 
 function compareTransfers(

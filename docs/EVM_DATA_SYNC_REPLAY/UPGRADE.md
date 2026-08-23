@@ -502,6 +502,39 @@ client.history.replay({
 });
 ```
 
+#### Boundary snapshot replay
+
+When the caller already has an exact opening state at a known boundary block,
+it may seed the reducer without replaying facts before that block:
+
+```ts
+await client.history.replay({
+  chain: "ethereum",
+  address,
+  initialState: {
+    blockNumber: "22000000",
+    balances: [{
+      tokenAddress: "0x2222222222222222222222222222222222222222",
+      amount: "1000000",
+    }],
+    nativeBalance: "500000000000000000",
+    nativeIn: "0",
+    nativeOut: "0",
+    transactionCount: 0,
+  },
+  toBlock: "22100000",
+});
+```
+
+`initialState.blockNumber` is inclusive. The first consumed fact is therefore
+`blockNumber + 1`; facts at the boundary are not consumed again. The snapshot
+is validated as decimal-string quantities, persisted with a deterministic
+revision, and returned by `getUserStateAtBlock` at the boundary. A later
+`history.replay` without `initialState` resumes from that revision's newest
+complete snapshot, while `force: true` explicitly rebuilds the revision.
+Native balance and native in/out counters are part of the same state payload;
+they are not inferred from the ERC-20 holdings API.
+
 #### `sync.audit`
 
 修复前先运行只读审计，帮助确认问题属于 provider 事实还是派生状态：

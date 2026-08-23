@@ -129,7 +129,7 @@ export interface Erc20BalancesAtBlock {
   provider: ProviderName;
 }
 
-/** Current indexed holding metadata used only to discover contract addresses. */
+/** Indexed ERC-20 holding metadata; the containing result defines its block semantics. */
 export interface Erc20TokenHolding {
   chainId: number;
   address: string;
@@ -137,7 +137,7 @@ export interface Erc20TokenHolding {
   tokenName: string | null;
   tokenSymbol: string | null;
   tokenDecimals: number | null;
-  /** Current raw quantity; it is not a historical balance assertion. */
+  /** Raw quantity in the token's smallest unit. */
   amount: string;
   provider: ProviderName;
 }
@@ -147,6 +147,21 @@ export interface Erc20TokenHoldings {
   address: string;
   items: readonly Erc20TokenHolding[];
   provider: ProviderName;
+  pages: number;
+  upstreamRequests: number;
+}
+
+/** Complete ERC-20 holdings for one address at one indexed historical block. */
+export interface Erc20HoldingsAtBlock {
+  chainId: number;
+  address: string;
+  blockNumber: string;
+  blockHash: string | null;
+  blockTimestamp: string | null;
+  items: readonly Erc20TokenHolding[];
+  provider: "moralis";
+  complete: boolean;
+  itemCount: number;
   pages: number;
   upstreamRequests: number;
 }

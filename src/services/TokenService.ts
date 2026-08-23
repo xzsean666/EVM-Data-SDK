@@ -1,5 +1,5 @@
-import type { Erc20BalancesAtBlock, Erc20BlockRangeResult, Erc20TokenHoldings, Erc20Transfer, Page } from "../domain/models";
-import { normalizeErc20BalancesAtBlockRequest, normalizeErc20BlockRangeRequest, normalizeErc20TokenHoldingsRequest, normalizeErc20TransfersRequest, type Erc20BalancesAtBlockRequest, type Erc20BlockRangeRequest, type Erc20TokenHoldingsRequest, type Erc20TransfersRequest } from "../domain/operations";
+import type { Erc20BalancesAtBlock, Erc20BlockRangeResult, Erc20HoldingsAtBlock, Erc20TokenHoldings, Erc20Transfer, Page } from "../domain/models";
+import { normalizeErc20BalancesAtBlockRequest, normalizeErc20BlockRangeRequest, normalizeErc20HoldingsAtBlockRequest, normalizeErc20TokenHoldingsRequest, normalizeErc20TransfersRequest, type Erc20BalancesAtBlockRequest, type Erc20BlockRangeRequest, type Erc20HoldingsAtBlockRequest, type Erc20TokenHoldingsRequest, type Erc20TransfersRequest } from "../domain/operations";
 import { unsupportedOperation } from "../domain/errors";
 import type { TokenPriceAggregationResult } from "../domain/priceModels";
 import {
@@ -54,6 +54,13 @@ export class TokenService {
   getErc20TokenHoldings(request: Erc20TokenHoldingsRequest): Promise<Erc20TokenHoldings> {
     return this.indexedApi.getErc20TokenHoldings(
       normalizeErc20TokenHoldingsRequest(request),
+    );
+  }
+
+  /** Moralis-only address holdings at one historical block; no token list. */
+  getHoldingsAtBlock(request: Erc20HoldingsAtBlockRequest): Promise<Erc20HoldingsAtBlock> {
+    return this.indexedApi.getErc20HoldingsAtBlock(
+      normalizeErc20HoldingsAtBlockRequest(request),
     );
   }
 

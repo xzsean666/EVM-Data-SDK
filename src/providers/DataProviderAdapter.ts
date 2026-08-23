@@ -9,7 +9,7 @@ import type {
   OperationName,
 } from "../domain/operations";
 import type { ProviderPageResult } from "../domain/pagination";
-import type { BeaconWithdrawalPage, Erc20BalanceAtBlock, Erc20TokenHoldings, Erc20Transfer, InternalNativeTransferPage, NativeBalance, Transaction, TransactionContext } from "../domain/models";
+import type { BeaconWithdrawalPage, Erc20BalanceAtBlock, Erc20HoldingsAtBlock, Erc20TokenHoldings, Erc20Transfer, InternalNativeTransferPage, NativeBalance, Transaction, TransactionContext } from "../domain/models";
 
 export interface CredentialLease {
   readonly id: string;
@@ -128,6 +128,12 @@ export interface DataProviderAdapter {
     request: { readonly address: string; readonly blockNumber?: string },
     context: ProviderAttemptContext,
   ): Promise<Erc20TokenHoldings>;
+
+  /** Moralis-only: complete address holdings at one historical block. */
+  getErc20HoldingsAtBlock?(
+    request: { readonly address: string; readonly blockNumber: string },
+    context: ProviderAttemptContext,
+  ): Promise<Erc20HoldingsAtBlock>;
 
   /** Indexed API only: an explicit contract set at one historical block. */
   getErc20BalancesAtBlock?(

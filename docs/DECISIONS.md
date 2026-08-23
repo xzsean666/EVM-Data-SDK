@@ -417,6 +417,30 @@ back to Alchemy JSON-RPC or a node RPC endpoint. Moralis requires `to_block`
 for current-holdings discovery, so the current implementation also requires an
 available Etherscan indexed-height query to resolve that block.
 
+### ADR-031: Address-only historical holdings use Moralis `to_block`
+
+**Status:** Accepted
+
+**Date:** 2026-08-22
+
+**Decision:** Expose `client.token.getHoldingsAtBlock({ chain, address,
+blockNumber })` as a Moralis-only operation. It calls `GET /{address}/erc20`
+with `chain` and `to_block`, does not accept token contract addresses, and
+returns the complete validated ERC-20 response with the requested block
+provenance. Native ETH and other exact historical assets remain separate
+Archive RPC calls. Alchemy `alchemy_getTokenBalances` is never a fallback for
+this operation because it has no historical block parameter.
+
+**Reason:** The onboarding contract supplies only a wallet address and must
+receive every ERC-20 holding at one historical boundary. Moralis is the
+configured indexed API in this SDK that accepts that address-only historical
+request directly.
+
+**Trade-off:** Moralis response block hash/timestamp are not assumed to be
+available, so the SDK returns them as `null` and preserves the requested block
+number. Provider errors and malformed/duplicate responses fail closed rather
+than inventing zero balances.
+
 ### ADR-026: API-only transaction context uses Moralis nested logs
 
 **Status:** Accepted

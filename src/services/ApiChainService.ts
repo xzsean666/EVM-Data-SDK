@@ -3,6 +3,7 @@ import type {
   BeaconWithdrawalBlockRange,
   BeaconWithdrawalPage,
   Erc20BalancesAtBlock,
+  Erc20HoldingsAtBlock,
   Erc20TokenHoldings,
   InternalNativeTransferBlockRange,
   InternalNativeTransferPage,
@@ -166,6 +167,29 @@ export class ApiChainService {
         return adapter.getErc20TokenHoldings({ address: input.address }, context)
       },
       { includeAlchemy: true },
+    )
+  }
+
+  /**
+   * Complete address-only historical ERC-20 holdings. This operation is
+   * intentionally Moralis-only because Alchemy's token-balance RPC has no
+   * historical block parameter. Native balances remain an Archive RPC call.
+   */
+  async getErc20HoldingsAtBlock(input: {
+    chain: ChainReference
+    address: string
+    blockNumber: string
+    signal?: AbortSignal
+  }): Promise<Erc20HoldingsAtBlock> {
+    const chain = this.registry.resolve(input.chain)
+    return this.withMoralisCandidates(
+      chain,
+      input.signal,
+      'No configured Moralis API can read complete historical ERC-20 holdings.',
+      (adapter, context) => adapter.getErc20HoldingsAtBlock!({
+        address: input.address,
+        blockNumber: input.blockNumber,
+      }, context),
     )
   }
 
@@ -368,6 +392,30 @@ export class ApiChainService {
       if (!(adapter instanceof EtherscanAdapter) &&
           !(adapter instanceof MoralisAdapter) &&
           !(options.includeAlchemy === true && adapter instanceof AlchemyAdapter)) continue
+      for (const apiKey of configuredProvider.apiKeys) {
+        try {
+          return await this.withCandidateContext(chain, { adapter, apiKey }, signal, (context) =>
+            work(adapter, context),
+          )
+        } catch (error) {
+          lastError = error
+          if (!canTryAnotherApiCredential(error)) throw error
+        }
+      }
+    }
+    throw unavailable(lastError, chain.chainId, unavailableMessage)
+  }
+
+  private async withMoralisCandidates<T>(
+    chain: ReturnType<ChainRegistry['resolve']>,
+    signal: AbortSignal | undefined,
+    unavailableMessage: string,
+    work: (adapter: MoralisAdapter, context: ProviderAttemptContext) => Promise<T>,
+  ): Promise<T> {
+    let lastError: unknown
+    for (const configuredProvider of this.providers) {
+      const adapter = configuredProvider.adapter
+      if (!(adapter instanceof MoralisAdapter)) continue
       for (const apiKey of configuredProvider.apiKeys) {
         try {
           return await this.withCandidateContext(chain, { adapter, apiKey }, signal, (context) =>

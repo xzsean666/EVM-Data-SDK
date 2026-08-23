@@ -1,5 +1,5 @@
 import type { ChainDefinition } from "../../domain/chains";
-import type { Erc20BalanceAtBlock, Erc20TokenHolding, Erc20Transfer, NativeBalance, Transaction, TransactionContext, TransactionReceiptLog } from "../../domain/models";
+import type { Erc20BalanceAtBlock, Erc20HoldingsAtBlock, Erc20TokenHolding, Erc20Transfer, NativeBalance, Transaction, TransactionContext, TransactionReceiptLog } from "../../domain/models";
 import type {
   MoralisErc20Balance,
   MoralisNativeBalance,
@@ -114,6 +114,36 @@ export function mapMoralisErc20TokenHolding(
     tokenDecimals: mapTokenDecimals(value.decimals),
     amount: canonicalQuantity(value.balance),
     provider: "moralis",
+  };
+}
+
+export function mapMoralisErc20HoldingsAtBlock(
+  values: readonly MoralisErc20Balance[],
+  chain: ChainDefinition,
+  address: string,
+  blockNumber: string,
+): Erc20HoldingsAtBlock {
+  const seen = new Set<string>();
+  const items = values.map((value) => {
+    const tokenAddress = value.token_address.toLowerCase();
+    if (seen.has(tokenAddress)) {
+      throw new Error("Moralis returned duplicate ERC-20 balance contracts.");
+    }
+    seen.add(tokenAddress);
+    return mapMoralisErc20TokenHolding(value, chain, address);
+  });
+  return {
+    chainId: chain.chainId,
+    address,
+    blockNumber,
+    blockHash: null,
+    blockTimestamp: null,
+    items,
+    provider: "moralis",
+    complete: true,
+    itemCount: items.length,
+    pages: 1,
+    upstreamRequests: 1,
   };
 }
 

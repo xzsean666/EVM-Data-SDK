@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS sdk_transactions(identity TEXT PRIMARY KEY, chain_id 
 CREATE TABLE IF NOT EXISTS sdk_internal_native_transfers(identity TEXT PRIMARY KEY, chain_id INTEGER NOT NULL, address TEXT NOT NULL, tx_hash TEXT NOT NULL, trace_id TEXT, block_number TEXT NOT NULL, payload TEXT NOT NULL, provider TEXT NOT NULL, ingestion_source TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS sdk_replay_jobs(job_id TEXT PRIMARY KEY, chain_id INTEGER NOT NULL, address TEXT NOT NULL, from_block TEXT NOT NULL, to_block TEXT, status TEXT NOT NULL, facts_revision TEXT NOT NULL, updated_at TEXT NOT NULL, processed_events INTEGER NOT NULL DEFAULT 0, lease_owner TEXT, lease_until TEXT, heartbeat_at TEXT, attempts INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS sdk_user_state_snapshots(chain_id INTEGER NOT NULL,address TEXT NOT NULL,revision TEXT NOT NULL,block_number TEXT NOT NULL,payload TEXT NOT NULL,complete INTEGER NOT NULL,PRIMARY KEY(chain_id,address,revision,block_number));
+CREATE TABLE IF NOT EXISTS sdk_replay_initial_states(chain_id INTEGER NOT NULL,address TEXT NOT NULL,revision TEXT NOT NULL,block_number TEXT NOT NULL,payload TEXT NOT NULL,complete INTEGER NOT NULL,PRIMARY KEY(chain_id,address,revision));
 CREATE TABLE IF NOT EXISTS sdk_replay_current(chain_id INTEGER NOT NULL,address TEXT NOT NULL,revision TEXT NOT NULL,as_of_block TEXT,PRIMARY KEY(chain_id,address));
 CREATE TABLE IF NOT EXISTS sdk_price_sync_scopes(scope_key TEXT PRIMARY KEY,next_from TEXT NOT NULL,target_to TEXT,updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS sdk_price_points(scope_key TEXT NOT NULL,timestamp TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(scope_key,timestamp));
@@ -65,6 +66,7 @@ export class SqliteStorageAdapter implements StorageAdapter {
       this.db.prepare("INSERT OR IGNORE INTO sdk_schema_migrations(version, applied_at) VALUES(?, ?)").run(1, new Date().toISOString());
       this.db.prepare("INSERT OR IGNORE INTO sdk_schema_migrations(version, applied_at) VALUES(?, ?)").run(2, new Date().toISOString());
       this.db.prepare("INSERT OR IGNORE INTO sdk_schema_migrations(version, applied_at) VALUES(?, ?)").run(3, new Date().toISOString());
+      this.db.prepare("INSERT OR IGNORE INTO sdk_schema_migrations(version, applied_at) VALUES(?, ?)").run(4, new Date().toISOString());
     } catch (error) {
       this.db = null;
       throw storageError("STORAGE_MIGRATION_FAILED", "SQLite storage initialization failed.", error);
@@ -108,6 +110,7 @@ export class PostgresStorageAdapter implements StorageAdapter {
       await this.pool.query("INSERT INTO sdk_schema_migrations(version,applied_at) VALUES($1,$2) ON CONFLICT(version) DO NOTHING", [1, new Date().toISOString()]);
       await this.pool.query("INSERT INTO sdk_schema_migrations(version,applied_at) VALUES($1,$2) ON CONFLICT(version) DO NOTHING", [2, new Date().toISOString()]);
       await this.pool.query("INSERT INTO sdk_schema_migrations(version,applied_at) VALUES($1,$2) ON CONFLICT(version) DO NOTHING", [3, new Date().toISOString()]);
+      await this.pool.query("INSERT INTO sdk_schema_migrations(version,applied_at) VALUES($1,$2) ON CONFLICT(version) DO NOTHING", [4, new Date().toISOString()]);
     } catch (error) { await this.pool?.end().catch(() => undefined); this.pool = null; throw storageError("STORAGE_MIGRATION_FAILED", "PostgreSQL storage initialization failed.", error); }
   }
   private ready(): any { if (this.pool === null) throw storageError("STORAGE_NOT_INITIALIZED", "Storage is not initialized."); return this.pool; }
@@ -134,6 +137,7 @@ const POSTGRES_CONFLICT_TARGETS: Readonly<Record<string, readonly string[]>> = O
   sdk_internal_native_transfers: ["identity"],
   sdk_replay_jobs: ["job_id"],
   sdk_user_state_snapshots: ["chain_id", "address", "revision", "block_number"],
+  sdk_replay_initial_states: ["chain_id", "address", "revision"],
   sdk_replay_current: ["chain_id", "address"],
   sdk_price_sync_scopes: ["scope_key"],
   sdk_price_points: ["scope_key", "timestamp"],

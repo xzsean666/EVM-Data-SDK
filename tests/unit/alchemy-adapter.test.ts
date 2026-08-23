@@ -207,6 +207,58 @@ describe("AlchemyAdapter", () => {
     );
   });
 
+  it("deduplicates phantom reorg transfer logs from different blocks for the same transaction", async () => {
+    const hash = `0x${"d".repeat(64)}`;
+    const phantom = {
+      category: "erc20",
+      uniqueId: `${hash}:log:88`,
+      asset: "PAXG",
+      from: "0x1111111111111111111111111111111111111111",
+      to: address,
+      hash,
+      blockNum: "0x18206c8", // 25299400 (phantom)
+      rawContract: {
+        address: "0x45804880de22913dafe09f4980848ece6ecbaf78",
+        decimals: 18,
+        value: "0x15af1d78b58c400000",
+      },
+    };
+    const canonical = {
+      category: "erc20",
+      uniqueId: `${hash}:log:311`,
+      asset: "PAXG",
+      from: "0x1111111111111111111111111111111111111111",
+      to: address,
+      hash,
+      blockNum: "0x18206c9", // 25299401 (canonical)
+      rawContract: {
+        address: "0x45804880de22913dafe09f4980848ece6ecbaf78",
+        decimals: 18,
+        value: "0x15af1d78b58c400000",
+      },
+    };
+    const adapter = new AlchemyAdapter({
+      transport: new FixtureTransport(transfersResponse([phantom, canonical], null)),
+    });
+
+    const result = await adapter.getErc20TransfersByBlockRangeWindow(
+      normalizeErc20BlockRangeRequest({
+        chain: 1,
+        address,
+        startBlock: "25299400",
+        endBlock: "25299401",
+        direction: "incoming",
+      }),
+      context(),
+    );
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]?.item).toMatchObject({
+      blockNumber: "25298633",
+      logIndex: "311",
+    });
+  });
+
   it("maps Alchemy's legacy singular hexadecimal token decimal field", async () => {
     const transport = new FixtureTransport({
       jsonrpc: "2.0",

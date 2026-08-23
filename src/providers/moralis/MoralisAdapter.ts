@@ -1,7 +1,7 @@
 import { AxiosHttpTransport, parseHttpProxyUrl } from "../../transport/AxiosHttpTransport";
 import type { HttpTransport } from "../../transport/HttpTransport";
 import { EvmDataError } from "../../domain/errors";
-import type { Erc20BalancesAtBlock, Erc20TokenHoldings, Erc20Transfer, NativeBalance, Transaction, TransactionContext } from "../../domain/models";
+import type { Erc20BalancesAtBlock, Erc20HoldingsAtBlock, Erc20TokenHoldings, Erc20Transfer, NativeBalance, Transaction, TransactionContext } from "../../domain/models";
 import type {
   NormalizedErc20BlockRangeRequest,
   NormalizedErc20TransfersRequest,
@@ -29,6 +29,7 @@ import {
 import {
   mapMoralisNativeBalance,
   mapMoralisErc20BalancesAtBlock,
+  mapMoralisErc20HoldingsAtBlock,
   mapMoralisErc20TokenHolding,
   mapMoralisTransactionContext,
   mapMoralisTokenTransfer,
@@ -146,6 +147,23 @@ export class MoralisAdapter implements DataProviderAdapter {
         pages: 1,
         upstreamRequests: 1,
       };
+    } catch (error: unknown) {
+      throw invalidResponse(context, error);
+    }
+  }
+
+  async getErc20HoldingsAtBlock(
+    request: { readonly address: string; readonly blockNumber: string },
+    context: ProviderAttemptContext,
+  ): Promise<Erc20HoldingsAtBlock> {
+    const body = await this.call(`/${request.address}/erc20`, {
+      chain: moralisChain(context),
+      to_block: request.blockNumber,
+    }, context);
+    const parsed = moralisErc20BalanceCollectionSchema.safeParse(body);
+    if (!parsed.success) throw invalidResponse(context, parsed.error);
+    try {
+      return mapMoralisErc20HoldingsAtBlock(parsed.data, context.chain, request.address, request.blockNumber);
     } catch (error: unknown) {
       throw invalidResponse(context, error);
     }

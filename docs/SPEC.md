@@ -100,7 +100,10 @@ caller-supplied ERC-20 contract set. Etherscan reads each contract through
 and projects it onto that same set. A projected Moralis omission is a zero only
 after the full snapshot was validated successfully. The SDK does not offer an
 operation that claims to enumerate every token ever held by a wallet at a
-historic block.
+historic block through those explicit-contract methods. The separate
+`getHoldingsAtBlock({ chain, address, blockNumber })` operation is Moralis-only
+and does exactly that address-only historical ERC-20 enumeration; it does not
+accept token addresses or include native ETH.
 
 `getPriceHistory` returns independently sourced daily OHLCV histories for a token name or symbol. The four default sources are Binance Spot, OKX Spot, Coinbase Exchange Spot, and GeckoTerminal. It is an aggregation rather than a merged consensus price: each successful source remains a separate result with its actual market and quote asset.
 
@@ -259,12 +262,11 @@ interface Erc20BalancesAtBlock {
 }
 ```
 
-Both operations are indexed Etherscan API calls. `getErc20TokenHoldings` is
-useful for selecting contracts that are still held; callers must union that
-list with contracts observed in their own historical transfer range before
-requesting exact historical balances. Etherscan documents both endpoints as
-Standard-plan-and-above, capped at two requests per second. The SDK serializes
-these endpoint calls per Etherscan adapter and never uses RPC as a fallback.
+`getErc20TokenHoldings` and `getErc20BalancesAtBlock` retain their indexed
+provider semantics described above. `getHoldingsAtBlock` is a separate
+Moralis-only operation and sends `GET /{address}/erc20` with `chain` and
+`to_block`; its complete unpaged response is validated and returned with the
+requested block number. It never falls back to Alchemy or Archive RPC.
 
 ### 3.6 Token price history
 
@@ -612,14 +614,18 @@ retained in SDK memory. The callback never receives a provider cursor.
 
 ### 12.4 API-only ERC-20 historical snapshots
 
+`client.token.getHoldingsAtBlock({ chain, address, blockNumber })` is the
+address-only Moralis historical holdings operation. It returns the complete
+ERC-20 response for that block and requires no token address list. Native ETH
+must be read through the separate exact-block Archive RPC method.
+
 `client.token.getErc20TokenHoldings({ chain, address })` and
 `client.token.getErc20BalancesAtBlock({ chain, address, blockNumber,
 tokenAddresses })` are API-only Etherscan operations. The former returns a
 paginated current holding list solely to discover contract addresses; the
 latter requires that explicit list and returns raw balances at one exact
-canonical block. Historical token snapshots are therefore a caller-owned
-workflow, not a provider cursor or an implicit all-token scan. The fixed
-Etherscan two-request-per-second limit is enforced in the adapter.
+canonical block. These explicit-contract operations remain caller-owned; the
+Moralis address-only operation is the only implicit all-token historical scan.
 
 ### API-only address range contracts
 
@@ -825,6 +831,10 @@ The public client exposes `storage`, `sync.update/getStatus/recollect/audit`,
 amount values remain decimal strings. `dryRun` is read-only, facts and cursor
 advance atomically, and historical state is reported as `unavailable`,
 `building`, or `ready` rather than fabricated beyond replay coverage.
+`history.replay` also accepts an optional `initialState` containing an exact
+boundary block and opening ERC-20/native state. The boundary is inclusive and
+facts are consumed from the next block; subsequent non-forced replays resume
+from the latest complete snapshot of the same revision.
 History fact queries apply range, token, and direction filters before limiting
 results and expose SDK-owned `nextCursor` properties bound to the semantic
 query.

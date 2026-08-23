@@ -146,6 +146,26 @@ describe("MoralisAdapter", () => {
     expect(snapshotTransport.requests[0]?.params).toEqual({ chain: "0x1", to_block: "20000000" });
   });
 
+  it("maps address-only historical holdings with block provenance", async () => {
+    const transport = new FixtureTransport(moralisErc20Balances);
+    const result = await new MoralisAdapter({ transport }).getErc20HoldingsAtBlock({
+      address: "0x1111111111111111111111111111111111111111",
+      blockNumber: "20000000",
+    }, context());
+    expect(result).toMatchObject({
+      provider: "moralis",
+      blockNumber: "20000000",
+      blockHash: null,
+      blockTimestamp: null,
+      complete: true,
+      itemCount: 1,
+      pages: 1,
+      upstreamRequests: 1,
+      items: [{ tokenAddress: "0x5555555555555555555555555555555555555555", amount: "123456" }],
+    });
+    expect(transport.requests[0]?.params).toEqual({ chain: "0x1", to_block: "20000000" });
+  });
+
   it("does not issue a malformed current-holdings request without the required indexed block", async () => {
     const transport = new FixtureTransport(moralisErc20Balances);
     const result = await new MoralisAdapter({ transport })

@@ -149,8 +149,9 @@ export class BlockRangeScanner {
       throw incomplete({ startBlock: request.startBlock, endBlock: request.endBlock }, completed.length, undefined);
     }
 
+    const deduplicatedRecords = deduplicateCanonicalItems(records);
     const items = onWindow === undefined
-      ? [...records].sort(compareCollectedItems).map((entry) => Object.freeze({ ...entry.item }))
+      ? [...deduplicatedRecords].sort(compareCollectedItems).map((entry) => Object.freeze({ ...entry.item }))
       : [];
     return Object.freeze({
       chainId,
@@ -245,5 +246,36 @@ function incomplete(window: ClosedWindow, completedWindows: number, cause: unkno
     retryable: false,
     ...(provider === null ? {} : { provider }),
     ...(cause === undefined ? {} : { cause }),
+  });
+}
+
+function deduplicateCanonicalItems(records: readonly CollectedItem[]): CollectedItem[] {
+  const maxBlockBySemanticTransfer = new Map<string, bigint>();
+  for (const record of records) {
+    if (record.item.logIndex === null) continue;
+    const key = [
+      record.item.transactionHash.toLowerCase(),
+      record.item.tokenAddress.toLowerCase(),
+      record.item.from.toLowerCase(),
+      record.item.to.toLowerCase(),
+      record.item.amount,
+    ].join(":");
+    const block = BigInt(record.item.blockNumber);
+    const existing = maxBlockBySemanticTransfer.get(key);
+    if (existing === undefined || block > existing) {
+      maxBlockBySemanticTransfer.set(key, block);
+    }
+  }
+  return records.filter((record) => {
+    if (record.item.logIndex === null) return true;
+    const key = [
+      record.item.transactionHash.toLowerCase(),
+      record.item.tokenAddress.toLowerCase(),
+      record.item.from.toLowerCase(),
+      record.item.to.toLowerCase(),
+      record.item.amount,
+    ].join(":");
+    const maxBlock = maxBlockBySemanticTransfer.get(key);
+    return maxBlock === undefined || BigInt(record.item.blockNumber) === maxBlock;
   });
 }

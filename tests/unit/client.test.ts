@@ -277,6 +277,61 @@ describe("EvmDataClient", () => {
     });
   });
 
+  it("reads complete historical holdings by address through Moralis only", async () => {
+    const token = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const transport = new SequenceTransport([[
+      { token_address: token, balance: "42", decimals: 18, name: "Fixture", symbol: "FIX" },
+    ]]);
+    const client = new EvmDataClient({
+      providers: [
+        { kind: "alchemy", apiKeys: ["alchemy-key"] },
+        { kind: "moralis", apiKeys: ["moralis-key"] },
+      ],
+      requestPolicy: { maxTotalAttempts: 1 },
+    }, { transport });
+
+    const result = await client.token.getHoldingsAtBlock({
+      chain: "ethereum",
+      address,
+      blockNumber: "00020000000",
+    });
+
+    expect(result).toMatchObject({
+      chainId: 1,
+      address,
+      blockNumber: "20000000",
+      blockHash: null,
+      blockTimestamp: null,
+      provider: "moralis",
+      complete: true,
+      itemCount: 1,
+      pages: 1,
+      upstreamRequests: 1,
+      items: [{ tokenAddress: token, amount: "42", tokenSymbol: "FIX" }],
+    });
+    expect(transport.requests).toHaveLength(1);
+    expect(transport.requests[0]).toMatchObject({
+      method: "GET",
+      url: `https://deep-index.moralis.io/api/v2.2/${address}/erc20`,
+      params: { chain: "0x1", to_block: "20000000" },
+    });
+  });
+
+  it("does not use Alchemy when historical holdings have no Moralis provider", async () => {
+    const transport = new SequenceTransport([]);
+    const client = new EvmDataClient({
+      providers: [{ kind: "alchemy", apiKeys: ["alchemy-key"] }],
+      requestPolicy: { maxTotalAttempts: 1 },
+    }, { transport });
+
+    await expect(client.token.getHoldingsAtBlock({
+      chain: "ethereum",
+      address,
+      blockNumber: "20000000",
+    })).rejects.toMatchObject({ code: "UNSUPPORTED_OPERATION" });
+    expect(transport.requests).toHaveLength(0);
+  });
+
   it("routes API-chain endpoints through the configured managed VLESS proxy", async () => {
     const transport = new SequenceTransport([{ status: "1", message: "OK", result: "12345" }]);
     const advancedProxyManager = {

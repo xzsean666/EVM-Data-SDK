@@ -174,9 +174,10 @@ export class SyncService {
   }
 
   private async persistFacts(dataset: SyncDataset, identity: Identity, items: readonly any[], provider: string): Promise<number> {
-    const factIdentities = dataset === "erc20" ? erc20Identities(identity.chainId, items) : [];
+    const canonicalItems = dataset === "erc20" ? deduplicateCanonicalSyncItems(items) : items;
+    const factIdentities = dataset === "erc20" ? erc20Identities(identity.chainId, canonicalItems) : [];
     let count = 0;
-    for (const [index, item] of items.entries()) {
+    for (const [index, item] of canonicalItems.entries()) {
       const factIdentity = factIdentities[index];
       if (!await this.factExists(dataset, identity, item, factIdentity)) {
         count += await this.writeFact(dataset, identity, item, provider, factIdentity);
@@ -189,7 +190,11 @@ export class SyncService {
 
   private async writeFact(dataset: SyncDataset, identity: Identity, item: any, provider: string, exactIdentity?: string): Promise<number> {
     const source = "sdk";
-    if (dataset === "erc20") { const factIdentity = exactIdentity ?? erc20Identity(identity.chainId, item); return (await this.deps.storage.run("INSERT OR REPLACE INTO sdk_erc20_transfers(identity,chain_id,address,token_address,tx_hash,transaction_index,log_index,block_number,timestamp,token_name,token_symbol,token_decimals,from_address,to_address,amount,provider,ingestion_source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [factIdentity, identity.chainId, identity.address, item.tokenAddress.toLowerCase(), item.transactionHash, item.transactionIndex, item.logIndex, item.blockNumber, item.timestamp, item.tokenName, item.tokenSymbol, item.tokenDecimals, item.from.toLowerCase(), item.to.toLowerCase(), item.amount, provider, source])).changes; }
+    if (dataset === "erc20") {
+      await this.deps.storage.run("DELETE FROM sdk_erc20_transfers WHERE chain_id=? AND address=? AND tx_hash=? AND CAST(block_number AS INTEGER) < CAST(? AS INTEGER)", [identity.chainId, identity.address, item.transactionHash, item.blockNumber]);
+      const factIdentity = exactIdentity ?? erc20Identity(identity.chainId, item);
+      return (await this.deps.storage.run("INSERT OR REPLACE INTO sdk_erc20_transfers(identity,chain_id,address,token_address,tx_hash,transaction_index,log_index,block_number,timestamp,token_name,token_symbol,token_decimals,from_address,to_address,amount,provider,ingestion_source) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [factIdentity, identity.chainId, identity.address, item.tokenAddress.toLowerCase(), item.transactionHash, item.transactionIndex, item.logIndex, item.blockNumber, item.timestamp, item.tokenName, item.tokenSymbol, item.tokenDecimals, item.from.toLowerCase(), item.to.toLowerCase(), item.amount, provider, source])).changes;
+    }
     const factIdentity = dataset === "internal_native" ? internalIdentity(identity.chainId, item) : `${identity.chainId}:${item.transactionHash ?? item.hash}`;
     if (dataset === "transactions") return (await this.deps.storage.run("INSERT OR REPLACE INTO sdk_transactions(identity,chain_id,address,tx_hash,block_number,payload,provider,ingestion_source) VALUES(?,?,?,?,?,?,?,?)", [factIdentity, identity.chainId, identity.address, item.hash, item.blockNumber, JSON.stringify(item), provider, source])).changes;
     return (await this.deps.storage.run("INSERT OR REPLACE INTO sdk_internal_native_transfers(identity,chain_id,address,tx_hash,trace_id,block_number,payload,provider,ingestion_source) VALUES(?,?,?,?,?,?,?,?,?)", [factIdentity, identity.chainId, identity.address, item.transactionHash, item.traceId, item.blockNumber, JSON.stringify(item), provider, source])).changes;
@@ -226,3 +231,33 @@ function erc20Identities(chainId: number, items: readonly any[]): string[] {
 function internalIdentity(chainId: number, item: any): string { const tx = String(item.transactionHash ?? item.hash ?? ""); if (item.traceId !== undefined && item.traceId !== null) return `${chainId}:${tx}:${item.traceId}`; return `${chainId}:${tx}:hash:${fieldHash([item.blockNumber ?? null, item.timestamp ?? null, item.type ?? null, item.status ?? null, item.value ?? null, String(item.from ?? "").toLowerCase(), String(item.to ?? "").toLowerCase()])}`; }
 function fieldHash(value: unknown): string { return createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 32); }
 function overlapStart(cursor: string, overlap: number): string { const value = BigInt(cursor) - BigInt(Math.max(0, overlap)); return value > 0n ? value.toString() : "0"; }
+function deduplicateCanonicalSyncItems(items: readonly any[]): any[] {
+  const maxBlockBySemanticTransfer = new Map<string, bigint>();
+  for (const item of items) {
+    if (item.logIndex === undefined || item.logIndex === null) continue;
+    const tx = String(item.transactionHash ?? item.hash ?? "").toLowerCase();
+    if (!tx) continue;
+    const token = String(item.tokenAddress ?? "").toLowerCase();
+    const from = String(item.from ?? item.fromAddress ?? "").toLowerCase();
+    const to = String(item.to ?? item.toAddress ?? "").toLowerCase();
+    const amount = String(item.amount ?? item.value ?? "");
+    const key = [tx, token, from, to, amount].join(":");
+    const block = BigInt(item.blockNumber ?? "0");
+    const existing = maxBlockBySemanticTransfer.get(key);
+    if (existing === undefined || block > existing) {
+      maxBlockBySemanticTransfer.set(key, block);
+    }
+  }
+  return items.filter((item) => {
+    if (item.logIndex === undefined || item.logIndex === null) return true;
+    const tx = String(item.transactionHash ?? item.hash ?? "").toLowerCase();
+    if (!tx) return true;
+    const token = String(item.tokenAddress ?? "").toLowerCase();
+    const from = String(item.from ?? item.fromAddress ?? "").toLowerCase();
+    const to = String(item.to ?? item.toAddress ?? "").toLowerCase();
+    const amount = String(item.amount ?? item.value ?? "");
+    const key = [tx, token, from, to, amount].join(":");
+    const maxBlock = maxBlockBySemanticTransfer.get(key);
+    return maxBlock === undefined || BigInt(item.blockNumber ?? "0") === maxBlock;
+  });
+}

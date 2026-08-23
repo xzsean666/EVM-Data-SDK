@@ -403,11 +403,11 @@ Alchemy does not implement `getTransactions` in v0.1. `alchemy_getAssetTransfers
 - Native balance: `GET /{address}/balance`.
 - ERC-20 transfers: `GET /{address}/erc20/transfers`.
 - ERC-20 holdings/snapshots: `GET /{address}/erc20` with `chain` and required
-  `to_block`. For current holdings, the API-chain service resolves an indexed
-  Etherscan head before issuing the Moralis request. The upstream response is an unpaged wallet-balance array. The
-  adapter validates it in full and only returns requested-contract balances;
-  it never exposes the provider's full wallet inventory through the explicit
-  historical-balance operation.
+  `to_block`. `client.token.getHoldingsAtBlock({ chain, address, blockNumber })`
+  is the address-only historical operation and exposes the complete validated
+  Moralis response; it never accepts `tokenAddresses`, calls Archive RPC, or
+  falls back to Alchemy. The separate `getErc20BalancesAtBlock` operation is
+  still limited to a caller-supplied contract set.
 - Pagination: provider cursor with fixed initial limit and point-in-time behavior where supported.
 - List page capacity: 1–100 records.
 - Rate behavior: request throughput over a rolling four-second window; endpoint costs and plan rules can evolve.

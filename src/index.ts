@@ -99,6 +99,7 @@ export type {
   Erc20TransfersRequest,
   Erc20BlockRangeRequest,
   Erc20BalancesAtBlockRequest,
+  Erc20HoldingsAtBlockRequest,
   Erc20TokenHoldingsRequest,
   BeaconWithdrawalsBlockRangeRequest,
   InternalNativeTransfersBlockRangeRequest,
@@ -111,7 +112,7 @@ export type {
   TransferDirection,
 } from "./domain/operations";
 export type { DatasetUpdateRequest, DatasetUpdateResult, RecollectRequest, RecollectResult, SyncAuditRequest, SyncAuditResult, SyncDataset, SyncStatus } from "./domain/syncModels";
-export type { HistoryAddressRequest, ReplayStatus, UserStateAtBlockRequest, UserStateAtBlockResult, TokenFlowHistoryRequest, HistoryReplayRequest, HistoryRebuildRequest, HistoryReplayResult, HistoryRebuildResult } from "./domain/historyModels";
+export type { HistoryAddressRequest, HistoryInitialState, ReplayStatus, UserStateAtBlockRequest, UserStateAtBlockResult, TokenFlowHistoryRequest, HistoryReplayRequest, HistoryRebuildRequest, HistoryReplayResult, HistoryRebuildResult } from "./domain/historyModels";
 export type { PriceUpdateRequest, PriceUpdateResult, PriceRecollectRequest, PricePointQuery, PriceAtResult, PriceSyncScopeRequest } from "./domain/priceSyncModels";
 export type {
   NormalizedTokenPriceRequest,
@@ -137,6 +138,7 @@ export type {
   Erc20TransferPage,
   Erc20BalanceAtBlock,
   Erc20BalancesAtBlock,
+  Erc20HoldingsAtBlock,
   Erc20TokenHolding,
   Erc20TokenHoldings,
   InternalNativeTransfer,

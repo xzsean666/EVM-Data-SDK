@@ -131,9 +131,24 @@ export interface Erc20TokenHoldingsRequest {
   readonly signal?: AbortSignal;
 }
 
+/** Address-only historical ERC-20 holdings; the provider discovers contracts. */
+export interface Erc20HoldingsAtBlockRequest {
+  readonly chain: ChainReference;
+  readonly address: string;
+  readonly blockNumber: string;
+  readonly signal?: AbortSignal;
+}
+
 export interface NormalizedErc20TokenHoldingsRequest {
   readonly chain: ChainReference;
   readonly address: string;
+  readonly signal?: AbortSignal;
+}
+
+export interface NormalizedErc20HoldingsAtBlockRequest {
+  readonly chain: ChainReference;
+  readonly address: string;
+  readonly blockNumber: string;
   readonly signal?: AbortSignal;
 }
 
@@ -288,6 +303,15 @@ const erc20TokenHoldingsRequestSchema = z
   })
   .strict();
 
+const erc20HoldingsAtBlockRequestSchema = z
+  .object({
+    chain: chainReferenceSchema,
+    address: addressSchema.transform((value) => value.toLowerCase()),
+    blockNumber: decimalQuantitySchema,
+    signal: z.custom<AbortSignal>((value) => value instanceof AbortSignal).optional(),
+  })
+  .strict();
+
 export function parseTransactionsRequest(input: unknown): NormalizedTransactionsRequest {
   const parsed = parseSchema(transactionsRequestSchema, input, "transactions request");
   validateBlockRange(parsed.startBlock, parsed.endBlock);
@@ -396,6 +420,20 @@ export function parseErc20TokenHoldingsRequest(input: unknown): NormalizedErc20T
   };
 }
 
+export function parseErc20HoldingsAtBlockRequest(input: unknown): NormalizedErc20HoldingsAtBlockRequest {
+  const parsed = parseSchema(
+    erc20HoldingsAtBlockRequestSchema,
+    input,
+    "ERC-20 holdings-at-block request",
+  );
+  return {
+    chain: normalizeChainReference(parsed.chain),
+    address: parsed.address,
+    blockNumber: parsed.blockNumber,
+    ...(parsed.signal === undefined ? {} : { signal: parsed.signal }),
+  };
+}
+
 export const normalizeTransactionsRequest = parseTransactionsRequest;
 export const normalizeNativeBalanceRequest = parseNativeBalanceRequest;
 export const normalizeTransactionContextsByHashRequest = parseTransactionContextsByHashRequest;
@@ -403,6 +441,7 @@ export const normalizeErc20TransfersRequest = parseErc20TransfersRequest;
 export const normalizeErc20BlockRangeRequest = parseErc20BlockRangeRequest;
 export const normalizeErc20BalancesAtBlockRequest = parseErc20BalancesAtBlockRequest;
 export const normalizeErc20TokenHoldingsRequest = parseErc20TokenHoldingsRequest;
+export const normalizeErc20HoldingsAtBlockRequest = parseErc20HoldingsAtBlockRequest;
 
 export function normalizeChainReference(value: ChainReference): ChainReference {
   if (typeof value === "number") {

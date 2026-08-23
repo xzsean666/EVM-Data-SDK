@@ -255,6 +255,19 @@ The next SDK P0 work remains receipt/full-log and exact effective-gas-price
 contracts needed by the backend Action Parser. Do not replace those operations
 with RPC fallbacks: this integration is explicitly API-only.
 
+## 2026-08-22 Boundary holdings and snapshot replay
+
+The SDK now exposes `client.token.getHoldingsAtBlock({ chain, address,
+blockNumber })` for a Moralis-only, address-only historical ERC-20 snapshot.
+It does not accept token addresses or include native ETH. Native historical
+balances remain a separate Archive RPC operation.
+
+`client.history.replay({ initialState, toBlock })` now accepts an exact opening
+state at a boundary block, persists that state in a deterministic revision,
+skips boundary-block facts, and resumes later calls from the latest complete
+snapshot. The backend opening/replay worker must use this contract instead of
+replaying from block 0/1.
+
 ## v0.3 Proposal: Advanced Proxy and Block-Range ERC-20 Reads
 
 **Status:** ADR-023/ADR-024 were explicitly approved by the owner on 2026-08-06; source implementation and deterministic verification are complete in the working tree.
