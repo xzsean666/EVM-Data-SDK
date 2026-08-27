@@ -5,6 +5,7 @@ import { parseChainDefinition } from "./chains";
 import { invalidConfiguration } from "./errors";
 import type { OperationName } from "./operations";
 import type { TokenPriceProviderName } from "./priceModels";
+import { EnvLoader } from "../env/EnvLoader";
 
 export const DEFAULT_ATTEMPT_TIMEOUT_MS = 10_000;
 export const DEFAULT_TOTAL_TIMEOUT_MS = 30_000;
@@ -263,6 +264,8 @@ export interface NormalizedDeFiConfiguration {
 }
 
 export interface ClientConfiguration {
+  readonly envFilePath?: string;
+  readonly envContent?: string;
   readonly storage?: StorageConfiguration;
   readonly sync?: SyncConfiguration;
   readonly replay?: ReplayConfiguration;
@@ -441,11 +444,93 @@ const clientShapeSchema = z
     uniswapV4: uniswapV4Schema.optional(),
     logger: z.custom<ObservationCallback>((value) => typeof value === "function").optional(),
     telemetry: z.custom<ObservationCallback>((value) => typeof value === "function").optional(),
+    envFilePath: z.string().trim().min(1).max(4096).optional(),
+    envContent: z.string().optional(),
   })
   .strict();
 
 export function parseClientConfiguration(input: unknown): NormalizedClientConfiguration {
-  const parsed = clientShapeSchema.safeParse(input);
+  let effectiveInput = input;
+  if (typeof input === "object" && input !== null) {
+    const inputRecord = input as Record<string, unknown>;
+    const envFilePath = typeof inputRecord.envFilePath === "string" ? inputRecord.envFilePath : undefined;
+    const envContent = typeof inputRecord.envContent === "string" ? inputRecord.envContent : undefined;
+    if (envFilePath !== undefined || envContent !== undefined) {
+      const loader = new EnvLoader({
+        ...(envFilePath !== undefined ? { filePath: envFilePath } : {}),
+        ...(envContent !== undefined ? { content: envContent } : {}),
+      });
+      const envConfig = loader.toClientConfiguration();
+
+      const mergedProviders = inputRecord.providers !== undefined
+        ? inputRecord.providers
+        : (envConfig.providers && envConfig.providers.length > 0 ? envConfig.providers : undefined);
+
+      const mergedProxies = inputRecord.proxies !== undefined
+        ? inputRecord.proxies
+        : envConfig.proxies;
+
+      const mergedAdvancedProxy = inputRecord.advancedProxy !== undefined
+        ? inputRecord.advancedProxy
+        : envConfig.advancedProxy;
+
+      const mergedStorage = inputRecord.storage !== undefined
+        ? inputRecord.storage
+        : envConfig.storage;
+
+      const ethRpcEndpoints = loader.getRpcEndpoints("ethereum");
+      const baseRpcEndpoints = loader.getRpcEndpoints("base");
+
+      let mergedChainlink = inputRecord.chainlink as ChainlinkConfiguration | undefined;
+      if (mergedChainlink !== undefined) {
+        mergedChainlink = {
+          ...mergedChainlink,
+          rpcEndpoints: mergeEndpointConfigs(mergedChainlink.rpcEndpoints ?? [], ethRpcEndpoints),
+        };
+      }
+
+      let mergedDefi = inputRecord.defi as DeFiConfiguration | undefined;
+      if (mergedDefi !== undefined) {
+        mergedDefi = {
+          ...mergedDefi,
+          rpcEndpoints: {
+            ethereum: mergeEndpointConfigs(mergedDefi.rpcEndpoints?.ethereum ?? [], ethRpcEndpoints),
+            base: mergeEndpointConfigs(mergedDefi.rpcEndpoints?.base ?? [], baseRpcEndpoints),
+          },
+        };
+      }
+
+      let mergedUniswapV3 = inputRecord.uniswapV3 as UniswapV3Configuration | undefined;
+      if (mergedUniswapV3 !== undefined) {
+        mergedUniswapV3 = {
+          ...mergedUniswapV3,
+          rpcEndpoints: mergeEndpointConfigs(mergedUniswapV3.rpcEndpoints ?? [], ethRpcEndpoints),
+        };
+      }
+
+      let mergedUniswapV4 = inputRecord.uniswapV4 as UniswapV4Configuration | undefined;
+      if (mergedUniswapV4 !== undefined) {
+        mergedUniswapV4 = {
+          ...mergedUniswapV4,
+          rpcEndpoints: mergeEndpointConfigs(mergedUniswapV4.rpcEndpoints ?? [], ethRpcEndpoints),
+        };
+      }
+
+      effectiveInput = {
+        ...inputRecord,
+        ...(mergedProviders !== undefined ? { providers: mergedProviders } : {}),
+        ...(mergedProxies !== undefined ? { proxies: mergedProxies } : {}),
+        ...(mergedAdvancedProxy !== undefined ? { advancedProxy: mergedAdvancedProxy } : {}),
+        ...(mergedStorage !== undefined ? { storage: mergedStorage } : {}),
+        ...(mergedChainlink !== undefined ? { chainlink: mergedChainlink } : {}),
+        ...(mergedDefi !== undefined ? { defi: mergedDefi } : {}),
+        ...(mergedUniswapV3 !== undefined ? { uniswapV3: mergedUniswapV3 } : {}),
+        ...(mergedUniswapV4 !== undefined ? { uniswapV4: mergedUniswapV4 } : {}),
+      };
+    }
+  }
+
+  const parsed = clientShapeSchema.safeParse(effectiveInput);
   if (!parsed.success) {
     throw invalidConfiguration("Invalid client configuration.");
   }
@@ -804,3 +889,29 @@ function isLoopbackHost(hostname: string): boolean {
 export function isBuiltinProviderName(value: string): value is BuiltinProviderName {
   return value === "etherscan" || value === "blockscout" || value === "alchemy" || value === "moralis";
 }
+
+function mergeEndpointConfigs(
+  explicit: readonly EthereumArchiveRpcEndpointConfiguration[],
+  discovered: readonly EthereumArchiveRpcEndpointConfiguration[],
+): readonly EthereumArchiveRpcEndpointConfiguration[] {
+  const ids = new Set<string>();
+  const urls = new Set<string>();
+  const result: EthereumArchiveRpcEndpointConfiguration[] = [];
+
+  for (const ep of explicit) {
+    ids.add(ep.id);
+    urls.add(ep.url);
+    result.push(ep);
+  }
+
+  for (const ep of discovered) {
+    if (!ids.has(ep.id) && !urls.has(ep.url)) {
+      ids.add(ep.id);
+      urls.add(ep.url);
+      result.push(ep);
+    }
+  }
+
+  return Object.freeze(result);
+}
+

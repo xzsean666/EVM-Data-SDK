@@ -118,7 +118,7 @@ export class TokenService {
   async getGateKlinesPrices(request: GateKlineRequest): Promise<readonly GateKlinePoint[]> {
     const normalized = normalizeGateKlineRequest(request);
     const chunks: Array<{ from: number; to: number }> = [];
-    const chunkMs = 900 * 5 * 60 * 1000;
+    const chunkMs = (normalized.interval === "1h" ? 900 * 60 * 60 : 900 * 5 * 60) * 1000;
     for (let from = normalized.start; from < normalized.end; from += chunkMs) {
       chunks.push({ from, to: Math.min(normalized.end, from + chunkMs) });
     }
@@ -138,7 +138,7 @@ export class TokenService {
       for (let attempt = 0; attempt < endpoints.length; attempt++) {
       const endpoint = endpoints[(startEndpoint + attempt) % endpoints.length]!;
       const url = new URL(endpoint + "/api/v4/spot/candlesticks");
-      url.searchParams.set("currency_pair", normalized.pair); url.searchParams.set("interval", "5m");
+      url.searchParams.set("currency_pair", normalized.pair); url.searchParams.set("interval", normalized.interval);
       url.searchParams.set("from", String(Math.floor(from / 1000))); url.searchParams.set("to", String(Math.floor(to / 1000))); url.searchParams.set("limit", "1000");
       const response = await fetch(url, { headers: { accept: "application/json" }, ...(normalized.signal === undefined ? {} : { signal: normalized.signal }) });
       if (!response.ok) { lastError = new Error(`Gate ${response.status}: ${await response.text()}`); continue; }
@@ -147,7 +147,10 @@ export class TokenService {
       const points: GateKlinePoint[] = [];
       for (const row of rows) {
         if (!Array.isArray(row) || row.length < 6) { lastError = new Error("Gate returned malformed candlestick row."); continue; }
-        const point = { timestamp: Number(row[0]) * 1000, priceUsd: String(row[2]) };
+        // The persisted legacy Gate 1h series used the candle open; retain
+        // that convention for historical backfill while 5m uses the close.
+        const priceIndex = normalized.interval === "1h" ? 5 : 2;
+        const point = { timestamp: Number(row[0]) * 1000, priceUsd: String(row[priceIndex]) };
         if (Number.isFinite(point.timestamp) && Number(point.priceUsd) > 0) points.push(point);
       }
       results[index] = points;

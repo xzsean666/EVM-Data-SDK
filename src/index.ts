@@ -213,3 +213,5 @@ export { UniswapV4HistoricalPriceService } from "./defi/uniswap/v4/UniswapV4Hist
 export type { UniswapV4PoolDefinition } from "./defi/uniswap/v4/UniswapV4PoolDefinition";
 export { UNISWAP_V4_TOKEN_REGISTRY, UNISWAP_V4_TOKEN_REGISTRY_VERSION, uniswapV4RegistryVersion } from "./defi/uniswap/v4/uniswapV4PoolRegistry";
 export { encodeStateViewSlot0, decodeUniswapV4StateViewSlot0, UNISWAP_V4_STATE_VIEW_SLOT0_SELECTOR } from "./defi/uniswap/v4/UniswapV4StateViewCodec";
+export { EnvLoader, parseEnvContent, loadClientConfigurationFromEnv } from "./env/EnvLoader";
+export type { EnvLoaderOptions, SupportedRpcChain } from "./env/EnvLoader";

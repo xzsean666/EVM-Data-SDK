@@ -35,4 +35,24 @@ describe("TokenService Gate endpoint defaults", () => {
       href: expect.stringContaining("https://api.gateio.ws/api/v4/spot/candlesticks"),
     });
   });
+
+  it("uses the Gate candle open for persisted hourly history", async () => {
+    process.env.GATE_API_BASE_URLS = "";
+    const fetchMock = vi.fn<(input: string | URL | Request, init?: RequestInit) => Promise<Response>>(async () => new Response(
+      JSON.stringify([["1780272000", "1870", "434.63", "438.66", "434.63", "438.64", "1875", "1"]]),
+      { status: 200, headers: { "content-type": "application/json" } },
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const service = new TokenService({} as never, {} as never, {} as never);
+    const points = await service.getGateKlinesPrices({
+      pair: "TSLA_USDT",
+      interval: "1h",
+      start: 1780272000000,
+      end: 1780275600000,
+    });
+
+    expect(points).toEqual([{ timestamp: 1780272000000, priceUsd: "438.64" }]);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("interval=1h");
+  });
 });

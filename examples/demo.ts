@@ -1,7 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { EvmDataClient } from "../src/index.js";
-import { EnvLoader } from "./envLoader.js";
+import { EvmDataClient, EnvLoader } from "../dist/index.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -9,40 +8,43 @@ const rootEnvKeyPath = path.resolve(__dirname, "../.env.key");
 
 async function runDemo() {
   console.log("==================================================");
-  console.log(" 🚀 EVM Data SDK - EnvLoader & Integration Demo   ");
+  console.log(" 🚀 EVM Data SDK - Env & Multi-chain RPC Demo     ");
   console.log("==================================================\n");
 
-  // 1. Initialize EnvLoader pointing to .env.key
-  console.log(`[1] Loading environment keys from: ${rootEnvKeyPath}`);
+  // 1. Initialize EnvLoader pointing to .env.key (or custom env file)
+  console.log(`[1] Inspecting environment keys from: ${rootEnvKeyPath}`);
   const envLoader = new EnvLoader({ filePath: rootEnvKeyPath });
 
-  // 2. Load API Key pools by prefix dynamically
-  const etherscanKeys = envLoader.getKeysByPrefix("ETHERSCAN_API_KEY");
-  const blockscoutKeys = envLoader.getKeysByPrefix("BLOCKSCOUT_API_KEY");
-  const alchemyKeys = envLoader.getKeysByPrefix("ALCHEMY_API_KEY");
-  const moralisKeys = envLoader.getKeysByPrefix("MORALIS_API_KEY");
+  // 2. Multi-chain RPC Key Resolution (NodeReal, Ankr, Alchemy, DRPC, Infura, etc.)
+  const ethEndpoints = envLoader.getRpcEndpoints("ethereum");
+  const baseEndpoints = envLoader.getRpcEndpoints("base");
+  const bscEndpoints = envLoader.getRpcEndpoints("bsc");
+  const polyEndpoints = envLoader.getRpcEndpoints("polygon");
+  const arbEndpoints = envLoader.getRpcEndpoints("arbitrum");
+  const optEndpoints = envLoader.getRpcEndpoints("optimism");
 
-  console.log("\n[2] Loaded API Keys from .env.key:");
-  console.log(` - Etherscan Keys (${etherscanKeys.length}):`, etherscanKeys.map((k) => `${k.slice(0, 6)}...`));
-  console.log(` - Blockscout Keys (${blockscoutKeys.length}):`, blockscoutKeys.map((k) => `${k.slice(0, 6)}...`));
-  console.log(` - Alchemy Keys   (${alchemyKeys.length}):`, alchemyKeys.map((k) => `${k.slice(0, 8)}...`));
-  console.log(` - Moralis Keys   (${moralisKeys.length}):`, moralisKeys.map((k) => `${k.slice(0, 12)}...`));
+  console.log("\n[2] 🌐 Resolved Multi-chain Archive RPC Endpoints:");
+  console.log(` - Ethereum Endpoints (${ethEndpoints.length}):`, ethEndpoints.map((e) => e.id));
+  console.log(` - Base Endpoints     (${baseEndpoints.length}):`, baseEndpoints.map((e) => e.id));
+  console.log(` - BSC Endpoints      (${bscEndpoints.length}):`, bscEndpoints.map((e) => e.id));
+  console.log(` - Polygon Endpoints  (${polyEndpoints.length}):`, polyEndpoints.map((e) => e.id));
+  console.log(` - Arbitrum Endpoints (${arbEndpoints.length}):`, arbEndpoints.map((e) => e.id));
+  console.log(` - Optimism Endpoints (${optEndpoints.length}):`, optEndpoints.map((e) => e.id));
 
-  // 3. Dynamically construct SDK Provider Configurations
-  const providers = [];
-  if (etherscanKeys.length > 0) providers.push(envLoader.getProviderConfig("etherscan"));
-  if (blockscoutKeys.length > 0) providers.push(envLoader.getProviderConfig("blockscout"));
-  if (alchemyKeys.length > 0) providers.push(envLoader.getProviderConfig("alchemy"));
-  if (moralisKeys.length > 0) providers.push(envLoader.getProviderConfig("moralis"));
-
-  console.log("\n[3] Initializing EvmDataClient with dynamic providers:");
+  // 3. Indexed Provider Keys
+  const providers = envLoader.getProviderConfigs();
+  console.log("\n[3] 🔑 Resolved Indexed Data Providers:");
   providers.forEach((p) => {
-    console.log(` - Provider: ${p.kind}, Loaded ${p.apiKeys.length} key(s) in pool`);
+    console.log(` - Provider: ${p.kind} (${p.apiKeys.length} key(s) in pool)`);
   });
 
-  // 4. Instantiate SDK Client
+  // 4. Instantiate SDK Client directly passing the env file path!
+  console.log("\n[4] ⚡ Initializing EvmDataClient directly with envFilePath:");
   const client = new EvmDataClient({
-    providers,
+    envFilePath: rootEnvKeyPath,
+    chainlink: { enabled: true },
+    defi: { enabled: true },
+    uniswapV3: { enabled: true },
     price: {
       providers: [
         { kind: "binance" },
@@ -57,27 +59,27 @@ async function runDemo() {
   });
 
   // 5. Run Price Aggregation Test (Free APIs, no key required)
-  console.log("\n[4] 📈 Testing Token Price Fetching (ETH & BTC)...");
+  console.log("\n[5] 📈 Testing Token Price Fetching (ETH & BTC)...");
   try {
     const ethPrice = await client.token.getPriceHistory({
       token: "ETH",
       range: { kind: "latest", days: 1 },
     });
     const latestPoint = ethPrice.points[ethPrice.points.length - 1];
-    console.log(`   ✅ ETH Price (Latest 1 day): $${latestPoint?.close ?? 'N/A'} (Data points: ${ethPrice.points.length})`);
+    console.log(`   ✅ ETH Price (Latest 1 day): $${latestPoint?.close ?? "N/A"} (Data points: ${ethPrice.points.length})`);
 
     const btcPrice = await client.token.getPriceHistory({
       token: "BTC",
       range: { kind: "latest", days: 1 },
     });
     const btcLatest = btcPrice.points[btcPrice.points.length - 1];
-    console.log(`   ✅ BTC Price (Latest 1 day): $${btcLatest?.close ?? 'N/A'} (Data points: ${btcPrice.points.length})`);
+    console.log(`   ✅ BTC Price (Latest 1 day): $${btcLatest?.close ?? "N/A"} (Data points: ${btcPrice.points.length})`);
   } catch (err: any) {
     console.error("   ❌ Price fetch failed:", err.message);
   }
 
   // 6. Run On-chain Query Test using the loaded provider pools
-  console.log("\n[5] 🔗 Testing On-chain Address Queries (Vitalik's Address)...");
+  console.log("\n[6] 🔗 Testing On-chain Address Queries (Vitalik's Address)...");
   const testAddress = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"; // vitalik.eth
 
   // 6.1 Native Balance

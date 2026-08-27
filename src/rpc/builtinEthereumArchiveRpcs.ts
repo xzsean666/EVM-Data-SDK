@@ -29,6 +29,4 @@ export const BUILTIN_ETHEREUM_ARCHIVE_RPCS: readonly BuiltinEthereumArchiveRpcCa
   Object.freeze({ id: "mevblocker-public", url: "https://rpc.mevblocker.io" }),
   Object.freeze({ id: "nodies-public", url: "https://eth-pokt.nodies.app" }),
   Object.freeze({ id: "tenderly-public", url: "https://mainnet.gateway.tenderly.co" }),
-  Object.freeze({ id: "ankr-keyed-1", url: "https://rpc.ankr.com/eth/d63026f400105d4547449739efa9a0e1a1011d5f59fafe16b210eec40d526a82" }),
-  Object.freeze({ id: "ankr-keyed-2", url: "https://rpc.ankr.com/eth/9547a67ab80fa87bd55cb5c61c7e9b091d78c35a8310a542a641b3b4112b7af0" }),
 ]);
