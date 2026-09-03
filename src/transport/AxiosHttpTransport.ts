@@ -279,10 +279,11 @@ export class TunnelingHttpsProxyAgent extends https.Agent {
     this.proxy = proxy;
   }
 
-  createConnection(
+  // @ts-expect-error Node https.Agent allows asynchronous createConnection via callback without returning a socket
+  override createConnection(
     options: https.RequestOptions,
     callback: (err: Error | null, socket?: net.Socket) => void,
-  ): net.Socket {
+  ): void {
     const targetHost = options.hostname ?? options.host ?? "localhost";
     const targetPort = options.port ?? 443;
 
@@ -328,7 +329,6 @@ export class TunnelingHttpsProxyAgent extends https.Agent {
 
     proxySocket.on("data", onData);
     proxySocket.on("error", (err) => callback(err));
-    return proxySocket;
   }
 }
 
