@@ -1,3 +1,7 @@
+import http from "node:http";
+import https from "node:https";
+import net from "node:net";
+import tls from "node:tls";
 import axios, {
   type AxiosInstance,
   type AxiosProxyConfig,
@@ -40,11 +44,19 @@ export class AxiosHttpTransport implements HttpTransport {
       });
     }
 
+    const hasProxy = request.proxy !== null && request.proxy !== undefined;
+    const isHttps = request.url.startsWith("https:");
+
     const config: AxiosRequestConfig = {
       method: request.method,
       url: request.url,
       timeout: request.timeoutMs,
-      proxy: request.proxy === null || request.proxy === undefined ? false : toAxiosProxy(request.proxy),
+      proxy: false,
+      ...(hasProxy
+        ? isHttps
+          ? { httpsAgent: getHttpsProxyAgent(request.proxy!) }
+          : { httpAgent: getHttpProxyAgent(request.proxy!) }
+        : {}),
       maxRedirects: 0,
       validateStatus: () => true,
       ...(request.headers === undefined ? {} : { headers: request.headers }),
@@ -251,7 +263,119 @@ function normalizeHeaders(headers: unknown): Record<string, string | readonly st
   return result;
 }
 
-function toAxiosProxy(proxy: HttpProxy): AxiosProxyConfig {
+function formatProxyUrl(proxy: HttpProxy): string {
+  const protocol = proxy.protocol.endsWith(":") ? proxy.protocol : `${proxy.protocol}:`;
+  const auth = proxy.auth
+    ? `${encodeURIComponent(proxy.auth.username)}:${encodeURIComponent(proxy.auth.password)}@`
+    : "";
+  return `${protocol}//${auth}${proxy.host}:${proxy.port}`;
+}
+
+export class TunnelingHttpsProxyAgent extends https.Agent {
+  readonly proxy: HttpProxy;
+
+  constructor(proxy: HttpProxy) {
+    super({ keepAlive: true });
+    this.proxy = proxy;
+  }
+
+  createConnection(
+    options: https.RequestOptions,
+    callback: (err: Error | null, socket?: net.Socket) => void,
+  ): net.Socket {
+    const targetHost = options.hostname ?? options.host ?? "localhost";
+    const targetPort = options.port ?? 443;
+
+    const proxySocket = net.connect({ host: this.proxy.host, port: this.proxy.port }, () => {
+      let connectReq = `CONNECT ${targetHost}:${targetPort} HTTP/1.1\r\n`;
+      connectReq += `Host: ${targetHost}:${targetPort}\r\n`;
+      if (this.proxy.auth) {
+        const cred = Buffer.from(`${this.proxy.auth.username}:${this.proxy.auth.password}`).toString("base64");
+        connectReq += `Proxy-Authorization: Basic ${cred}\r\n`;
+      }
+      connectReq += "Connection: close\r\n\r\n";
+      proxySocket.write(connectReq);
+    });
+
+    let buffer = "";
+    const onData = (chunk: Buffer) => {
+      buffer += chunk.toString();
+      const headerEnd = buffer.indexOf("\r\n\r\n");
+      if (headerEnd !== -1) {
+        proxySocket.removeListener("data", onData);
+        const statusLine = buffer.split("\r\n")[0] ?? "";
+        if (statusLine.includes(" 200 ")) {
+          const rawHostname = typeof options.hostname === "string" ? options.hostname : undefined;
+          const servername = options.servername ?? (rawHostname && !net.isIP(rawHostname) ? rawHostname : undefined);
+          const tlsOptions: tls.ConnectionOptions = {
+            socket: proxySocket,
+            ...(servername === undefined ? {} : { servername }),
+            ...(options.ca !== undefined ? { ca: options.ca } : {}),
+            ...(options.cert !== undefined ? { cert: options.cert } : {}),
+            ...(options.key !== undefined ? { key: options.key } : {}),
+            ...(options.rejectUnauthorized !== undefined ? { rejectUnauthorized: options.rejectUnauthorized } : {}),
+          };
+          const tlsSocket = tls.connect(tlsOptions, () => {
+            callback(null, tlsSocket);
+          });
+          tlsSocket.on("error", (err) => callback(err));
+        } else {
+          proxySocket.destroy();
+          callback(new Error(`Proxy CONNECT failed: ${statusLine}`));
+        }
+      }
+    };
+
+    proxySocket.on("data", onData);
+    proxySocket.on("error", (err) => callback(err));
+    return proxySocket;
+  }
+}
+
+export class TunnelingHttpProxyAgent extends http.Agent {
+  readonly proxy: HttpProxy;
+
+  constructor(proxy: HttpProxy) {
+    super({ keepAlive: true });
+    this.proxy = proxy;
+  }
+
+  createConnection(
+    _options: http.RequestOptions,
+    callback: (err: Error | null, socket?: net.Socket) => void,
+  ): net.Socket {
+    const socket = net.connect({ host: this.proxy.host, port: this.proxy.port }, () => {
+      callback(null, socket);
+    });
+    socket.on("error", (err) => callback(err));
+    return socket;
+  }
+}
+
+const httpsAgentCache = new Map<string, TunnelingHttpsProxyAgent>();
+const httpAgentCache = new Map<string, TunnelingHttpProxyAgent>();
+
+export function getHttpsProxyAgent(proxy: HttpProxy): TunnelingHttpsProxyAgent {
+  const url = formatProxyUrl(proxy);
+  let agent = httpsAgentCache.get(url);
+  if (!agent) {
+    agent = new TunnelingHttpsProxyAgent(proxy);
+    httpsAgentCache.set(url, agent);
+  }
+  return agent;
+}
+
+export function getHttpProxyAgent(proxy: HttpProxy): TunnelingHttpProxyAgent {
+  const url = formatProxyUrl(proxy);
+  let agent = httpAgentCache.get(url);
+  if (!agent) {
+    agent = new TunnelingHttpProxyAgent(proxy);
+    httpAgentCache.set(url, agent);
+  }
+  return agent;
+}
+
+export function toAxiosProxy(proxy: HttpProxy): AxiosProxyConfig {
   return {
     protocol: proxy.protocol,
     host: proxy.host,

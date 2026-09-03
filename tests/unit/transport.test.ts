@@ -271,7 +271,8 @@ describe("AxiosHttpTransport", () => {
         proxy,
       });
 
-      expect(captured?.proxy).toMatchObject({ protocol: "https", host: "127.0.0.1", port: 8443, auth: { username: "proxy-user", password: "proxy-pass" } });
+      expect(captured?.proxy).toBe(false);
+      expect(captured?.httpsAgent).toBeDefined();
     } finally {
       if (previous === undefined) {
         delete process.env.HTTP_PROXY;

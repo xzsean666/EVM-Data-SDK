@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { EvmDataClient } from "../../src/client/EvmDataClient";
 import { EvmDataError } from "../../src/domain/errors";
 import type { DataProviderAdapter } from "../../src/providers/DataProviderAdapter";
-import type { HttpRequest, HttpResponse, HttpTransport } from "../../src/transport/HttpTransport";
+import { HttpTransportError, type HttpRequest, type HttpResponse, type HttpTransport } from "../../src/transport/HttpTransport";
 
 const address = "0x1111111111111111111111111111111111111111";
 
@@ -549,5 +549,54 @@ describe("EvmDataClient DeFi composition (v0.5)", () => {
 
   it("requires an explicit endpoint when built-in DeFi RPCs are disabled", () => {
     expect(() => new EvmDataClient({ defi: { enabled: true, chains: ["base"], useBuiltinArchiveRpcs: false } })).toThrow(/no Archive RPC endpoint/i);
+  });
+
+  it("falls back to direct request when proxy fails in ApiChainService", async () => {
+    let callCount = 0;
+    const transport = {
+      request: vi.fn().mockImplementation(async (request: any) => {
+        callCount += 1;
+        if (request.proxy !== null && request.proxy !== undefined) {
+          throw new HttpTransportError({
+            code: "PROXY_ERROR",
+            message: "Proxy connection failed.",
+            retryable: true,
+          });
+        }
+        return {
+          status: 200,
+          headers: {},
+          body: { status: "1", message: "OK", result: "20000000" },
+        };
+      }),
+    };
+
+    const advancedProxyRoute = {
+      assertReady: vi.fn(),
+      acquire: vi.fn().mockResolvedValue({ id: "managed-1", url: "http://127.0.0.1:45603", leaseToken: 1 }),
+      report: vi.fn(),
+    };
+
+    const client = new EvmDataClient({
+      providers: [{ kind: "etherscan", apiKeys: ["key1"] }],
+      advancedProxy: {
+        kind: "sing-box",
+        urls: ["vless://11111111-1111-4111-8111-111111111111@proxy.example:443?security=tls&type=tcp&sni=proxy.example"],
+      },
+      requestPolicy: { allowDirect: true },
+    }, {
+      transport: transport as never,
+      advancedProxyManager: advancedProxyRoute as never,
+    });
+
+    const result = await client.chain.getLatestBlockNumber({ chain: "ethereum" });
+    expect(result.blockNumber).toBe("20000000");
+    expect(callCount).toBe(2);
+    expect(transport.request).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      proxy: expect.objectContaining({ host: "127.0.0.1", port: 45603 }),
+    }));
+    expect(transport.request).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      proxy: null,
+    }));
   });
 });

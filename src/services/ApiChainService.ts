@@ -38,6 +38,7 @@ export class ApiChainService {
   }[]
   private readonly proxyPool: ProxyPool
   private readonly advancedProxyRoute: ManagedProxyRoute | undefined
+  private readonly allowDirect: boolean
   private readonly transactionContextCache = new Map<string, { readonly value: TransactionContext; readonly expiresAt: number }>()
   private readonly transactionContextInFlight = new Map<string, Promise<TransactionContext>>()
   private readonly transactionContextCacheTtlMs = 60_000
@@ -50,6 +51,7 @@ export class ApiChainService {
     this.registry = new ChainRegistry(configuration.chains)
     this.proxyPool = options.proxyPool
     this.advancedProxyRoute = options.advancedProxyRoute
+    this.allowDirect = configuration.requestPolicy.allowDirect ?? true
     this.providers = adapters.flatMap((adapter, index) => {
       const apiKeys = configuration.providers[index]?.apiKeys ?? []
       return apiKeys.length === 0 ? [] : [{ adapter, apiKeys }]
@@ -467,17 +469,26 @@ export class ApiChainService {
       return result
     } catch (error) {
       this.reportProxy(proxy, proxyOutcome(error))
+      if (proxy !== null && this.allowDirect && proxyOutcome(error) === 'proxy_failure') {
+        return await work(providerContext(chain, candidate.apiKey, signal, null))
+      }
       throw error
     }
   }
 
   private async acquireProxy(signal: AbortSignal | undefined): Promise<ProxyLease | null> {
     if (this.advancedProxyRoute !== undefined) {
-      this.advancedProxyRoute.assertReady()
-      return this.advancedProxyRoute.acquire(signal)
+      try {
+        this.advancedProxyRoute.assertReady()
+        return await this.advancedProxyRoute.acquire(signal)
+      } catch (error) {
+        if (this.allowDirect) return null
+        throw error
+      }
     }
     const lease = this.proxyPool.acquire()
     if (lease !== undefined) return lease
+    if (this.allowDirect) return null
     throw new EvmDataError({
       code: 'PROXY_ERROR',
       message: 'No permitted API proxy route is available.',
