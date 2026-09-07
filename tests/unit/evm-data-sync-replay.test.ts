@@ -39,7 +39,7 @@ describe("persistent EVM sync and replay", () => {
 
   it("commits facts and cursor idempotently, then replays balances", async () => {
     const storage = new SqliteStorageAdapter(":memory:"); await storage.initialize();
-    expect(storage.all<{ version: number }>("SELECT version FROM sdk_schema_migrations ORDER BY version").map((row) => row.version)).toEqual([1, 2, 3, 4]);
+    expect(storage.all<{ version: number }>("SELECT version FROM sdk_schema_migrations ORDER BY version").map((row) => row.version)).toEqual([1, 2, 3, 4, 5]);
     const items = [transfer("10", "90071992547409931234567890"), transfer("11", "2", false)];
     const fake = { token: { getErc20TransfersByBlockRange: async () => ({ items, range: { startBlock: "10", endBlock: "11" }, providers: ["etherscan"], stats: {} }) }, address: {}, chain: { getLatestBlockNumber: async () => ({ blockNumber: "11" }) } } as any;
     const sync = new SyncService({ storage, token: fake.token, address: fake.address, chain: fake.chain, resolveChain: () => ({ chainId: 1 }) });

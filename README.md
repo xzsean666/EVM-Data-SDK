@@ -191,6 +191,7 @@ RPC endpoints and Data-API credentials utilize progressive backoff cooldowns whe
 `1m -> 5m -> 15m -> 30m -> 1h -> 2h -> 4h -> 8h -> 12h -> 24h (cap)`
 
 - **Automatic Recovery**: While in cooldown, a resource is bypassed. Once cooldown expires, a single attempt is permitted. A successful request immediately resets consecutive failure counts and clears the cooldown.
+- **SQLite Local Persistence**: Cooldown states are automatically persisted into the SDK's SQLite database (`sdk_cooldown_states`). Across process restarts or scheduled cron invocations, `client.initialize()` restores failure counts, cooldown tiers, and cumulative failure timers seamlessly.
 - **Alchemy RPC Pooling**: Configuring `ALCHEMY_API_KEY` (or `ALCHEMY_RPC_KEY`) automatically enrolls Alchemy into the Archive RPC pool candidate set under `alchemy-ethereum-1`, sharing random load distribution and cooldown tracking.
 - **Slack Alerts**: When any RPC endpoint or API key reaches the maximum 24-hour cooldown, `client.checkAndReportAlerts()` sends a structured summary to the configured Slack Webhook:
 

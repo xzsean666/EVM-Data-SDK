@@ -904,3 +904,11 @@ Endpoints and credentials enter progressive cooldown upon failure to isolate deg
 - **Throttling**: The alert service enforces a minimum delay of `reportIntervalMs` (default 24h) between sent alerts (`now - lastReportSentAt >= reportIntervalMs`). Subsequent invocations within the throttle window safely return `false`.
 - **Secret Redaction**: Payloads contain only `id`, `category` (`rpc` | `data-api`), `envKeyName`, `detail`, and formatted elapsed duration. Raw API keys and URL tokens are strictly excluded.
 
+### 16.5 SQLite Local Persistence Contract
+
+- **Storage Table**: `sdk_cooldown_states` (migration version 5) tracks `resource_key`, `category`, `env_key_name`, `failure_count`, `current_cooldown_ms`, `cooldown_until`, `first_failure_at`, and `updated_at`.
+- **Initialization**: Calling `await client.initialize()` automatically restores persisted cooldown states from SQLite into `archiveRpcPool`, `defiArchiveRpcPools`, and `credentialPools`.
+- **Atomic Updates**: When endpoints or credentials report failure, their backoff state is saved to `sdk_cooldown_states`. When an upstream reports success, its record is deleted from SQLite.
+- **Cross-process Durability**: Consecutive failures, cooldown intervals, and cumulative failure timers persist across process restarts, ensuring stepped escalation and 24-hour alerting function correctly in cron and serverless environments.
+
+

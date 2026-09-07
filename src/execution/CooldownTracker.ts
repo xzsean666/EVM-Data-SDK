@@ -62,6 +62,18 @@ export class CooldownTracker {
     this.firstFailureAt = null;
   }
 
+  restoreState(state: {
+    readonly consecutiveFailures: number;
+    readonly currentCooldownMs: number;
+    readonly cooldownUntil: number | null;
+    readonly firstFailureAt: number | null;
+  }): void {
+    this.consecutiveFailures = Math.max(0, state.consecutiveFailures);
+    this.currentCooldownMs = Math.max(0, state.currentCooldownMs);
+    this.cooldownUntil = state.cooldownUntil;
+    this.firstFailureAt = state.firstFailureAt;
+  }
+
   isCoolingDown(now = this.clock.now()): boolean {
     return this.cooldownUntil !== null && this.cooldownUntil > now;
   }

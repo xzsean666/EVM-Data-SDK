@@ -264,3 +264,9 @@ export type {
   AlertConfiguration,
   NormalizedAlertConfiguration,
 } from "./domain/configuration";
+
+export { CooldownStore } from "./storage/CooldownStore";
+export type {
+  PersistedCooldownRecord,
+  SaveCooldownParams,
+} from "./storage/CooldownStore";

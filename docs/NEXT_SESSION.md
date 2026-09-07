@@ -9,8 +9,8 @@ Completed the RPC and Data-API progressive cooldown and 24-hour Slack alert subs
 - Integrated `CooldownTracker` and `envKeyName` tracking into `CredentialPool` (`src/execution/CredentialPool.ts`) for progressive backoff on rate limits/errors, bypassing cooling-down keys in `acquire()`, and tracking cumulative downtime.
 - Added `SlackWebhookReporter` (`src/alert/SlackWebhookReporter.ts`) formatting Slack JSON payloads without leaking secrets or tokens.
 - Added `AlertService` (`src/alert/AlertService.ts`) and `ClientConfiguration.alert` options, providing `client.checkAndReportAlerts()` with 24-hour throttling for maximum 1-day CD faults across RPC and Credential pools.
-- Updated documentation (`tasks.md`, `ARCHITECTURE.md`, `SPEC.md`, `DECISIONS.md`, `NEXT_SESSION.md`, `README.md`).
-- Gate verification: `pnpm check` passes with 47 test files / 463 tests, zero type errors, zero lint warnings, clean build and package smoke verification.
+- Added `CooldownStore` (`src/storage/CooldownStore.ts`) and `sdk_cooldown_states` SQLite table (schema migration 5), providing cross-process local persistence for RPC and Data-API cooldowns. Cooldown states restore on `client.initialize()` and sync atomically on runtime failures/recoveries.
+- Gate verification: `pnpm check` passes with 48 test files / 465 tests, zero type errors, zero lint warnings, clean build and package smoke verification.
 
 ## 2026-08-17 Generic contract Multicall boundary
 

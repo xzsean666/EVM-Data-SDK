@@ -37,10 +37,12 @@ CREATE TABLE IF NOT EXISTS sdk_replay_initial_states(chain_id INTEGER NOT NULL,a
 CREATE TABLE IF NOT EXISTS sdk_replay_current(chain_id INTEGER NOT NULL,address TEXT NOT NULL,revision TEXT NOT NULL,as_of_block TEXT,PRIMARY KEY(chain_id,address));
 CREATE TABLE IF NOT EXISTS sdk_price_sync_scopes(scope_key TEXT PRIMARY KEY,next_from TEXT NOT NULL,target_to TEXT,updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS sdk_price_points(scope_key TEXT NOT NULL,timestamp TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(scope_key,timestamp));
+CREATE TABLE IF NOT EXISTS sdk_cooldown_states(resource_key TEXT PRIMARY KEY,category TEXT NOT NULL,env_key_name TEXT,failure_count INTEGER NOT NULL,current_cooldown_ms INTEGER NOT NULL,cooldown_until INTEGER,first_failure_at INTEGER,updated_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS sdk_erc20_transfers_scope_block ON sdk_erc20_transfers(chain_id,address,block_number);
 CREATE INDEX IF NOT EXISTS sdk_transactions_scope_block ON sdk_transactions(chain_id,address,block_number);
 CREATE INDEX IF NOT EXISTS sdk_internal_scope_block ON sdk_internal_native_transfers(chain_id,address,block_number);
 CREATE INDEX IF NOT EXISTS sdk_price_points_scope_time ON sdk_price_points(scope_key,timestamp);
+CREATE INDEX IF NOT EXISTS sdk_cooldown_states_category ON sdk_cooldown_states(category);
 `;
 
 export class SqliteStorageAdapter implements StorageAdapter {
@@ -67,6 +69,7 @@ export class SqliteStorageAdapter implements StorageAdapter {
       this.db.prepare("INSERT OR IGNORE INTO sdk_schema_migrations(version, applied_at) VALUES(?, ?)").run(2, new Date().toISOString());
       this.db.prepare("INSERT OR IGNORE INTO sdk_schema_migrations(version, applied_at) VALUES(?, ?)").run(3, new Date().toISOString());
       this.db.prepare("INSERT OR IGNORE INTO sdk_schema_migrations(version, applied_at) VALUES(?, ?)").run(4, new Date().toISOString());
+      this.db.prepare("INSERT OR IGNORE INTO sdk_schema_migrations(version, applied_at) VALUES(?, ?)").run(5, new Date().toISOString());
     } catch (error) {
       this.db = null;
       throw storageError("STORAGE_MIGRATION_FAILED", "SQLite storage initialization failed.", error);
@@ -111,6 +114,7 @@ export class PostgresStorageAdapter implements StorageAdapter {
       await this.pool.query("INSERT INTO sdk_schema_migrations(version,applied_at) VALUES($1,$2) ON CONFLICT(version) DO NOTHING", [2, new Date().toISOString()]);
       await this.pool.query("INSERT INTO sdk_schema_migrations(version,applied_at) VALUES($1,$2) ON CONFLICT(version) DO NOTHING", [3, new Date().toISOString()]);
       await this.pool.query("INSERT INTO sdk_schema_migrations(version,applied_at) VALUES($1,$2) ON CONFLICT(version) DO NOTHING", [4, new Date().toISOString()]);
+      await this.pool.query("INSERT INTO sdk_schema_migrations(version,applied_at) VALUES($1,$2) ON CONFLICT(version) DO NOTHING", [5, new Date().toISOString()]);
     } catch (error) { await this.pool?.end().catch(() => undefined); this.pool = null; throw storageError("STORAGE_MIGRATION_FAILED", "PostgreSQL storage initialization failed.", error); }
   }
   private ready(): any { if (this.pool === null) throw storageError("STORAGE_NOT_INITIALIZED", "Storage is not initialized."); return this.pool; }
@@ -141,6 +145,7 @@ const POSTGRES_CONFLICT_TARGETS: Readonly<Record<string, readonly string[]>> = O
   sdk_replay_current: ["chain_id", "address"],
   sdk_price_sync_scopes: ["scope_key"],
   sdk_price_points: ["scope_key", "timestamp"],
+  sdk_cooldown_states: ["resource_key"],
 });
 export function normalizePostgresSql(sql: string): { text: string } { const ignored = /^\s*INSERT OR IGNORE INTO/i.test(sql); const semicolon = /;\s*$/.test(sql); const source = sql.replace(/;\s*$/, ""); let text = source.replace(/CAST\(([^)]+) AS INTEGER\)/gi, "CAST($1 AS NUMERIC)"); text = text.replace(/INSERT OR IGNORE INTO/gi, "INSERT INTO"); const replace = /^\s*INSERT OR REPLACE INTO\s+([\w_]+)\s*\(([^)]*)\)\s*VALUES\s*/i.exec(source); if (replace) { const table = replace[1]!.toLowerCase(); const columns = replace[2]!.split(",").map((column) => column.trim()); const target = POSTGRES_CONFLICT_TARGETS[table]; if (target === undefined) throw new Error(`Missing PostgreSQL conflict target for ${table}`); const base = source.replace(/^\s*INSERT OR REPLACE INTO/i, "INSERT INTO"); text = base + " ON CONFLICT (" + target.join(",") + ") DO UPDATE SET " + columns.map((column) => `${column}=EXCLUDED.${column}`).join(","); } text = text.replace(/\?/g, (_, offset: number) => `$${countQuestionMarks(text.slice(0, offset)) + 1}`); if (ignored && !/ON CONFLICT/i.test(text)) text += " ON CONFLICT DO NOTHING"; return { text: semicolon ? `${text};` : text }; }
 function countQuestionMarks(value: string): number { return (value.match(/\?/g) ?? []).length; }

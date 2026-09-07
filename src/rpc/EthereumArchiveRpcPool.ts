@@ -37,6 +37,17 @@ export interface EthereumArchiveRpcPoolOptions {
   /** Minimum delay between automatic empty-pool health refreshes. */
   readonly healthRefreshCooldownMs?: number;
   readonly clock?: Clock;
+  readonly onCooldownChange?: (event: {
+    readonly id: string;
+    readonly envKeyName?: string | undefined;
+    readonly category: "rpc";
+    readonly state: {
+      readonly consecutiveFailures: number;
+      readonly currentCooldownMs: number;
+      readonly cooldownUntil: number | null;
+      readonly firstFailureAt: number | null;
+    };
+  }) => void;
 }
 
 export type ArchiveRpcOutcome = "success" | "failure";
@@ -70,6 +81,7 @@ export class EthereumArchiveRpcPool {
   private readonly clock: Clock;
   private readonly healthy = new Map<string, boolean>();
   private readonly trackers = new Map<string, CooldownTracker>();
+  private readonly onCooldownChange?: EthereumArchiveRpcPoolOptions["onCooldownChange"];
   private lastHealthRefreshAt = 0;
   private healthRefreshPromise: Promise<void> | undefined;
 
@@ -91,6 +103,7 @@ export class EthereumArchiveRpcPool {
     this.multicall3DeploymentBlock = BigInt(options.multicall3DeploymentBlock ?? "14353601");
     this.healthRefreshCooldownMs = Math.max(0, options.healthRefreshCooldownMs ?? DEFAULT_HEALTH_REFRESH_COOLDOWN_MS);
     this.clock = options.clock ?? systemClock;
+    this.onCooldownChange = options.onCooldownChange;
     for (const endpoint of this.endpoints) {
       this.healthy.set(endpoint.id, false);
       this.trackers.set(endpoint.id, new CooldownTracker({ clock: this.clock }));
@@ -125,6 +138,23 @@ export class EthereumArchiveRpcPool {
   }
 
   /**
+   * Restores persisted cooldown state (e.g. from SQLite).
+   */
+  restoreCooldownState(id: string, state: {
+    readonly consecutiveFailures: number;
+    readonly currentCooldownMs: number;
+    readonly cooldownUntil: number | null;
+    readonly firstFailureAt: number | null;
+  }): boolean {
+    const tracker = this.trackers.get(id);
+    if (tracker === undefined) {
+      return false;
+    }
+    tracker.restoreState(state);
+    return true;
+  }
+
+  /**
    * Records the outcome of a real (non-probe) request against `id`.
    * When failure is reported, the endpoint enters stepped backoff cooldown.
    * When success is reported, cooldown and failure history are cleared.
@@ -140,6 +170,13 @@ export class EthereumArchiveRpcPool {
     } else {
       tracker.recordFailure(now);
     }
+    const endpoint = this.endpoints.find((candidate) => candidate.id === id);
+    this.onCooldownChange?.({
+      id,
+      envKeyName: endpoint?.envKeyName,
+      category: "rpc",
+      state: tracker.getState(now),
+    });
   }
 
   isHealthy(id: string, now = this.clock.now()): boolean {

@@ -806,3 +806,11 @@ The stepped backoff cooldown and alert subsystem introduces progressive failure 
 - **Redaction Safety**: Payload construction strictly forbids raw API keys, private tokens, or URL query strings.
 - **Lifecycle & Execution**: In accordance with `Agent.md`, no unmanaged background `setInterval` timers are created. Checks are invoked explicitly via `client.checkAndReportAlerts()`.
 
+### 24.6 SQLite Local Persistence (`CooldownStore`)
+
+To maintain fault isolation and accurate long-term alerting across process restarts or scheduled cron job executions, cooldown states are locally persisted in SQLite (or configured `StorageAdapter`):
+- **Table**: `sdk_cooldown_states` (schema migration version 5) records `resource_key`, `category`, `env_key_name`, `failure_count`, `current_cooldown_ms`, `cooldown_until`, `first_failure_at`, and `updated_at`.
+- **Lifecycle**: On `client.initialize()`, `CooldownStore` restores all active cooldowns into the pools. State changes during runtime automatically upsert or delete records from the SQLite database.
+- **Redaction Safety**: Only namespaced IDs (e.g. `rpc:custom-endpoint-1`, `data-api:etherscan-key-1`) and `env_key_name` are persisted; secrets and sensitive URL tokens are never written to disk.
+
+

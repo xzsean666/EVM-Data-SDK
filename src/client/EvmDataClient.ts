@@ -45,6 +45,7 @@ import {
   type NativeBalanceAtBlockResult,
 } from "../domain/rpcModels";
 import { createStorageAdapter, type StorageAdapter } from "../storage/StorageAdapter";
+import { CooldownStore } from "../storage/CooldownStore";
 import { SyncService } from "../sync/SyncService";
 import { HistoryService } from "../history/HistoryService";
 import { PriceSyncService } from "../price/PriceSyncService";
@@ -90,6 +91,7 @@ export class EvmDataClient {
   private readonly defiArchiveRpcPools: readonly EthereumArchiveRpcPool[];
   private readonly uniswapV3ArchiveRpcPool: EthereumArchiveRpcPool | null;
   private readonly storage: StorageAdapter;
+  readonly cooldownStore: CooldownStore;
   readonly sync: SyncService;
   readonly history: HistoryService;
   readonly price: PriceSyncService;
@@ -105,7 +107,33 @@ export class EvmDataClient {
   constructor(configuration: ClientConfiguration, options: EvmDataClientOptions = {}) {
     this.configuration = parseClientConfiguration(configuration);
     this.storage = createStorageAdapter(this.configuration.storage);
+    this.cooldownStore = new CooldownStore(this.storage);
     this.binanceKlines = options.priceAdapters?.binance instanceof BinanceAdapter ? options.priceAdapters.binance : new BinanceAdapter(options.transport === undefined ? {} : { transport: options.transport });
+
+    const onCooldownChange = (event: {
+      readonly id: string;
+      readonly category: "rpc" | "data-api";
+      readonly envKeyName?: string | undefined;
+      readonly state: {
+        readonly consecutiveFailures: number;
+        readonly currentCooldownMs: number;
+        readonly cooldownUntil: number | null;
+        readonly firstFailureAt: number | null;
+      };
+    }) => {
+      const resourceKey = `${event.category}:${event.id}`;
+      if (event.state.consecutiveFailures === 0) {
+        this.cooldownStore.delete(resourceKey);
+      } else {
+        this.cooldownStore.save({
+          resourceKey,
+          category: event.category,
+          envKeyName: event.envKeyName,
+          state: event.state,
+        });
+      }
+    };
+
     const registry = new ChainRegistry(this.configuration.chains);
     const entries = this.configuration.providers.map((provider, index) => {
       const configurationId = `${provider.kind}-${index + 1}`;
@@ -125,6 +153,7 @@ export class EvmDataClient {
         new CredentialPool(provider.apiKeys, {
           providerConfigurationId: configurationId,
           ...(provider.envKeyNames !== undefined ? { envKeyNames: provider.envKeyNames } : {}),
+          onCooldownChange,
         }),
       );
     });
@@ -250,6 +279,7 @@ export class EvmDataClient {
       this.archiveRpcPool = options.archiveRpcPool ?? new EthereumArchiveRpcPool({
         endpoints,
         healthCheckTimeoutMs: chainlinkConfiguration.healthCheckTimeoutMs,
+        onCooldownChange,
       });
       const archiveRpcExecutor = new EthereumArchiveRpcExecutor({
         pool: this.archiveRpcPool,
@@ -291,6 +321,7 @@ export class EvmDataClient {
           expectedChainId: chainId,
           multicall3Address: MULTICALL3_ADDRESS,
           multicall3DeploymentBlock: (chainId === 1 ? MULTICALL3_ETHEREUM_MAINNET_DEPLOYMENT_BLOCK : MULTICALL3_BASE_MAINNET_DEPLOYMENT_BLOCK).toString(),
+          onCooldownChange,
         });
       }
       const executor = new EthereumArchiveRpcExecutor({ pool, randomSource: options.archiveRpcRandomSource ?? systemRandom, attemptTimeoutMs: defiConfiguration.attemptTimeoutMs, totalTimeoutMs: defiConfiguration.totalTimeoutMs, maxRpcAttempts: defiConfiguration.maxRpcAttempts, maxConcurrentRpcAttempts: defiConfiguration.maxConcurrentRpcAttempts });
@@ -310,6 +341,7 @@ export class EvmDataClient {
         expectedChainId: 1,
         multicall3Address: MULTICALL3_ADDRESS,
         multicall3DeploymentBlock: MULTICALL3_ETHEREUM_MAINNET_DEPLOYMENT_BLOCK.toString(),
+        onCooldownChange,
       });
       this.uniswapV3ArchiveRpcPool = pool;
       const executor = new EthereumArchiveRpcExecutor({ pool, randomSource: options.archiveRpcRandomSource ?? systemRandom, attemptTimeoutMs: uniswapV3Configuration.attemptTimeoutMs, totalTimeoutMs: uniswapV3Configuration.totalTimeoutMs, maxRpcAttempts: uniswapV3Configuration.maxRpcAttempts });
@@ -445,6 +477,31 @@ export class EvmDataClient {
     });
   }
 
+  async restorePersistedCooldowns(): Promise<void> {
+    const records = await this.cooldownStore.loadAll();
+    for (const record of records) {
+      const state = {
+        consecutiveFailures: record.failureCount,
+        currentCooldownMs: record.currentCooldownMs,
+        cooldownUntil: record.cooldownUntil,
+        firstFailureAt: record.firstFailureAt,
+      };
+      if (record.category === "rpc") {
+        const id = record.resourceKey.replace(/^rpc:/, "");
+        this.archiveRpcPool?.restoreCooldownState(id, state);
+        for (const pool of this.defiArchiveRpcPools) {
+          pool.restoreCooldownState(id, state);
+        }
+        this.uniswapV3ArchiveRpcPool?.restoreCooldownState(id, state);
+      } else if (record.category === "data-api") {
+        const id = record.resourceKey.replace(/^data-api:/, "");
+        for (const pool of this.credentialPools.values()) {
+          pool.restoreCooldownState(id, state);
+        }
+      }
+    }
+  }
+
   async initialize(signal?: AbortSignal): Promise<void> {
     const tasks: Promise<void>[] = [];
     if (this.advancedProxyManager !== null) {
@@ -456,10 +513,16 @@ export class EvmDataClient {
     for (const pool of this.defiArchiveRpcPools) tasks.push(pool.initialize(signal));
     if (this.uniswapV3ArchiveRpcPool !== null && !this.defiArchiveRpcPools.includes(this.uniswapV3ArchiveRpcPool) && this.uniswapV3ArchiveRpcPool !== this.archiveRpcPool) tasks.push(this.uniswapV3ArchiveRpcPool.initialize(signal));
     await this.storage.initialize();
+    await this.restorePersistedCooldowns();
     await Promise.all(tasks);
   }
 
   async checkAndReportAlerts(now?: number): Promise<boolean> {
+    try {
+      await this.restorePersistedCooldowns();
+    } catch {
+      // Storage might not be initialized; proceed with in-memory state
+    }
     return this.alert.checkAndReportAlerts(undefined, now);
   }
 

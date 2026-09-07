@@ -18,6 +18,17 @@ export interface CredentialPoolOptions {
   readonly rateCooldownMs?: number | undefined;
   readonly envKeyNames?: readonly string[] | undefined;
   readonly cooldownTiersMs?: readonly number[] | undefined;
+  readonly onCooldownChange?: ((event: {
+    readonly id: string;
+    readonly envKeyName?: string | undefined;
+    readonly category: "data-api";
+    readonly state: {
+      readonly consecutiveFailures: number;
+      readonly currentCooldownMs: number;
+      readonly cooldownUntil: number | null;
+      readonly firstFailureAt: number | null;
+    };
+  }) => void) | undefined;
 }
 
 export interface CredentialState {
@@ -64,6 +75,7 @@ export class CredentialPool {
   private readonly entries: CredentialEntry[];
   private readonly clock: Clock;
   private readonly rateCooldownMs?: number | undefined;
+  private readonly onCooldownChange?: CredentialPoolOptions["onCooldownChange"];
   private nextIndex = 0;
 
   constructor(
@@ -74,6 +86,7 @@ export class CredentialPool {
     this.rateCooldownMs = options.rateCooldownMs !== undefined
       ? validateCooldown(options.rateCooldownMs)
       : undefined;
+    this.onCooldownChange = options.onCooldownChange;
     const prefix = options.providerConfigurationId ?? "credential";
     const ids = new Set<string>();
     const customTiers = options.cooldownTiersMs ?? (
@@ -146,6 +159,24 @@ export class CredentialPool {
     return null;
   }
 
+  restoreCooldownState(id: string, state: {
+    readonly consecutiveFailures: number;
+    readonly currentCooldownMs: number;
+    readonly cooldownUntil: number | null;
+    readonly firstFailureAt: number | null;
+  }): boolean {
+    const entry = this.entries.find((candidate) => candidate.id === id);
+    if (entry === undefined) {
+      return false;
+    }
+    entry.tracker.restoreState(state);
+    if (state.cooldownUntil !== null) {
+      entry.cooldownUntil = state.cooldownUntil;
+    }
+    entry.failureCount = state.consecutiveFailures;
+    return true;
+  }
+
   report(
     lease: CredentialLease,
     outcome: CredentialPoolOutcome,
@@ -171,12 +202,24 @@ export class CredentialPool {
         : trackerState.currentCooldownMs;
       entry.cooldownUntil = now + effectiveCooldown;
       entry.failureCount += 1;
+      this.onCooldownChange?.({
+        id: entry.id,
+        envKeyName: entry.envKeyName,
+        category: "data-api",
+        state: trackerState,
+      });
       return;
     }
     if (outcome === "success") {
       entry.tracker.recordSuccess();
       entry.failureCount = 0;
       entry.cooldownUntil = null;
+      this.onCooldownChange?.({
+        id: entry.id,
+        envKeyName: entry.envKeyName,
+        category: "data-api",
+        state: entry.tracker.getState(now),
+      });
       return;
     }
     if (outcome === "cancelled") {
