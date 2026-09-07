@@ -76,6 +76,7 @@ export type ObservationCallback = (event: TelemetryEvent) => void;
 
 export interface ProviderConfigurationBase {
   readonly apiKeys: readonly string[];
+  readonly envKeyNames?: readonly string[];
   readonly baseUrl?: string;
   readonly allowInsecureHttp?: boolean;
 }
@@ -115,6 +116,7 @@ export interface NormalizedPriceConfiguration {
 
 interface NormalizedProviderConfigurationBase {
   readonly apiKeys: readonly string[];
+  readonly envKeyNames?: readonly string[];
   readonly baseUrl?: string;
   readonly allowInsecureHttp: boolean;
 }
@@ -174,6 +176,7 @@ export interface EthereumArchiveRpcEndpointConfiguration {
   /** HTTPS JSON-RPC URL. It may contain a caller-owned token and is secret. */
   readonly url: string;
   readonly enabled?: boolean;
+  readonly envKeyName?: string;
 }
 
 export interface ChainlinkConfiguration {
@@ -195,6 +198,7 @@ export interface NormalizedEthereumArchiveRpcEndpointConfiguration {
   readonly id: string;
   readonly url: string;
   readonly enabled: boolean;
+  readonly envKeyName?: string;
 }
 
 export interface NormalizedChainlinkConfiguration {
@@ -263,6 +267,18 @@ export interface NormalizedDeFiConfiguration {
   readonly maxConcurrentRpcAttempts: number;
 }
 
+export interface AlertConfiguration {
+  readonly enabled?: boolean;
+  readonly slackWebhookUrl?: string;
+  readonly reportIntervalMs?: number;
+}
+
+export interface NormalizedAlertConfiguration {
+  readonly enabled: boolean;
+  readonly slackWebhookUrl?: string;
+  readonly reportIntervalMs: number;
+}
+
 export interface ClientConfiguration {
   readonly envFilePath?: string;
   readonly envContent?: string;
@@ -287,6 +303,7 @@ export interface ClientConfiguration {
   readonly uniswapV4?: UniswapV4Configuration;
   readonly logger?: ObservationCallback;
   readonly telemetry?: ObservationCallback;
+  readonly alert?: AlertConfiguration;
 }
 
 export interface StorageConfiguration {
@@ -325,11 +342,13 @@ export interface NormalizedClientConfiguration {
   readonly uniswapV4: NormalizedUniswapV4Configuration;
   readonly logger?: ObservationCallback;
   readonly telemetry?: ObservationCallback;
+  readonly alert: NormalizedAlertConfiguration;
 }
 
 const providerKeysSchema = z.array(z.string().trim().min(1).max(512)).min(1).max(64);
 const providerBaseSchema = {
   apiKeys: providerKeysSchema,
+  envKeyNames: z.array(z.string().trim().min(1).max(128)).optional(),
   baseUrl: z.string().trim().min(1).max(2048).optional(),
   allowInsecureHttp: z.boolean().optional().default(false),
 };
@@ -384,6 +403,14 @@ const archiveRpcEndpointSchema = z
     id: z.string().trim().min(1).max(128),
     url: z.string().trim().min(1).max(8192),
     enabled: z.boolean().optional().default(true),
+    envKeyName: z.string().trim().min(1).max(128).optional(),
+  })
+  .strict();
+const alertSchema = z
+  .object({
+    enabled: z.boolean().optional().default(false),
+    slackWebhookUrl: z.string().trim().min(1).max(4096).optional(),
+    reportIntervalMs: z.number().int().positive().max(864_000_000).default(86_400_000),
   })
   .strict();
 const chainlinkSchema = z
@@ -446,6 +473,7 @@ const clientShapeSchema = z
     telemetry: z.custom<ObservationCallback>((value) => typeof value === "function").optional(),
     envFilePath: z.string().trim().min(1).max(4096).optional(),
     envContent: z.string().optional(),
+    alert: alertSchema.optional(),
   })
   .strict();
 
@@ -516,6 +544,10 @@ export function parseClientConfiguration(input: unknown): NormalizedClientConfig
         };
       }
 
+      const mergedAlert = inputRecord.alert !== undefined
+        ? inputRecord.alert
+        : envConfig.alert;
+
       effectiveInput = {
         ...inputRecord,
         ...(mergedProviders !== undefined ? { providers: mergedProviders } : {}),
@@ -526,6 +558,7 @@ export function parseClientConfiguration(input: unknown): NormalizedClientConfig
         ...(mergedDefi !== undefined ? { defi: mergedDefi } : {}),
         ...(mergedUniswapV3 !== undefined ? { uniswapV3: mergedUniswapV3 } : {}),
         ...(mergedUniswapV4 !== undefined ? { uniswapV4: mergedUniswapV4 } : {}),
+        ...(mergedAlert !== undefined ? { alert: mergedAlert } : {}),
       };
     }
   }
@@ -554,6 +587,7 @@ export function parseClientConfiguration(input: unknown): NormalizedClientConfig
   const defi = normalizeDeFiConfiguration(parsed.data.defi ?? { enabled: false, rpcEndpoints: { ethereum: [], base: [] }, healthCheckTimeoutMs: DEFAULT_ATTEMPT_TIMEOUT_MS, attemptTimeoutMs: DEFAULT_ATTEMPT_TIMEOUT_MS, totalTimeoutMs: DEFAULT_TOTAL_TIMEOUT_MS, maxCallsPerMulticall: 100, maxRpcAttempts: 5, maxConcurrentRpcAttempts: 1 });
   const uniswapV3 = normalizeUniswapV3Configuration(parsed.data.uniswapV3 ?? { enabled: false, rpcEndpoints: [], healthCheckTimeoutMs: DEFAULT_ATTEMPT_TIMEOUT_MS, attemptTimeoutMs: DEFAULT_ATTEMPT_TIMEOUT_MS, totalTimeoutMs: DEFAULT_TOTAL_TIMEOUT_MS, maxCallsPerMulticall: 100, maxRpcAttempts: 5 });
   const uniswapV4 = normalizeUniswapV3Configuration(parsed.data.uniswapV4 ?? { enabled: false, rpcEndpoints: [], healthCheckTimeoutMs: DEFAULT_ATTEMPT_TIMEOUT_MS, attemptTimeoutMs: DEFAULT_ATTEMPT_TIMEOUT_MS, totalTimeoutMs: DEFAULT_TOTAL_TIMEOUT_MS, maxCallsPerMulticall: 100, maxRpcAttempts: 5 });
+  const alert = normalizeAlertConfiguration(parsed.data.alert ?? { enabled: false, reportIntervalMs: 86_400_000 });
   if (parsed.data.providers.length === 0 && parsed.data.price === undefined && !chainlink.enabled && !defi.enabled && !uniswapV3.enabled && !uniswapV4.enabled && parsed.data.storage === undefined) throw invalidConfiguration("Configure at least one blockchain or price provider, or enable Chainlink, DeFi, Uniswap, or storage.");
   const price = normalizePriceConfiguration(parsed.data.price ?? {
     routeMode: "direct",
@@ -587,6 +621,7 @@ export function parseClientConfiguration(input: unknown): NormalizedClientConfig
     defi,
     uniswapV3,
     uniswapV4,
+    alert,
     ...(parsed.data.logger === undefined ? {} : { logger: parsed.data.logger }),
     ...(parsed.data.telemetry === undefined ? {} : { telemetry: parsed.data.telemetry }),
   };
@@ -620,7 +655,7 @@ function normalizeUniswapV3Configuration(value: z.output<typeof uniswapV3Schema>
     const id = endpoint.id.trim(); if (!id || ids.has(id)) throw invalidConfiguration("uniswapV3.rpcEndpoints ids must be unique and non-empty."); ids.add(id);
     let url: URL; try { url = new URL(endpoint.url); } catch { throw invalidConfiguration("uniswapV3.rpcEndpoints urls must be valid HTTPS URLs."); }
     if (url.protocol !== "https:" || urls.has(url.toString())) throw invalidConfiguration("uniswapV3.rpcEndpoints urls must be unique HTTPS URLs."); urls.add(url.toString());
-    return Object.freeze({ id, url: endpoint.url.trim(), enabled: endpoint.enabled });
+    return Object.freeze({ id, url: endpoint.url.trim(), enabled: endpoint.enabled, ...(endpoint.envKeyName !== undefined ? { envKeyName: endpoint.envKeyName } : {}) });
   });
   if (value.enabled && !useBuiltinEthereumArchiveRpcs && rpcEndpoints.every((endpoint) => !endpoint.enabled)) throw invalidConfiguration("uniswapV3 is enabled but no Archive RPC endpoint is configured.");
   return Object.freeze({ enabled: value.enabled, useBuiltinEthereumArchiveRpcs, rpcEndpoints: Object.freeze(rpcEndpoints), healthCheckTimeoutMs: value.healthCheckTimeoutMs, attemptTimeoutMs: value.attemptTimeoutMs, totalTimeoutMs: value.totalTimeoutMs, maxCallsPerMulticall: value.maxCallsPerMulticall, maxRpcAttempts: value.maxRpcAttempts });
@@ -640,7 +675,7 @@ function normalizeDeFiConfiguration(value: z.output<typeof defiSchema>): Normali
       let url: URL; try { url = new URL(endpoint.url); } catch { throw invalidConfiguration(`defi.rpcEndpoints.${chain} urls must be valid HTTPS URLs.`); }
       if (url.protocol !== "https:" || urls.has(url.toString())) throw invalidConfiguration(`defi.rpcEndpoints.${chain} urls must be unique HTTPS URLs.`);
       urls.add(url.toString());
-      return Object.freeze({ id, url: endpoint.url.trim(), enabled: endpoint.enabled });
+      return Object.freeze({ id, url: endpoint.url.trim(), enabled: endpoint.enabled, ...(endpoint.envKeyName !== undefined ? { envKeyName: endpoint.envKeyName } : {}) });
     }));
   };
   const rpcEndpoints = Object.freeze({ ethereum: normalizeEndpoints("ethereum"), base: normalizeEndpoints("base") });
@@ -688,6 +723,7 @@ function normalizeChainlinkConfiguration(
       id,
       url: endpoint.url.trim(),
       enabled: endpoint.enabled,
+      ...(endpoint.envKeyName !== undefined ? { envKeyName: endpoint.envKeyName } : {}),
     });
   });
 
@@ -793,6 +829,7 @@ function normalizeProvider(
 
   const common = {
     apiKeys: Object.freeze([...provider.apiKeys]),
+    ...(provider.envKeyNames !== undefined ? { envKeyNames: Object.freeze([...provider.envKeyNames]) } : {}),
     allowInsecureHttp: provider.allowInsecureHttp,
   };
   const baseUrl = provider.baseUrl === undefined ? {} : { baseUrl: provider.baseUrl };
@@ -915,3 +952,11 @@ function mergeEndpointConfigs(
   return Object.freeze(result);
 }
 
+
+function normalizeAlertConfiguration(value: z.output<typeof alertSchema>): NormalizedAlertConfiguration {
+  return Object.freeze({
+    enabled: value.enabled,
+    ...(value.slackWebhookUrl !== undefined ? { slackWebhookUrl: value.slackWebhookUrl } : {}),
+    reportIntervalMs: value.reportIntervalMs,
+  });
+}

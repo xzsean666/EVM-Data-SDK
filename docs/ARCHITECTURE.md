@@ -2,9 +2,9 @@
 
 Version: 0.4.0
 
-Status: v0.1/v0.2/v0.3 accepted; v0.4 Chainlink Archive RPC snapshot approved 2026-08-07
+Status: v0.1/v0.2/v0.3 accepted; v0.4 Chainlink Archive RPC snapshot approved 2026-08-07; Stepped Cooldown and Slack Alerting approved 2026-09-07
 
-Last verified: 2026-08-07
+Last verified: 2026-09-07
 
 ## 1. Architecture Goals
 
@@ -761,3 +761,48 @@ normalized facts and the durable block cursor in one transaction; replay reads
 facts only and publishes a revisioned snapshot pointer. Provider page cursors
 remain request-local. SQLite is the tested default; PostgreSQL remains an
 explicit optional-driver boundary.
+
+## 24. Stepped Backoff Cooldown and Health Alert Architecture
+
+The stepped backoff cooldown and alert subsystem introduces progressive failure isolation and proactive Slack notifications for long-failing endpoints and API credentials without adding background timer loops or exposing secrets.
+
+### 24.1 CooldownTracker Pure Logic
+
+`CooldownTracker` (`src/execution/CooldownTracker.ts`) provides deterministic stepped backoff tracking:
+- **Tiers**: `[1m, 5m, 15m, 30m, 1h, 2h, 4h, 8h, 12h, 24h]`.
+- **Failure backoff**: Each failure advances the cooldown tier until reaching the 24-hour cap (86,400,000 ms).
+- **Recovery on success**: Any successful invocation immediately resets failure count and clears cooldown status.
+- **Observability**: Exposes `isCoolingDown()`, `isMaxCooldown()`, and `getTotalCooldownDuration()` tracking continuous failure duration from `firstFailureAt`.
+- **Injectable Clock**: Relies strictly on `Clock` interface, enabling deterministic testing with `FakeClock`.
+
+### 24.2 RPC Pool Integration (`EthereumArchiveRpcPool`)
+
+- Each RPC endpoint maintains its own `CooldownTracker`.
+- `healthySnapshot()` filters out endpoints where `isCoolingDown(now)` is true.
+- When an endpoint's cooldown expires, it becomes eligible for selection in subsequent snapshots.
+- `reportOutcome(id, "success")` calls `recordSuccess()` to restore endpoint health.
+- `reportOutcome(id, "failure")` advances the cooldown backoff tier.
+- Endpoint inspection via `getEndpointCooldownState(id)` and `getAllCooldownStates()` returns redact-safe metadata (IDs only, never endpoint URLs).
+
+### 24.3 Data-API Credential Pool Integration (`CredentialPool`)
+
+- Each `CredentialEntry` maintains an associated `CooldownTracker` and optional `envKeyName` metadata (e.g., `ETHERSCAN_API_KEY_1`, `ALCHEMY_API_KEY`).
+- `acquire()` skips credentials currently in cooldown.
+- `report(lease, "rate_limited")` triggers stepped backoff.
+- `report(lease, "success")` resets the cooldown back to 0.
+- `report(lease, "authentication_failed")` permanently disables the credential.
+- `getMaxCooldownCredentials()` and `getCooldownState(id)` return read-only status with `envKeyName` for alert collection.
+
+### 24.4 Alchemy RPC Integration
+
+- `EnvLoader` detects `ALCHEMY_API_KEY` or `ALCHEMY_RPC_KEY` and constructs the appropriate Archive RPC endpoint (`alchemy-ethereum-1`) tagged with `envKeyName: "ALCHEMY_API_KEY"`.
+- `EvmDataClient` automatically includes configured Alchemy RPC endpoints in `archiveRpcPool`, ensuring private Alchemy RPCs enjoy unified random permutation, probe health, and stepped cooldown.
+
+### 24.5 Alert Subsystem (`AlertService` & `SlackWebhookReporter`)
+
+- **AlertService**: Gathers fault items reaching max cooldown (24 hours) across `archiveRpcPool` and `credentialPools`.
+- **Throttling**: Enforces a 24-hour throttle window (`reportIntervalMs: 86_400_000`) between successive webhook reports via `lastReportSentAt`.
+- **SlackWebhookReporter**: Formats payload with structured blocks, human-readable elapsed durations (`formatDuration`), endpoint/key identifiers, and `envKeyName`.
+- **Redaction Safety**: Payload construction strictly forbids raw API keys, private tokens, or URL query strings.
+- **Lifecycle & Execution**: In accordance with `Agent.md`, no unmanaged background `setInterval` timers are created. Checks are invoked explicitly via `client.checkAndReportAlerts()`.
+

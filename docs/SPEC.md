@@ -2,9 +2,9 @@
 
 Version: 0.4.0
 
-Status: v0.1/v0.2/v0.3 accepted; v0.4 Chainlink Archive RPC snapshot approved 2026-08-07
+Status: v0.1/v0.2/v0.3 accepted; v0.4 Chainlink Archive RPC snapshot approved 2026-08-07; Stepped Cooldown and Slack Alerting approved 2026-09-07
 
-Last verified: 2026-08-07
+Last verified: 2026-09-07
 
 ## 1. Purpose
 
@@ -487,6 +487,21 @@ const client = new EvmDataClient({
 
 `price.providers` may declare an ordered enabled subset and test-only base URL overrides. A price-only client is valid; a blockchain-only client retains the default four price providers unless it explicitly supplies `price.providers`. `price.geckoNetworks` defaults to Ethereum, BNB Smart Chain, Polygon, Arbitrum, Base, and Optimism GeckoTerminal identifiers.
 
+Alert configuration is optional and disabled by default:
+
+```ts
+const client = new EvmDataClient({
+  // ...
+  alert: {
+    enabled: true,
+    slackWebhookUrl: "https://hooks.slack.com/services/...",
+    reportIntervalMs: 86_400_000, // optional, defaults to 24h
+  },
+});
+```
+
+When enabled, `slackWebhookUrl` is required and validated as an HTTPS URL. `reportIntervalMs` defines the minimum interval between alert dispatches (default: 86,400,000 ms / 24 hours).
+
 ## 7. Non-Functional Requirements
 
 - Runtime: supported Node.js LTS releases, with Node.js 24 as the development baseline.
@@ -838,3 +853,54 @@ from the latest complete snapshot of the same revision.
 History fact queries apply range, token, and direction filters before limiting
 results and expose SDK-owned `nextCursor` properties bound to the semantic
 query.
+
+## 16. Stepped Backoff Cooldown and Fault Alert Specification
+
+### 16.1 Stepped Cooldown Policy
+
+Endpoints and credentials enter progressive cooldown upon failure to isolate degrading upstreams while allowing periodic recovery attempts.
+
+- **Cooldown Ladder**:
+  - Failure 1: 1 minute (60,000 ms)
+  - Failure 2: 5 minutes (300,000 ms)
+  - Failure 3: 15 minutes (900,000 ms)
+  - Failure 4: 30 minutes (1,800,000 ms)
+  - Failure 5: 1 hour (3,600,000 ms)
+  - Failure 6: 2 hours (7,200,000 ms)
+  - Failure 7: 4 hours (14,400,000 ms)
+  - Failure 8: 8 hours (28,800,000 ms)
+  - Failure 9: 12 hours (43,200,000 ms)
+  - Failure 10+: 24 hours (86,400,000 ms, maximum cap)
+- **Eligibility**:
+  - While `cooldownUntil > now`, the resource is marked cooling down and excluded from selection.
+  - When `now >= cooldownUntil`, the resource re-enters the active pool for a single attempt.
+  - On success: failure count is cleared, cooldown duration reset to 0, and `firstFailureAt` erased.
+  - On failure: backoff advances to the next tier (or stays at 24h cap).
+  - Cumulative downtime is tracked via `getTotalCooldownDuration() = now - firstFailureAt`.
+
+### 16.2 RPC Pool Cooldown Semantics
+
+- `EthereumArchiveRpcPool` attaches a `CooldownTracker` to each endpoint candidate.
+- `healthySnapshot(randomSource)` evaluates both probe health and `!tracker.isCoolingDown(now)`.
+- RPC outcomes reported via `reportOutcome(id, outcome)`:
+  - `"success"`: Clears cooldown via `tracker.recordSuccess()`.
+  - `"failure"`: Advances backoff via `tracker.recordFailure(now)`.
+- Alchemy Archive RPCs (`alchemy-ethereum-1`, etc.) derived from `ALCHEMY_API_KEY` are registered in the pool with `envKeyName: "ALCHEMY_API_KEY"` and governed under this same policy.
+
+### 16.3 Data-API Credential Pool Semantics
+
+- `CredentialPool` associates a `CooldownTracker` and `envKeyName` with each `CredentialEntry`.
+- `acquire()` filters out entries where `tracker.isCoolingDown(now)` is true.
+- `report(lease, outcome)`:
+  - `"rate_limited"`: Advances stepped cooldown via `tracker.recordFailure(now)`.
+  - `"success"`: Clears cooldown via `tracker.recordSuccess()`.
+  - `"authentication_failed"`: Permanently sets `disabled: true`.
+
+### 16.4 Slack Alerting and Throttling
+
+- `client.checkAndReportAlerts(now)` queries all active pools for resources reaching maximum backoff (`currentCooldownMs >= 86_400_000`).
+- If no qualifying faults exist, or if `alert.enabled` is false/unset, no network call is made.
+- If qualifying faults exist, a report is dispatched to `alert.slackWebhookUrl` via HTTPS POST.
+- **Throttling**: The alert service enforces a minimum delay of `reportIntervalMs` (default 24h) between sent alerts (`now - lastReportSentAt >= reportIntervalMs`). Subsequent invocations within the throttle window safely return `false`.
+- **Secret Redaction**: Payloads contain only `id`, `category` (`rpc` | `data-api`), `envKeyName`, `detail`, and formatted elapsed duration. Raw API keys and URL tokens are strictly excluded.
+

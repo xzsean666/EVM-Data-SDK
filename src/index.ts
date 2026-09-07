@@ -215,3 +215,52 @@ export { UNISWAP_V4_TOKEN_REGISTRY, UNISWAP_V4_TOKEN_REGISTRY_VERSION, uniswapV4
 export { encodeStateViewSlot0, decodeUniswapV4StateViewSlot0, UNISWAP_V4_STATE_VIEW_SLOT0_SELECTOR } from "./defi/uniswap/v4/UniswapV4StateViewCodec";
 export { EnvLoader, parseEnvContent, loadClientConfigurationFromEnv } from "./env/EnvLoader";
 export type { EnvLoaderOptions, SupportedRpcChain } from "./env/EnvLoader";
+
+export {
+  CooldownTracker,
+  COOLDOWN_TIERS_MS,
+  MAX_COOLDOWN_MS,
+} from "./execution/CooldownTracker";
+export type {
+  CooldownTrackerOptions,
+  CooldownState,
+} from "./execution/CooldownTracker";
+
+export { EthereumArchiveRpcPool } from "./rpc/EthereumArchiveRpcPool";
+export type {
+  EthereumArchiveRpcPoolOptions,
+  EthereumArchiveRpcEndpoint,
+  EndpointCooldownState,
+  ArchiveRpcOutcome,
+} from "./rpc/EthereumArchiveRpcPool";
+
+export { CredentialPool } from "./execution/CredentialPool";
+export type {
+  CredentialPoolOptions,
+  CredentialState,
+  CredentialCooldownState,
+  CredentialPoolOutcome,
+} from "./execution/CredentialPool";
+
+export {
+  SlackWebhookReporter,
+  buildSlackAlertPayload,
+  formatDuration,
+} from "./alert/SlackWebhookReporter";
+export type {
+  AlertFaultItem,
+  SlackWebhookPayload,
+  SlackWebhookReporterOptions,
+  SlackWebhookReportResult,
+} from "./alert/SlackWebhookReporter";
+
+export { AlertService } from "./alert/AlertService";
+export type {
+  AlertServiceOptions,
+  AlertSources,
+} from "./alert/AlertService";
+
+export type {
+  AlertConfiguration,
+  NormalizedAlertConfiguration,
+} from "./domain/configuration";

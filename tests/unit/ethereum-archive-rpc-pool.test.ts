@@ -298,3 +298,83 @@ describe("EthereumArchiveRpcPool.healthySnapshot", () => {
     ).toThrow();
   });
 });
+
+describe("EthereumArchiveRpcPool cooldown tracking", () => {
+  class FakeClock implements RandomSource {
+    current = 100_000;
+    now(): number {
+      return this.current;
+    }
+    advance(ms: number): void {
+      this.current += ms;
+    }
+    next(): number {
+      return 0;
+    }
+  }
+
+  it("handles stepped cooldown, recovery, and query state", async () => {
+    const clock = new FakeClock();
+    const transport = fakeTransport({
+      [ENDPOINT_A.url]: healthyHandler(),
+      [ENDPOINT_B.url]: healthyHandler(),
+    });
+    const pool = new EthereumArchiveRpcPool({
+      endpoints: [
+        { ...ENDPOINT_A, envKeyName: "CUSTOM_ETH_RPC" },
+        ENDPOINT_B,
+      ],
+      transport,
+      clock,
+    });
+
+    await pool.initialize();
+    expect(pool.isHealthy(ENDPOINT_A.id)).toBe(true);
+    expect(pool.isHealthy(ENDPOINT_B.id)).toBe(true);
+
+    // 1. Report failure on ENDPOINT_A: enters 1 minute CD
+    pool.reportOutcome(ENDPOINT_A.id, "failure");
+    expect(pool.isHealthy(ENDPOINT_A.id)).toBe(false);
+
+    let snapshot = pool.healthySnapshot(clock);
+    expect(snapshot.map((ep) => ep.id)).toEqual([ENDPOINT_B.id]);
+
+    // 2. Advance clock 1 minute (60,000ms): ENDPOINT_A becomes available again
+    clock.advance(60_000);
+    expect(pool.isHealthy(ENDPOINT_A.id)).toBe(true);
+    snapshot = pool.healthySnapshot(clock);
+    expect(snapshot.map((ep) => ep.id)).toContain(ENDPOINT_A.id);
+
+    // 3. Fail again: enters 5 minute CD (300,000ms)
+    pool.reportOutcome(ENDPOINT_A.id, "failure");
+    expect(pool.isHealthy(ENDPOINT_A.id)).toBe(false);
+    clock.advance(299_000);
+    expect(pool.isHealthy(ENDPOINT_A.id)).toBe(false);
+    clock.advance(1_000);
+    expect(pool.isHealthy(ENDPOINT_A.id)).toBe(true);
+
+    // 4. Report success: CD cleared immediately
+    pool.reportOutcome(ENDPOINT_A.id, "success");
+    const stateSuccess = pool.getEndpointCooldownState(ENDPOINT_A.id);
+    expect(stateSuccess?.isCoolingDown).toBe(false);
+    expect(stateSuccess?.consecutiveFailures).toBe(0);
+    expect(stateSuccess?.totalCooldownDurationMs).toBe(0);
+
+    // 5. Fail 10 times to reach 1-day (24h) max cooldown
+    for (let i = 0; i < 10; i += 1) {
+      pool.reportOutcome(ENDPOINT_A.id, "failure");
+    }
+    clock.advance(10_000);
+
+    const stateMax = pool.getEndpointCooldownState(ENDPOINT_A.id);
+    expect(stateMax?.isMaxCooldown).toBe(true);
+    expect(stateMax?.envKeyName).toBe("CUSTOM_ETH_RPC");
+    expect(stateMax?.currentCooldownMs).toBe(86_400_000);
+    expect(stateMax?.totalCooldownDurationMs).toBeGreaterThan(0);
+
+    const allStates = pool.getAllCooldownStates();
+    expect(allStates).toHaveLength(2);
+    expect(allStates.find((s) => s.id === ENDPOINT_A.id)?.isMaxCooldown).toBe(true);
+    expect(allStates.find((s) => s.id === ENDPOINT_B.id)?.isMaxCooldown).toBe(false);
+  });
+});

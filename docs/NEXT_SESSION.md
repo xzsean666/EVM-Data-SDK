@@ -1,5 +1,17 @@
 # Current Progress
 
+## 2026-09-07 Stepped cooldown and Slack webhook alerting
+
+Completed the RPC and Data-API progressive cooldown and 24-hour Slack alert subsystem:
+- Added `CooldownTracker` (`src/execution/CooldownTracker.ts`) implementing deterministic stepped backoff (`1m -> 5m -> 15m -> 30m -> 1h -> 2h -> 4h -> 8h -> 12h -> 24h`) with success reset and injectable `Clock`.
+- Integrated `CooldownTracker` into `EthereumArchiveRpcPool` (`src/rpc/EthereumArchiveRpcPool.ts`), excluding cooling-down endpoints from `healthySnapshot()`, allowing single recovery attempts after expiration, and exposing safe inspection APIs.
+- Integrated Alchemy RPC (`alchemy-ethereum-1`) from `ALCHEMY_API_KEY` into `archiveRpcPool` via `EnvLoader` and `EvmDataClient`, ensuring private Alchemy RPCs are scheduled and cooled down alongside public endpoints.
+- Integrated `CooldownTracker` and `envKeyName` tracking into `CredentialPool` (`src/execution/CredentialPool.ts`) for progressive backoff on rate limits/errors, bypassing cooling-down keys in `acquire()`, and tracking cumulative downtime.
+- Added `SlackWebhookReporter` (`src/alert/SlackWebhookReporter.ts`) formatting Slack JSON payloads without leaking secrets or tokens.
+- Added `AlertService` (`src/alert/AlertService.ts`) and `ClientConfiguration.alert` options, providing `client.checkAndReportAlerts()` with 24-hour throttling for maximum 1-day CD faults across RPC and Credential pools.
+- Updated documentation (`tasks.md`, `ARCHITECTURE.md`, `SPEC.md`, `DECISIONS.md`, `NEXT_SESSION.md`, `README.md`).
+- Gate verification: `pnpm check` passes with 47 test files / 463 tests, zero type errors, zero lint warnings, clean build and package smoke verification.
+
 ## 2026-08-17 Generic contract Multicall boundary
 
 Added `client.token.getMulticallAtBlock()` and `multicallAtBlock()` as an

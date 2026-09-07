@@ -39,11 +39,13 @@ describe("EnvLoader & Env Management", () => {
         id: "nodereal-ethereum-1",
         url: "https://eth-mainnet.nodereal.io/v1/key_nodereal_one",
         enabled: true,
+        envKeyName: "NODEREAL_RPC_API_KEY1",
       });
       expect(ethEndpoints[1]).toEqual({
         id: "nodereal-ethereum-2",
         url: "https://eth-mainnet.nodereal.io/v1/key_nodereal_two",
         enabled: true,
+        envKeyName: "NODEREAL_RPC_API_KEY2",
       });
 
       const baseEndpoints = loader.getRpcEndpoints("base");
@@ -52,11 +54,13 @@ describe("EnvLoader & Env Management", () => {
         id: "nodereal-base-1",
         url: "https://open-platform.nodereal.io/key_nodereal_one/base",
         enabled: true,
+        envKeyName: "NODEREAL_RPC_API_KEY1",
       });
       expect(baseEndpoints[1]).toEqual({
         id: "nodereal-base-2",
         url: "https://open-platform.nodereal.io/key_nodereal_two/base",
         enabled: true,
+        envKeyName: "NODEREAL_RPC_API_KEY2",
       });
 
       const bscEndpoints = loader.getRpcEndpoints("bsc");
@@ -101,11 +105,13 @@ describe("EnvLoader & Env Management", () => {
         id: "ankr-ethereum-1",
         url: "https://rpc.ankr.com/eth/key_ankr_1",
         enabled: true,
+        envKeyName: "ANKR_RPC_API_KEY1",
       });
       expect(loader.getRpcEndpoints("base")[0]).toEqual({
         id: "ankr-base-1",
         url: "https://rpc.ankr.com/base/key_ankr_1",
         enabled: true,
+        envKeyName: "ANKR_RPC_API_KEY1",
       });
     });
 
@@ -117,11 +123,13 @@ describe("EnvLoader & Env Management", () => {
         id: "alchemy-ethereum-1",
         url: "https://eth-mainnet.g.alchemy.com/v2/key_alchemy_1",
         enabled: true,
+        envKeyName: "ALCHEMY_RPC_API_KEY1",
       });
       expect(loader.getRpcEndpoints("base")[0]).toEqual({
         id: "alchemy-base-1",
         url: "https://base-mainnet.g.alchemy.com/v2/key_alchemy_1",
         enabled: true,
+        envKeyName: "ALCHEMY_RPC_API_KEY1",
       });
     });
 
@@ -148,11 +156,13 @@ describe("EnvLoader & Env Management", () => {
         id: "custom-ethereum-1",
         url: "https://custom-eth-archive.example.com",
         enabled: true,
+        envKeyName: "ETHEREUM_RPC_URL1",
       });
       expect(loader.getRpcEndpoints("base")[0]).toEqual({
         id: "custom-base-1",
         url: "https://custom-base-archive.example.com",
         enabled: true,
+        envKeyName: "BASE_RPC_URL1",
       });
     });
   });
@@ -172,6 +182,7 @@ describe("EnvLoader & Env Management", () => {
       expect(configs).toHaveLength(4);
       const etherscan = configs.find((c) => c.kind === "etherscan");
       expect(etherscan?.apiKeys).toEqual(["etherscan_k1", "etherscan_k2"]);
+      expect(etherscan?.envKeyNames).toEqual(["ETHERSCAN_API_KEY1", "ETHERSCAN_API_KEY2"]);
 
       const blockscout = configs.find((c) => c.kind === "blockscout");
       expect(blockscout?.apiKeys).toEqual(["blockscout_k1"]);
@@ -259,6 +270,52 @@ describe("EnvLoader & Env Management", () => {
       expect(config.providers).toBeDefined();
       expect(config.chainlink?.rpcEndpoints).toBeDefined();
       expect(config.chainlink?.rpcEndpoints?.some((e) => e.id === "nodereal-ethereum-1")).toBe(true);
+    });
+  });
+  describe("Task 3: Alchemy RPC integration and cooldown in RPC pool", () => {
+    it("includes Alchemy RPC in archiveRpcPool when ALCHEMY_API_KEY is configured", () => {
+      const envContent = `
+        ALCHEMY_API_KEY=my_alchemy_key_123
+      `;
+      const client = new EvmDataClient({
+        envContent,
+        chainlink: { enabled: true },
+      });
+
+      const pool = client.getArchiveRpcPool();
+      expect(pool).not.toBeNull();
+      const states = pool!.getAllCooldownStates();
+      const alchemyState = states.find((s) => s.id === "alchemy-ethereum-1");
+      expect(alchemyState).toBeDefined();
+      expect(alchemyState?.envKeyName).toBe("ALCHEMY_API_KEY");
+      expect(alchemyState?.isCoolingDown).toBe(false);
+    });
+
+    it("enters stepped cooldown when Alchemy RPC fails and clears on success", () => {
+      const envContent = `
+        ALCHEMY_API_KEY=my_alchemy_key_123
+      `;
+      const client = new EvmDataClient({
+        envContent,
+        chainlink: { enabled: true },
+      });
+
+      const pool = client.getArchiveRpcPool()!;
+      expect(pool).toBeDefined();
+
+      // Report failure
+      pool.reportOutcome("alchemy-ethereum-1", "failure");
+      let state = pool.getEndpointCooldownState("alchemy-ethereum-1");
+      expect(state?.isCoolingDown).toBe(true);
+      expect(state?.currentCooldownMs).toBe(60_000);
+      expect(state?.consecutiveFailures).toBe(1);
+
+      // Report success clears CD
+      pool.reportOutcome("alchemy-ethereum-1", "success");
+      state = pool.getEndpointCooldownState("alchemy-ethereum-1");
+      expect(state?.isCoolingDown).toBe(false);
+      expect(state?.currentCooldownMs).toBe(0);
+      expect(state?.consecutiveFailures).toBe(0);
     });
   });
 });

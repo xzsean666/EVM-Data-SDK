@@ -131,6 +131,41 @@ export class EnvLoader {
    * Get all environment keys matching a specific prefix (e.g. "ETHERSCAN_API_KEY", "NODEREAL_RPC_API_KEY").
    * Values are deduplicated and returned in natural sorted order by key name.
    */
+  /**
+   * Get all environment keys matching a specific prefix with their env variable names.
+   */
+  getKeyEntriesByPrefix(prefix: string): { name: string; value: string }[] {
+    const uppercasePrefix = prefix.toUpperCase();
+    const result: { name: string; value: string }[] = [];
+    const seenValues = new Set<string>();
+
+    const sortedEntries = Object.entries(this.envMap)
+      .filter(([k]) => k.toUpperCase().startsWith(uppercasePrefix))
+      .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }));
+
+    for (const [name, val] of sortedEntries) {
+      if (val && !seenValues.has(val)) {
+        seenValues.add(val);
+        result.push({ name, value: val });
+      }
+    }
+
+    if (result.length === 0 && this.fallbackToProcessEnv && typeof process !== "undefined" && process.env) {
+      const processEntries = Object.entries(process.env)
+        .filter(([k, v]) => k.toUpperCase().startsWith(uppercasePrefix) && !!v)
+        .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }));
+
+      for (const [name, val] of processEntries) {
+        if (val && !seenValues.has(val)) {
+          seenValues.add(val);
+          result.push({ name, value: val! });
+        }
+      }
+    }
+
+    return result;
+  }
+
   getKeysByPrefix(prefix: string): string[] {
     const uppercasePrefix = prefix.toUpperCase();
     const result: string[] = [];
@@ -200,12 +235,13 @@ export class EnvLoader {
     };
 
     const targetPrefix = prefix ?? defaultPrefixMap[kind];
-    const apiKeys = this.getKeysByPrefix(targetPrefix);
-    if (apiKeys.length === 0) return null;
+    const keyEntries = this.getKeyEntriesByPrefix(targetPrefix);
+    if (keyEntries.length === 0) return null;
 
     return {
       kind,
-      apiKeys,
+      apiKeys: keyEntries.map((e) => e.value),
+      envKeyNames: keyEntries.map((e) => e.name),
     };
   }
 
@@ -234,135 +270,140 @@ export class EnvLoader {
     const endpoints: EthereumArchiveRpcEndpointConfiguration[] = [];
     const seenUrls = new Set<string>();
 
-    const addEndpoint = (id: string, url: string) => {
+    const addEndpoint = (id: string, url: string, envKeyName?: string) => {
       if (!url || seenUrls.has(url)) return;
       seenUrls.add(url);
-      endpoints.push(Object.freeze({ id, url, enabled: true }));
+      endpoints.push(Object.freeze({
+        id,
+        url,
+        enabled: true,
+        ...(envKeyName !== undefined ? { envKeyName } : {}),
+      }));
     };
 
     // 1. NodeReal (MegaNode) - multi-chain support with 1 key
     const nodeRealKeys = this.getKeysByPattern(/^(?:NODEREAL|MEGANODE)(?:_RPC)?(?:_API)?_KEY(?:_?\d+)?$/i);
-    nodeRealKeys.forEach(({ value: key }, idx) => {
+    nodeRealKeys.forEach(({ name: envKeyName, value: key }, idx) => {
       const id = `nodereal-${chain}-${idx + 1}`;
       switch (chain) {
         case "ethereum":
-          addEndpoint(id, `https://eth-mainnet.nodereal.io/v1/${key}`);
+          addEndpoint(id, `https://eth-mainnet.nodereal.io/v1/${key}`, envKeyName);
           break;
         case "base":
-          addEndpoint(id, `https://open-platform.nodereal.io/${key}/base`);
+          addEndpoint(id, `https://open-platform.nodereal.io/${key}/base`, envKeyName);
           break;
         case "bsc":
-          addEndpoint(id, `https://bsc-mainnet.nodereal.io/v1/${key}`);
+          addEndpoint(id, `https://bsc-mainnet.nodereal.io/v1/${key}`, envKeyName);
           break;
         case "polygon":
-          addEndpoint(id, `https://polygon-mainnet.nodereal.io/v1/${key}`);
+          addEndpoint(id, `https://polygon-mainnet.nodereal.io/v1/${key}`, envKeyName);
           break;
         case "arbitrum":
-          addEndpoint(id, `https://open-platform.nodereal.io/${key}/arbitrum-nitro/`);
+          addEndpoint(id, `https://open-platform.nodereal.io/${key}/arbitrum-nitro/`, envKeyName);
           break;
         case "optimism":
-          addEndpoint(id, `https://opt-mainnet.nodereal.io/v1/${key}`);
+          addEndpoint(id, `https://opt-mainnet.nodereal.io/v1/${key}`, envKeyName);
           break;
       }
     });
 
     // 2. Ankr - multi-chain support with 1 key
     const ankrKeys = this.getKeysByPattern(/^ANKR(?:_RPC)?(?:_API)?_KEY(?:_?\d+)?$/i);
-    ankrKeys.forEach(({ value: key }, idx) => {
+    ankrKeys.forEach(({ name: envKeyName, value: key }, idx) => {
       const id = `ankr-${chain}-${idx + 1}`;
       switch (chain) {
         case "ethereum":
-          addEndpoint(id, `https://rpc.ankr.com/eth/${key}`);
+          addEndpoint(id, `https://rpc.ankr.com/eth/${key}`, envKeyName);
           break;
         case "base":
-          addEndpoint(id, `https://rpc.ankr.com/base/${key}`);
+          addEndpoint(id, `https://rpc.ankr.com/base/${key}`, envKeyName);
           break;
         case "bsc":
-          addEndpoint(id, `https://rpc.ankr.com/bsc/${key}`);
+          addEndpoint(id, `https://rpc.ankr.com/bsc/${key}`, envKeyName);
           break;
         case "polygon":
-          addEndpoint(id, `https://rpc.ankr.com/polygon/${key}`);
+          addEndpoint(id, `https://rpc.ankr.com/polygon/${key}`, envKeyName);
           break;
         case "arbitrum":
-          addEndpoint(id, `https://rpc.ankr.com/arbitrum/${key}`);
+          addEndpoint(id, `https://rpc.ankr.com/arbitrum/${key}`, envKeyName);
           break;
         case "optimism":
-          addEndpoint(id, `https://rpc.ankr.com/optimism/${key}`);
+          addEndpoint(id, `https://rpc.ankr.com/optimism/${key}`, envKeyName);
           break;
       }
     });
 
     // 3. Alchemy RPC - multi-chain support with 1 key
     const alchemyKeys = this.getKeysByPattern(/^ALCHEMY(?:_RPC)?(?:_API)?_KEY(?:_?\d+)?$/i);
-    alchemyKeys.forEach(({ value: key }, idx) => {
+    alchemyKeys.forEach(({ name: envKeyName, value: key }, idx) => {
       const id = `alchemy-${chain}-${idx + 1}`;
       switch (chain) {
         case "ethereum":
-          addEndpoint(id, `https://eth-mainnet.g.alchemy.com/v2/${key}`);
+          addEndpoint(id, `https://eth-mainnet.g.alchemy.com/v2/${key}`, envKeyName);
           break;
         case "base":
-          addEndpoint(id, `https://base-mainnet.g.alchemy.com/v2/${key}`);
+          addEndpoint(id, `https://base-mainnet.g.alchemy.com/v2/${key}`, envKeyName);
           break;
         case "bsc":
-          addEndpoint(id, `https://bnb-mainnet.g.alchemy.com/v2/${key}`);
+          addEndpoint(id, `https://bnb-mainnet.g.alchemy.com/v2/${key}`, envKeyName);
           break;
         case "polygon":
-          addEndpoint(id, `https://polygon-mainnet.g.alchemy.com/v2/${key}`);
+          addEndpoint(id, `https://polygon-mainnet.g.alchemy.com/v2/${key}`, envKeyName);
           break;
         case "arbitrum":
-          addEndpoint(id, `https://arb-mainnet.g.alchemy.com/v2/${key}`);
+          addEndpoint(id, `https://arb-mainnet.g.alchemy.com/v2/${key}`, envKeyName);
           break;
         case "optimism":
-          addEndpoint(id, `https://opt-mainnet.g.alchemy.com/v2/${key}`);
+          addEndpoint(id, `https://opt-mainnet.g.alchemy.com/v2/${key}`, envKeyName);
           break;
       }
     });
 
     // 4. DRPC - multi-chain support with 1 key
     const drpcKeys = this.getKeysByPattern(/^DRPC(?:_RPC)?(?:_API)?_KEY(?:_?\d+)?$/i);
-    drpcKeys.forEach(({ value: key }, idx) => {
+    drpcKeys.forEach(({ name: envKeyName, value: key }, idx) => {
       const id = `drpc-${chain}-${idx + 1}`;
       switch (chain) {
         case "ethereum":
-          addEndpoint(id, `https://lb.drpc.org/ogrpc?network=ethereum&dkey=${key}`);
+          addEndpoint(id, `https://lb.drpc.org/ogrpc?network=ethereum&dkey=${key}`, envKeyName);
           break;
         case "base":
-          addEndpoint(id, `https://lb.drpc.org/ogrpc?network=base&dkey=${key}`);
+          addEndpoint(id, `https://lb.drpc.org/ogrpc?network=base&dkey=${key}`, envKeyName);
           break;
         case "bsc":
-          addEndpoint(id, `https://lb.drpc.org/ogrpc?network=bsc&dkey=${key}`);
+          addEndpoint(id, `https://lb.drpc.org/ogrpc?network=bsc&dkey=${key}`, envKeyName);
           break;
         case "polygon":
-          addEndpoint(id, `https://lb.drpc.org/ogrpc?network=polygon&dkey=${key}`);
+          addEndpoint(id, `https://lb.drpc.org/ogrpc?network=polygon&dkey=${key}`, envKeyName);
           break;
         case "arbitrum":
-          addEndpoint(id, `https://lb.drpc.org/ogrpc?network=arbitrum&dkey=${key}`);
+          addEndpoint(id, `https://lb.drpc.org/ogrpc?network=arbitrum&dkey=${key}`, envKeyName);
           break;
         case "optimism":
-          addEndpoint(id, `https://lb.drpc.org/ogrpc?network=optimism&dkey=${key}`);
+          addEndpoint(id, `https://lb.drpc.org/ogrpc?network=optimism&dkey=${key}`, envKeyName);
           break;
       }
     });
 
     // 5. Infura - multi-chain support
     const infuraKeys = this.getKeysByPattern(/^INFURA(?:_RPC)?(?:_API)?_KEY(?:_?\d+)?$/i);
-    infuraKeys.forEach(({ value: key }, idx) => {
+    infuraKeys.forEach(({ name: envKeyName, value: key }, idx) => {
       const id = `infura-${chain}-${idx + 1}`;
       switch (chain) {
         case "ethereum":
-          addEndpoint(id, `https://mainnet.infura.io/v3/${key}`);
+          addEndpoint(id, `https://mainnet.infura.io/v3/${key}`, envKeyName);
           break;
         case "base":
-          addEndpoint(id, `https://base-mainnet.infura.io/v3/${key}`);
+          addEndpoint(id, `https://base-mainnet.infura.io/v3/${key}`, envKeyName);
           break;
         case "polygon":
-          addEndpoint(id, `https://polygon-mainnet.infura.io/v3/${key}`);
+          addEndpoint(id, `https://polygon-mainnet.infura.io/v3/${key}`, envKeyName);
           break;
         case "arbitrum":
-          addEndpoint(id, `https://arbitrum-mainnet.infura.io/v3/${key}`);
+          addEndpoint(id, `https://arbitrum-mainnet.infura.io/v3/${key}`, envKeyName);
           break;
         case "optimism":
-          addEndpoint(id, `https://optimism-mainnet.infura.io/v3/${key}`);
+          addEndpoint(id, `https://optimism-mainnet.infura.io/v3/${key}`, envKeyName);
           break;
       }
     });
@@ -378,8 +419,8 @@ export class EnvLoader {
     };
 
     const directUrls = this.getKeysByPattern(directPatternMap[chain]);
-    directUrls.forEach(({ value: url }, idx) => {
-      addEndpoint(`custom-${chain}-${idx + 1}`, url);
+    directUrls.forEach(({ name: envKeyName, value: url }, idx) => {
+      addEndpoint(`custom-${chain}-${idx + 1}`, url, envKeyName);
     });
 
     return Object.freeze(endpoints);
@@ -498,6 +539,9 @@ export class EnvLoader {
     const storageUrl = this.getStorageUrl();
     const storage = overrides.storage ?? (storageUrl ? { url: storageUrl } : undefined);
 
+    const slackWebhookUrl = this.get("SLACK_WEBHOOK_URL") ?? this.get("ALERT_SLACK_WEBHOOK");
+    const alert = overrides.alert ?? (slackWebhookUrl ? { enabled: true, slackWebhookUrl } : undefined);
+
     // Merge Chainlink RPC endpoints
     let chainlink = overrides.chainlink;
     if (chainlink) {
@@ -543,6 +587,7 @@ export class EnvLoader {
       ...(defi ? { defi } : {}),
       ...(uniswapV3 ? { uniswapV3 } : {}),
       ...(uniswapV4 ? { uniswapV4 } : {}),
+      ...(alert ? { alert } : {}),
     };
   }
 }

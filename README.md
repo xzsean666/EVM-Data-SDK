@@ -184,3 +184,31 @@ reporting `provider: "blockscout"`; API keys and upstream URLs are never
 returned. See [`docs/BLOCKSCOUT_PROVIDER/UPGRADE.md`](./docs/BLOCKSCOUT_PROVIDER/UPGRADE.md)
 for the contract and [`docs/BLOCKSCOUT_PROVIDER/AI_IMPLEMENTATION_PROMPT.md`](./docs/BLOCKSCOUT_PROVIDER/AI_IMPLEMENTATION_PROMPT.md)
 for the implementation handoff.
+
+## Stepped cooldown and Slack alerts
+
+RPC endpoints and Data-API credentials utilize progressive backoff cooldowns when transient failures or rate-limits occur:
+`1m -> 5m -> 15m -> 30m -> 1h -> 2h -> 4h -> 8h -> 12h -> 24h (cap)`
+
+- **Automatic Recovery**: While in cooldown, a resource is bypassed. Once cooldown expires, a single attempt is permitted. A successful request immediately resets consecutive failure counts and clears the cooldown.
+- **Alchemy RPC Pooling**: Configuring `ALCHEMY_API_KEY` (or `ALCHEMY_RPC_KEY`) automatically enrolls Alchemy into the Archive RPC pool candidate set under `alchemy-ethereum-1`, sharing random load distribution and cooldown tracking.
+- **Slack Alerts**: When any RPC endpoint or API key reaches the maximum 24-hour cooldown, `client.checkAndReportAlerts()` sends a structured summary to the configured Slack Webhook:
+
+```ts
+const client = new EvmDataClient({
+  providers: [
+    { kind: "alchemy", apiKeys: [process.env.ALCHEMY_API_KEY!] },
+  ],
+  alert: {
+    enabled: true,
+    slackWebhookUrl: process.env.SLACK_WEBHOOK_URL!,
+    reportIntervalMs: 86_400_000, // Throttled to at most once per 24 hours
+  },
+});
+
+// Run from your scheduled cron or job runner:
+const alertSent = await client.checkAndReportAlerts();
+```
+
+Alert payloads are strictly sanitized: only resource IDs and environment variable names (such as `ALCHEMY_API_KEY` or `ETHERSCAN_API_KEY_1`) are reported—API keys and private URL tokens are never exposed.
+

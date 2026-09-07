@@ -2,7 +2,7 @@
 
 Version: 0.4.0
 
-The owner approved the architecture baseline in the 2026-08-05 implementation request. Decisions below are accepted for v0.1; ADR-018 through ADR-020 govern the implemented v0.2 price upgrade; ADR-023/ADR-024 govern v0.3; ADR-028/ADR-029 govern the v0.4 Chainlink Archive RPC/Multicall3 upgrade accepted 2026-08-07.
+The owner approved the architecture baseline in the 2026-08-05 implementation request. Decisions below are accepted for v0.1; ADR-018 through ADR-020 govern the implemented v0.2 price upgrade; ADR-023/ADR-024 govern v0.3; ADR-028/ADR-029 govern the v0.4 Chainlink Archive RPC/Multicall3 upgrade accepted 2026-08-07; ADR-035 governs the stepped cooldown and Slack alerting upgrade accepted 2026-09-07.
 
 ## ADR-001: Node.js-first v0.1 runtime
 
@@ -664,3 +664,29 @@ does not enable token discovery.
 
 **Trade-off:** Callers own ABI codecs and must treat failed individual calls as
 unavailable; the SDK deliberately does not interpret arbitrary return data.
+
+## ADR-035: Stepped backoff cooldown and decoupled Slack webhook alerting
+
+**Status:** Accepted
+
+**Date:** 2026-09-07
+
+**Decision:**
+1. Replace binary/fixed failure tracking in RPC and Data-API pools with a unified stepped backoff tracker (`CooldownTracker`) following a deterministic backoff ladder: `1m -> 5m -> 15m -> 30m -> 1h -> 2h -> 4h -> 8h -> 12h -> 24h (max)`.
+2. Endpoints and credentials in cooldown are excluded from selection during their cooldown window. When cooldown expires, they are permitted a single attempt. Any success resets consecutive failure counts, cumulative downtime, and cooldown duration to zero.
+3. Automatically merge Alchemy Archive RPC endpoints (`alchemy-ethereum-1`) from `ALCHEMY_API_KEY` into the archive RPC pool candidate set, ensuring private endpoints participate in health checks and stepped cooldown.
+4. Introduce `AlertService` and `SlackWebhookReporter` to collect resources that have reached the maximum 24-hour cooldown tier and dispatch structured fault summaries to a configured Slack Webhook URL.
+5. Strictly throttle alerts to at most once per 24 hours (`reportIntervalMs: 86_400_000`) and enforce strict redaction guarantees (only opaque resource IDs and environment variable names such as `ALCHEMY_API_KEY` or `ETHERSCAN_API_KEY_1` are emitted; API keys and URL tokens are never exposed).
+6. Do not introduce unmanaged background `setInterval` timers. The alert check is exposed as `client.checkAndReportAlerts()`, maintaining clean, deterministic lifecycle management.
+
+**Reason:**
+RPC endpoints and Data-API credentials experience transient hiccups (e.g. temporary rate limits, brief network downtime) as well as long-term outages (quota exhaustion, revoking keys). A flat short cooldown (1s) causes key churn and hammering failing nodes, while immediate permanent disabling of RPC endpoints forces manual intervention for transient glitches. Stepped backoff allows fast recovery for transient blips while backing off heavily for persistent failures. Decoupled 24-hour alerting alerts operators to true long-term failures without noise.
+
+**Alternatives considered:**
+- Exponential backoff with random jitter: Rejected because stepped backoff tiers provide deterministic, human-predictable escalation and simplified testing.
+- Autonomous background timer loop inside the client: Rejected because background timer loops leak Node.js event-loop resources, impede graceful shutdowns, and violate the SDK's core architecture principles.
+- Embedding endpoint URLs in Slack alerts: Rejected because RPC URLs frequently embed private API tokens (e.g. `/v2/<key>`).
+
+**Trade-offs:**
+Callers must explicitly invoke `client.checkAndReportAlerts()` or schedule it according to their own job runner. In return, the SDK avoids rogue background processes and ensures deterministic testability.
+

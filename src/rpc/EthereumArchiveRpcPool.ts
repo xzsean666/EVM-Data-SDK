@@ -1,4 +1,6 @@
-import type { RandomSource } from "../execution/clock";
+import type { Clock, RandomSource } from "../execution/clock";
+import { systemClock } from "../execution/clock";
+import { CooldownTracker } from "../execution/CooldownTracker";
 import { ArchiveRpcTransport, type ArchiveRpcCallOptions } from "./ArchiveRpcTransport";
 import {
   MULTICALL3_ADDRESS,
@@ -9,16 +11,15 @@ import { shuffle } from "./RandomSource";
 
 /**
  * Owns Ethereum Archive RPC endpoint initialization probes, passive health
- * tracking, and random healthy-endpoint snapshots (ADR-028/ADR-029; upgrade
- * doc sections 5.3/5.4). Has no proxy, Chainlink ABI, or background-timer
- * knowledge: health changes only through an explicit `initialize()` call or
- * a `reportOutcome()` call made by `EthereumArchiveRpcExecutor` after a real
- * request. Every probe is direct-only through `ArchiveRpcTransport`.
+ * tracking, stepped backoff cooldowns, and random healthy-endpoint snapshots
+ * (ADR-028/ADR-029). Health changes through an explicit `initialize()` call
+ * or `reportOutcome()` calls made by executors after real requests.
  */
 
 export interface EthereumArchiveRpcEndpoint {
   readonly id: string;
   readonly url: string;
+  readonly envKeyName?: string;
 }
 
 export interface EthereumArchiveRpcPoolOptions {
@@ -35,9 +36,21 @@ export interface EthereumArchiveRpcPoolOptions {
   readonly multicall3DeploymentBlock?: string;
   /** Minimum delay between automatic empty-pool health refreshes. */
   readonly healthRefreshCooldownMs?: number;
+  readonly clock?: Clock;
 }
 
 export type ArchiveRpcOutcome = "success" | "failure";
+
+export interface EndpointCooldownState {
+  readonly id: string;
+  readonly envKeyName?: string;
+  readonly isMaxCooldown: boolean;
+  readonly isCoolingDown: boolean;
+  readonly currentCooldownMs: number;
+  readonly totalCooldownDurationMs: number;
+  readonly consecutiveFailures: number;
+  readonly cooldownUntil: number | null;
+}
 
 const DEFAULT_PROBE_BLOCK_NUMBER = "18000000";
 const DEFAULT_HEALTH_CHECK_TIMEOUT_MS = 10_000;
@@ -54,7 +67,9 @@ export class EthereumArchiveRpcPool {
   readonly multicall3Address: string;
   readonly multicall3DeploymentBlock: bigint;
   private readonly healthRefreshCooldownMs: number;
+  private readonly clock: Clock;
   private readonly healthy = new Map<string, boolean>();
+  private readonly trackers = new Map<string, CooldownTracker>();
   private lastHealthRefreshAt = 0;
   private healthRefreshPromise: Promise<void> | undefined;
 
@@ -75,8 +90,10 @@ export class EthereumArchiveRpcPool {
     this.multicall3Address = options.multicall3Address ?? MULTICALL3_ADDRESS;
     this.multicall3DeploymentBlock = BigInt(options.multicall3DeploymentBlock ?? "14353601");
     this.healthRefreshCooldownMs = Math.max(0, options.healthRefreshCooldownMs ?? DEFAULT_HEALTH_REFRESH_COOLDOWN_MS);
+    this.clock = options.clock ?? systemClock;
     for (const endpoint of this.endpoints) {
       this.healthy.set(endpoint.id, false);
+      this.trackers.set(endpoint.id, new CooldownTracker({ clock: this.clock }));
     }
   }
 
@@ -88,7 +105,7 @@ export class EthereumArchiveRpcPool {
    * there is no automatic interval.
    */
   async initialize(signal?: AbortSignal): Promise<void> {
-    this.lastHealthRefreshAt = Date.now();
+    this.lastHealthRefreshAt = this.clock.now();
     await runBounded(this.endpoints, this.maxConcurrentProbes, async (endpoint) => {
       const healthy = await this.probeEndpoint(endpoint, signal);
       this.healthy.set(endpoint.id, healthy);
@@ -97,8 +114,8 @@ export class EthereumArchiveRpcPool {
 
   /** Re-probe an empty pool after a transient startup/provider failure. */
   async refreshIfNeeded(signal?: AbortSignal): Promise<void> {
-    if ([...this.healthy.values()].some(Boolean)) return;
-    const now = Date.now();
+    if ([...this.endpoints].some((endpoint) => this.isHealthy(endpoint.id))) return;
+    const now = this.clock.now();
     if (this.healthRefreshPromise !== undefined) return this.healthRefreshPromise;
     if (now - this.lastHealthRefreshAt < this.healthRefreshCooldownMs) return;
     this.healthRefreshPromise = this.initialize(signal).finally(() => {
@@ -108,31 +125,67 @@ export class EthereumArchiveRpcPool {
   }
 
   /**
-   * Records the outcome of a real (non-probe) request against `id`. Callers
-   * report `"failure"` only for a retryable endpoint/network/archive-depth
-   * failure — never for a Chainlink-level per-feed revert, which says
-   * nothing about the endpoint's own health.
+   * Records the outcome of a real (non-probe) request against `id`.
+   * When failure is reported, the endpoint enters stepped backoff cooldown.
+   * When success is reported, cooldown and failure history are cleared.
    */
-  reportOutcome(id: string, outcome: ArchiveRpcOutcome): void {
-    if (!this.healthy.has(id)) {
+  reportOutcome(id: string, outcome: ArchiveRpcOutcome, now = this.clock.now()): void {
+    const tracker = this.trackers.get(id);
+    if (tracker === undefined || !this.healthy.has(id)) {
       return;
     }
-    this.healthy.set(id, outcome === "success");
+    if (outcome === "success") {
+      tracker.recordSuccess();
+      this.healthy.set(id, true);
+    } else {
+      tracker.recordFailure(now);
+    }
   }
 
-  isHealthy(id: string): boolean {
-    return this.healthy.get(id) ?? false;
+  isHealthy(id: string, now = this.clock.now()): boolean {
+    const probeHealthy = this.healthy.get(id) ?? false;
+    if (!probeHealthy) {
+      return false;
+    }
+    const tracker = this.trackers.get(id);
+    if (tracker !== undefined && tracker.isCoolingDown(now)) {
+      return false;
+    }
+    return true;
   }
 
   /**
-   * Snapshots currently healthy endpoints and returns them in an unbiased
-   * random permutation (upgrade doc 5.4 steps 1-2). The caller pins the
-   * whole operation to the first entry and only advances to the next entry
-   * after a retryable failure; this method has no notion of "operation".
+   * Snapshots currently healthy endpoints (not cooling down) and returns them
+   * in an unbiased random permutation (upgrade doc 5.4 steps 1-2).
    */
-  healthySnapshot(randomSource: RandomSource): readonly EthereumArchiveRpcEndpoint[] {
-    const candidates = this.endpoints.filter((endpoint) => this.healthy.get(endpoint.id) === true);
+  healthySnapshot(randomSource: RandomSource, now = this.clock.now()): readonly EthereumArchiveRpcEndpoint[] {
+    const candidates = this.endpoints.filter((endpoint) => this.isHealthy(endpoint.id, now));
     return Object.freeze(shuffle(candidates, randomSource));
+  }
+
+  getEndpointCooldownState(id: string, now = this.clock.now()): EndpointCooldownState | null {
+    const endpoint = this.endpoints.find((candidate) => candidate.id === id);
+    const tracker = this.trackers.get(id);
+    if (endpoint === undefined || tracker === undefined) {
+      return null;
+    }
+    const state = tracker.getState(now);
+    return Object.freeze({
+      id: endpoint.id,
+      ...(endpoint.envKeyName !== undefined ? { envKeyName: endpoint.envKeyName } : {}),
+      isMaxCooldown: state.isMaxCooldown,
+      isCoolingDown: state.isCoolingDown,
+      currentCooldownMs: state.currentCooldownMs,
+      totalCooldownDurationMs: state.totalCooldownDurationMs,
+      consecutiveFailures: state.consecutiveFailures,
+      cooldownUntil: state.cooldownUntil,
+    });
+  }
+
+  getAllCooldownStates(now = this.clock.now()): readonly EndpointCooldownState[] {
+    return Object.freeze(
+      this.endpoints.map((endpoint) => this.getEndpointCooldownState(endpoint.id, now)!),
+    );
   }
 
   private async probeEndpoint(endpoint: EthereumArchiveRpcEndpoint, signal?: AbortSignal): Promise<boolean> {

@@ -48,6 +48,9 @@ import { createStorageAdapter, type StorageAdapter } from "../storage/StorageAda
 import { SyncService } from "../sync/SyncService";
 import { HistoryService } from "../history/HistoryService";
 import { PriceSyncService } from "../price/PriceSyncService";
+import { AlertService } from "../alert/AlertService";
+import { SlackWebhookReporter } from "../alert/SlackWebhookReporter";
+import type { Clock } from "../execution/clock";
 import { ChainRegistry as PublicChainRegistry } from "../chains/ChainRegistry";
 
 export interface EvmDataClientOptions {
@@ -64,6 +67,9 @@ export interface EvmDataClientOptions {
   readonly defiArchiveRpcPools?: Partial<Record<"ethereum" | "base", EthereumArchiveRpcPool>>;
   /** Test seam for the opt-in Uniswap V3 Ethereum Archive RPC pool. */
   readonly uniswapV3ArchiveRpcPool?: EthereumArchiveRpcPool;
+  readonly alertReporter?: SlackWebhookReporter;
+  readonly alertService?: AlertService;
+  readonly clock?: Clock;
 }
 
 export class EvmDataClient {
@@ -78,6 +84,7 @@ export class EvmDataClient {
   private readonly binanceKlines: BinanceAdapter;
 
   private readonly configuration: NormalizedClientConfiguration;
+  private readonly credentialPools: ReadonlyMap<string, CredentialPool>;
   private readonly advancedProxyManager: SingBoxProxyManager | null;
   private readonly archiveRpcPool: EthereumArchiveRpcPool | null;
   private readonly defiArchiveRpcPools: readonly EthereumArchiveRpcPool[];
@@ -86,6 +93,7 @@ export class EvmDataClient {
   readonly sync: SyncService;
   readonly history: HistoryService;
   readonly price: PriceSyncService;
+  readonly alert: AlertService;
   /**
    * Per-chain Archive RPC executors, keyed by chain, reused to serve
    * `getBlockNumberByTimestamp` via pure public RPC binary search. Populated
@@ -112,8 +120,15 @@ export class EvmDataClient {
     const credentialPools = new Map<string, CredentialPool>();
     this.configuration.providers.forEach((provider, index) => {
       const configurationId = `${provider.kind}-${index + 1}`;
-      credentialPools.set(configurationId, new CredentialPool(provider.apiKeys, { providerConfigurationId: configurationId }));
+      credentialPools.set(
+        configurationId,
+        new CredentialPool(provider.apiKeys, {
+          providerConfigurationId: configurationId,
+          ...(provider.envKeyNames !== undefined ? { envKeyNames: provider.envKeyNames } : {}),
+        }),
+      );
     });
+    this.credentialPools = credentialPools;
     const proxyPool = new ProxyPool(this.configuration.proxies, { allowDirect: this.configuration.requestPolicy.allowDirect });
     this.advancedProxyManager = this.configuration.advancedProxy === undefined
       ? null
@@ -200,11 +215,37 @@ export class EvmDataClient {
         : [];
       const customEndpoints: readonly EthereumArchiveRpcEndpoint[] = chainlinkConfiguration.rpcEndpoints
         .filter((endpoint) => endpoint.enabled)
-        .map((endpoint) => ({ id: endpoint.id, url: endpoint.url }));
+        .map((endpoint) => ({
+          id: endpoint.id,
+          url: endpoint.url,
+          ...(endpoint.envKeyName !== undefined ? { envKeyName: endpoint.envKeyName } : {}),
+        }));
       const defiEthereumEndpoints: readonly EthereumArchiveRpcEndpoint[] = defiConfiguration.enabled && defiConfiguration.chains.includes("ethereum")
-        ? defiConfiguration.rpcEndpoints.ethereum.filter((endpoint) => endpoint.enabled).map((endpoint) => ({ id: endpoint.id, url: endpoint.url }))
+        ? defiConfiguration.rpcEndpoints.ethereum
+            .filter((endpoint) => endpoint.enabled)
+            .map((endpoint) => ({
+              id: endpoint.id,
+              url: endpoint.url,
+              ...(endpoint.envKeyName !== undefined ? { envKeyName: endpoint.envKeyName } : {}),
+            }))
         : [];
-      const endpoints = mergeArchiveRpcEndpoints([...builtinEndpoints, ...customEndpoints, ...defiEthereumEndpoints]);
+      const alchemyProvider = this.configuration.providers.find((p) => p.kind === "alchemy");
+      const disabledIds = new Set(chainlinkConfiguration.rpcEndpoints.filter((e) => !e.enabled).map((e) => e.id));
+      const alchemyDerivedEndpoints: readonly EthereumArchiveRpcEndpoint[] = alchemyProvider
+        ? alchemyProvider.apiKeys
+            .map((key, idx) => ({
+              id: `alchemy-ethereum-${idx + 1}`,
+              url: `https://eth-mainnet.g.alchemy.com/v2/${key}`,
+              envKeyName: alchemyProvider.envKeyNames?.[idx] ?? "ALCHEMY_API_KEY",
+            }))
+            .filter((ep) => !disabledIds.has(ep.id))
+        : [];
+      const endpoints = mergeArchiveRpcEndpoints([
+        ...builtinEndpoints,
+        ...customEndpoints,
+        ...defiEthereumEndpoints,
+        ...alchemyDerivedEndpoints,
+      ]);
 
       this.archiveRpcPool = options.archiveRpcPool ?? new EthereumArchiveRpcPool({
         endpoints,
@@ -286,6 +327,27 @@ export class EvmDataClient {
       const batchExecutor = new JsonRpcBatchExecutor({ pool, randomSource: options.archiveRpcRandomSource ?? systemRandom, attemptTimeoutMs: uniswapV4Configuration.attemptTimeoutMs, totalTimeoutMs: uniswapV4Configuration.totalTimeoutMs, maxRpcAttempts: uniswapV4Configuration.maxRpcAttempts });
       this.uniswapV4 = new UniswapV4HistoricalPriceService({ rpcService: new RpcService({ executor, batchExecutor, maxCallsPerMulticall: uniswapV4Configuration.maxCallsPerMulticall, chainId: 1, multicall3Address: MULTICALL3_ADDRESS, multicall3DeploymentBlock: MULTICALL3_ETHEREUM_MAINNET_DEPLOYMENT_BLOCK.toString() }) });
     } else this.uniswapV4 = null;
+
+    const rpcPools: EthereumArchiveRpcPool[] = [];
+    if (this.archiveRpcPool !== null) {
+      rpcPools.push(this.archiveRpcPool);
+    }
+    for (const pool of this.defiArchiveRpcPools) {
+      if (!rpcPools.includes(pool)) rpcPools.push(pool);
+    }
+    if (this.uniswapV3ArchiveRpcPool !== null && !rpcPools.includes(this.uniswapV3ArchiveRpcPool)) {
+      rpcPools.push(this.uniswapV3ArchiveRpcPool);
+    }
+
+    this.alert = options.alertService ?? new AlertService({
+      configuration: this.configuration.alert,
+      ...(options.alertReporter !== undefined ? { reporter: options.alertReporter } : {}),
+      ...(options.clock !== undefined ? { clock: options.clock } : {}),
+      getSources: () => ({
+        rpcPools,
+        credentialPools: this.credentialPools,
+      }),
+    });
   }
 
   async getBinanceKlines(input: BinanceFiveMinuteKlineRequest): Promise<BinanceFiveMinuteKlineResult> {
@@ -395,6 +457,18 @@ export class EvmDataClient {
     if (this.uniswapV3ArchiveRpcPool !== null && !this.defiArchiveRpcPools.includes(this.uniswapV3ArchiveRpcPool) && this.uniswapV3ArchiveRpcPool !== this.archiveRpcPool) tasks.push(this.uniswapV3ArchiveRpcPool.initialize(signal));
     await this.storage.initialize();
     await Promise.all(tasks);
+  }
+
+  async checkAndReportAlerts(now?: number): Promise<boolean> {
+    return this.alert.checkAndReportAlerts(undefined, now);
+  }
+
+  getArchiveRpcPool(): EthereumArchiveRpcPool | null {
+    return this.archiveRpcPool;
+  }
+
+  getCredentialPools(): ReadonlyMap<string, CredentialPool> {
+    return this.credentialPools;
   }
 
   async close(): Promise<void> {

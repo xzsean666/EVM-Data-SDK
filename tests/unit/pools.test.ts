@@ -82,6 +82,72 @@ describe("CredentialPool", () => {
     pool.report(second, "authentication_failed");
     expect(pool.state(second.id)?.disabled).toBe(true);
   });
+
+  it("handles stepped backoff cooldown for rate limits, preserves envKeyName, and tracks max cooldown", () => {
+    const clock = new FakeClock();
+    const pool = new CredentialPool(["key-1", "key-2"], {
+      providerConfigurationId: "etherscan",
+      clock,
+      envKeyNames: ["ETHERSCAN_API_KEY_1", "ETHERSCAN_API_KEY_2"],
+    });
+
+    const first = pool.acquire();
+    expect(first?.envKeyName).toBe("ETHERSCAN_API_KEY_1");
+    if (first === null) throw new Error("Expected lease");
+
+    // Report rate limit: enters 1 minute CD
+    pool.report(first, "rate_limited");
+    const state1 = pool.getCooldownState(first.id);
+    expect(state1?.isCoolingDown).toBe(true);
+    expect(state1?.currentCooldownMs).toBe(60_000);
+    expect(state1?.envKeyName).toBe("ETHERSCAN_API_KEY_1");
+
+    // While in CD, pool.acquire skips first and leases second
+    const second = pool.acquire();
+    expect(second?.id).toBe("etherscan-key-2");
+    expect(second?.envKeyName).toBe("ETHERSCAN_API_KEY_2");
+
+    // Further acquire is null
+    expect(pool.acquire()).toBeNull();
+
+    // Advance 30s: still in CD
+    clock.advance(30_000);
+    expect(pool.acquire()).toBeNull();
+
+    // Advance 30s more (total 60s): first becomes usable again
+    clock.advance(30_000);
+    const acquiredAfter1m = pool.acquire();
+    expect(acquiredAfter1m?.id).toBe(first.id);
+    if (acquiredAfter1m === null) throw new Error("Expected lease");
+
+    // Second failure: enters 5 minute CD (300,000ms)
+    pool.report(acquiredAfter1m, "rate_limited");
+    expect(pool.getCooldownState(first.id)?.currentCooldownMs).toBe(300_000);
+
+    // Report failures up to 10 times to reach 24h max cooldown
+    for (let i = 0; i < 9; i += 1) {
+      clock.advance(pool.getCooldownState(first.id)?.currentCooldownMs ?? 0);
+      const l = pool.acquire();
+      if (l) pool.report(l, "rate_limited");
+    }
+
+    clock.advance(10_000);
+    const maxList = pool.getMaxCooldownCredentials();
+    expect(maxList.some((c) => c.id === first.id && c.isMaxCooldown)).toBe(true);
+    const maxFirst = maxList.find((c) => c.id === first.id);
+    expect(maxFirst?.envKeyName).toBe("ETHERSCAN_API_KEY_1");
+    expect(maxFirst?.currentCooldownMs).toBe(86_400_000);
+    expect(maxFirst?.totalCooldownDurationMs).toBeGreaterThan(0);
+
+    // Report success clears CD completely
+    const fakeLease = { id: first.id, value: "key-1" };
+    pool.report(fakeLease, "success");
+    const cleared = pool.getCooldownState(first.id);
+    expect(cleared?.isCoolingDown).toBe(false);
+    expect(cleared?.isMaxCooldown).toBe(false);
+    expect(cleared?.totalCooldownDurationMs).toBe(0);
+    expect(pool.getMaxCooldownCredentials()).toHaveLength(0);
+  });
 });
 
 describe("ProxyPool", () => {

@@ -14,7 +14,8 @@ import type { BeaconWithdrawalPage, Erc20BalanceAtBlock, Erc20HoldingsAtBlock, E
 export interface CredentialLease {
   readonly id: string;
   readonly value: string;
-  readonly leaseToken?: number;
+  readonly leaseToken?: number | undefined;
+  readonly envKeyName?: string | undefined;
 }
 
 export interface ProxyLease {
