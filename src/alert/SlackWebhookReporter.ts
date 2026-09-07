@@ -10,6 +10,14 @@ export interface AlertFaultItem {
   readonly currentCooldownMs: number; // Current CD tier (86,400,000ms for max 1 day)
 }
 
+export interface KeyFamilySummary {
+  readonly family: string;
+  readonly displayName: string;
+  readonly totalKeys: number;
+  readonly failedKeys: number;
+  readonly availableKeys: number;
+}
+
 export interface SlackWebhookPayload {
   readonly text: string;
   readonly blocks?: readonly unknown[];
@@ -44,7 +52,10 @@ export function formatDuration(durationMs: number): string {
   return `${minutes}分钟`;
 }
 
-export function buildSlackAlertPayload(items: readonly AlertFaultItem[]): SlackWebhookPayload {
+export function buildSlackAlertPayload(
+  items: readonly AlertFaultItem[],
+  familySummaries?: readonly KeyFamilySummary[],
+): SlackWebhookPayload {
   const summaryLine = `🚨 [EVM-Data-SDK] 节点与凭证冷却告警: 共有 ${items.length} 个项目达到 24 小时最大冷却 (1天)`;
   const lines = items.map((item, index) => {
     const categoryTag = item.category.toUpperCase();
@@ -55,7 +66,54 @@ export function buildSlackAlertPayload(items: readonly AlertFaultItem[]): SlackW
     return `${index + 1}. [${categoryTag}] ${item.id} (Env: ${item.envKeyName})\n   - 详情: ${item.detail}\n   - 持续故障时长: ${durationText}`;
   });
 
-  const fullText = `${summaryLine}\n\n${lines.join("\n\n")}`;
+  const summaryTextPart =
+    familySummaries && familySummaries.length > 0
+      ? `\n\n【API Key 状态汇总】\n` +
+        familySummaries
+          .map((s) => {
+            const status =
+              s.availableKeys === 0
+                ? "全部失效 🚨"
+                : `剩余 ${s.availableKeys} 个可用 ⚠️`;
+            return `• ${s.displayName} (${s.family}): 共 ${s.totalKeys} 个，失效 ${s.failedKeys} 个 (${status})`;
+          })
+          .join("\n") +
+        `\n\n【具体故障详情】\n`
+      : `\n\n`;
+
+  const fullText = `${summaryLine}${summaryTextPart}${lines.join("\n\n")}`;
+
+  const summaryBlocks =
+    familySummaries && familySummaries.length > 0
+      ? [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: `*📊 API Key 分类状态汇总：*\n${familySummaries
+                .map((s) => {
+                  const icon = s.availableKeys === 0 ? "🔴" : "🟡";
+                  const statusText =
+                    s.availableKeys === 0
+                      ? "*全部失效* 🚨"
+                      : `剩余 *${s.availableKeys}* 个可用 ⚠️`;
+                  return `• *${s.displayName}* (\`${s.family}\`): 共 *${s.totalKeys}* 个，失效 *${s.failedKeys}* 个 ${icon} (${statusText})`;
+                })
+                .join("\n")}`,
+            },
+          },
+          {
+            type: "divider",
+          },
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: `*📋 故障具体情况清单（共 ${items.length} 项）：*`,
+            },
+          },
+        ]
+      : [];
 
   const blocks = [
     {
@@ -73,6 +131,7 @@ export function buildSlackAlertPayload(items: readonly AlertFaultItem[]): SlackW
         text: `*共有 ${items.length} 个 API Key 或节点处于 1 天最大冷却状态，可能需要检查配额或更换配置：*`,
       },
     },
+    ...summaryBlocks,
     ...items.map((item) => {
       const isApiKey = item.id === item.envKeyName;
       const fields = [
@@ -131,13 +190,14 @@ export class SlackWebhookReporter {
   async report(
     webhookUrl: string,
     items: readonly AlertFaultItem[],
+    familySummaries?: readonly KeyFamilySummary[],
     signal?: AbortSignal,
   ): Promise<SlackWebhookReportResult> {
     if (items.length === 0) {
       return { success: true };
     }
 
-    const payload = buildSlackAlertPayload(items);
+    const payload = buildSlackAlertPayload(items, familySummaries);
 
     try {
       const response = await this.transport.request({

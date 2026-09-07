@@ -3,7 +3,7 @@ import type { Clock } from "../execution/clock";
 import { systemClock } from "../execution/clock";
 import type { CredentialPool } from "../execution/CredentialPool";
 import type { EthereumArchiveRpcPool } from "../rpc/EthereumArchiveRpcPool";
-import { SlackWebhookReporter, type AlertFaultItem } from "./SlackWebhookReporter";
+import { SlackWebhookReporter, type AlertFaultItem, type KeyFamilySummary } from "./SlackWebhookReporter";
 
 export interface AlertSources {
   readonly rpcPools?: readonly EthereumArchiveRpcPool[];
@@ -15,6 +15,31 @@ export interface AlertServiceOptions {
   readonly reporter?: SlackWebhookReporter | undefined;
   readonly clock?: Clock | undefined;
   readonly getSources?: (() => AlertSources) | undefined;
+}
+
+export function extractKeyFamily(envKeyName: string): string {
+  const trimmed = envKeyName.trim();
+  const match = trimmed.match(/^(.*?)(?:[_-]?\d+)$/);
+  if (match && match[1] && match[1].length > 0) {
+    return match[1].replace(/[_-]+$/, "");
+  }
+  return trimmed;
+}
+
+export function getFamilyDisplayName(family: string): string {
+  const upper = family.toUpperCase();
+  if (upper.includes("NODEREAL")) return "NodeReal RPC";
+  if (upper.includes("ALCHEMY")) return "Alchemy";
+  if (upper.includes("ETHERSCAN")) return "Etherscan";
+  if (upper.includes("BLOCKSCOUT")) return "Blockscout";
+  if (upper.includes("MORALIS")) return "Moralis";
+  if (upper.includes("ANKR")) return "Ankr RPC";
+  if (upper.includes("INFURA")) return "Infura";
+  if (upper.includes("QUICKNODE")) return "QuickNode";
+  return family
+    .split(/[_-]+/)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(" ");
 }
 
 interface RawFault {
@@ -178,6 +203,85 @@ export class AlertService {
     return Object.freeze(items);
   }
 
+  collectKeyFamilySummaries(sources?: AlertSources, now = this.clock.now()): readonly KeyFamilySummary[] {
+    const effectiveSources = sources ?? this.getSources?.() ?? {};
+    const keyStatusMap = new Map<string, { family: string; isMaxCooldown: boolean }>();
+
+    // 1. RPC Pools
+    if (effectiveSources.rpcPools !== undefined) {
+      for (const pool of effectiveSources.rpcPools) {
+        const states = pool.getAllCooldownStates(now);
+        for (const state of states) {
+          if (
+            typeof state.envKeyName === "string" &&
+            state.envKeyName.trim().length > 0 &&
+            state.envKeyName !== "BUILTIN_PUBLIC"
+          ) {
+            const keyName = state.envKeyName.trim();
+            const current = keyStatusMap.get(keyName);
+            const isMax = state.isMaxCooldown || (current?.isMaxCooldown ?? false);
+            keyStatusMap.set(keyName, {
+              family: extractKeyFamily(keyName),
+              isMaxCooldown: isMax,
+            });
+          }
+        }
+      }
+    }
+
+    // 2. Credential Pools
+    if (effectiveSources.credentialPools !== undefined) {
+      for (const [providerId, pool] of effectiveSources.credentialPools) {
+        const states = pool.getAllCooldownStates(now);
+        for (const state of states) {
+          const envKey = state.envKeyName ?? providerId.toUpperCase();
+          if (envKey && envKey !== "BUILTIN_PUBLIC") {
+            const keyName = envKey.trim();
+            const current = keyStatusMap.get(keyName);
+            const isMax = state.isMaxCooldown || (current?.isMaxCooldown ?? false);
+            keyStatusMap.set(keyName, {
+              family: extractKeyFamily(keyName),
+              isMaxCooldown: isMax,
+            });
+          }
+        }
+      }
+    }
+
+    const familyMap = new Map<string, { total: number; failed: number }>();
+    for (const status of keyStatusMap.values()) {
+      const entry = familyMap.get(status.family) ?? { total: 0, failed: 0 };
+      entry.total += 1;
+      if (status.isMaxCooldown) {
+        entry.failed += 1;
+      }
+      familyMap.set(status.family, entry);
+    }
+
+    const summaries: KeyFamilySummary[] = [];
+    for (const [family, counts] of familyMap.entries()) {
+      if (counts.failed > 0) {
+        summaries.push(
+          Object.freeze({
+            family,
+            displayName: getFamilyDisplayName(family),
+            totalKeys: counts.total,
+            failedKeys: counts.failed,
+            availableKeys: Math.max(0, counts.total - counts.failed),
+          }),
+        );
+      }
+    }
+
+    summaries.sort((a, b) => {
+      if (a.availableKeys === 0 && b.availableKeys > 0) return -1;
+      if (a.availableKeys > 0 && b.availableKeys === 0) return 1;
+      return b.failedKeys - a.failedKeys;
+    });
+
+    return Object.freeze(summaries);
+  }
+
   async checkAndReportAlerts(
     sources?: AlertSources,
     now = this.clock.now(),
@@ -197,7 +301,13 @@ export class AlertService {
       return false;
     }
 
-    const result = await this.reporter.report(this.configuration.slackWebhookUrl, faultItems);
+    const familySummaries = this.collectKeyFamilySummaries(sources, now);
+
+    const result = await this.reporter.report(
+      this.configuration.slackWebhookUrl,
+      faultItems,
+      familySummaries,
+    );
     if (result.success) {
       this.lastReportSentAt = now;
       return true;

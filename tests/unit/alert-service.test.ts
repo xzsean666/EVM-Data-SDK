@@ -262,5 +262,21 @@ describe("AlertService", () => {
     expect(alchemyItem?.detail).toContain("alchemy");
     expect(alchemyItem?.detail).toContain("data-api");
     expect(alchemyItem?.detail).toContain("rpc");
+
+    const summaries = service.collectKeyFamilySummaries();
+    expect(summaries).toHaveLength(2);
+    const noderealSummary = summaries.find((s) => s.family === "NODEREAL_RPC_API_KEY");
+    expect(noderealSummary).toBeDefined();
+    expect(noderealSummary?.displayName).toBe("NodeReal RPC");
+    expect(noderealSummary?.totalKeys).toBe(1);
+    expect(noderealSummary?.failedKeys).toBe(1);
+    expect(noderealSummary?.availableKeys).toBe(0);
+
+    const alchemySummary = summaries.find((s) => s.family === "ALCHEMY_API_KEY");
+    expect(alchemySummary).toBeDefined();
+    expect(alchemySummary?.displayName).toBe("Alchemy");
+    expect(alchemySummary?.totalKeys).toBe(1);
+    expect(alchemySummary?.failedKeys).toBe(1);
+    expect(alchemySummary?.availableKeys).toBe(0);
   });
 });
