@@ -543,13 +543,13 @@ export class EvmDataClient {
     await Promise.all(tasks);
   }
 
-  async checkAndReportAlerts(now?: number): Promise<boolean> {
+  async checkAndReportAlerts(now?: number, options?: { readonly force?: boolean }): Promise<boolean> {
     try {
       await this.restorePersistedCooldowns();
     } catch {
       // Storage might not be initialized; proceed with in-memory state
     }
-    return this.alert.checkAndReportAlerts(undefined, now);
+    return this.alert.checkAndReportAlerts(undefined, now, options);
   }
 
   getArchiveRpcPool(): EthereumArchiveRpcPool | null {

@@ -2,8 +2,8 @@ import { AxiosHttpTransport } from "../transport/AxiosHttpTransport";
 import type { HttpTransport } from "../transport/HttpTransport";
 
 export interface AlertFaultItem {
-  readonly id: string; // Endpoint or credential ID, e.g. "alchemy-ethereum-1", "etherscan-main-key-1"
-  readonly category: "rpc" | "data-api";
+  readonly id: string; // Endpoint or credential ID, or envKeyName when aggregated
+  readonly category: "rpc" | "data-api" | "api-key";
   readonly envKeyName: string; // e.g. "ALCHEMY_API_KEY", "ETHERSCAN_API_KEY_1", or "BUILTIN_PUBLIC"
   readonly detail: string; // e.g. "chain: ethereum, provider: alchemy"
   readonly totalCooldownDurationMs: number; // Cumulative duration in cooldown
@@ -49,6 +49,9 @@ export function buildSlackAlertPayload(items: readonly AlertFaultItem[]): SlackW
   const lines = items.map((item, index) => {
     const categoryTag = item.category.toUpperCase();
     const durationText = formatDuration(item.totalCooldownDurationMs);
+    if (item.id === item.envKeyName) {
+      return `${index + 1}. [${categoryTag}] ${item.envKeyName}\n   - 详情: ${item.detail}\n   - 持续故障时长: ${durationText}`;
+    }
     return `${index + 1}. [${categoryTag}] ${item.id} (Env: ${item.envKeyName})\n   - 详情: ${item.detail}\n   - 持续故障时长: ${durationText}`;
   });
 
@@ -67,34 +70,47 @@ export function buildSlackAlertPayload(items: readonly AlertFaultItem[]): SlackW
       type: "section",
       text: {
         type: "mrkdwn",
-        text: `*共有 ${items.length} 个节点或凭证处于 1 天最大冷却状态，可能需要检查配额或更换配置：*`,
+        text: `*共有 ${items.length} 个 API Key 或节点处于 1 天最大冷却状态，可能需要检查配额或更换配置：*`,
       },
     },
-    ...items.map((item) => ({
-      type: "section",
-      fields: [
+    ...items.map((item) => {
+      const isApiKey = item.id === item.envKeyName;
+      const fields = [
         {
           type: "mrkdwn",
           text: `*类别:*\n${item.category.toUpperCase()}`,
         },
-        {
-          type: "mrkdwn",
-          text: `*ID:*\n\`${item.id}\``,
-        },
-        {
-          type: "mrkdwn",
-          text: `*环境变量:*\n\`${item.envKeyName}\``,
-        },
+        ...(isApiKey
+          ? [
+              {
+                type: "mrkdwn",
+                text: `*API Key 环境变量:*\n\`${item.envKeyName}\``,
+              },
+            ]
+          : [
+              {
+                type: "mrkdwn",
+                text: `*ID:*\n\`${item.id}\``,
+              },
+              {
+                type: "mrkdwn",
+                text: `*环境变量:*\n\`${item.envKeyName}\``,
+              },
+            ]),
         {
           type: "mrkdwn",
           text: `*持续故障时长:*\n${formatDuration(item.totalCooldownDurationMs)}`,
         },
         {
           type: "mrkdwn",
-          text: `*详情:*\n${item.detail}`,
+          text: `*详情 / 影响范围:*\n${item.detail}`,
         },
-      ],
-    })),
+      ];
+      return {
+        type: "section",
+        fields,
+      };
+    }),
   ];
 
   return Object.freeze({

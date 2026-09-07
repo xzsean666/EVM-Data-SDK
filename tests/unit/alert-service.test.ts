@@ -191,4 +191,76 @@ describe("AlertService", () => {
     const payload = transport.requests[0]?.body as { text: string };
     expect(payload.text).toContain("alchemy-ethereum-1");
   });
+
+  it("deduplicates multiple endpoints and chains sharing the same API key into a single fault report", () => {
+    const clock = new FakeClock();
+
+    const ethPool = new EthereumArchiveRpcPool({
+      expectedChainId: 1,
+      endpoints: [{ id: "nodereal-ethereum-1", url: "https://eth.nodereal.example", envKeyName: "NODEREAL_RPC_API_KEY1" }],
+      clock,
+    });
+    const basePool = new EthereumArchiveRpcPool({
+      expectedChainId: 8453,
+      endpoints: [{ id: "nodereal-base-1", url: "https://base.nodereal.example", envKeyName: "NODEREAL_RPC_API_KEY1" }],
+      clock,
+    });
+
+    const alchemyPool = new EthereumArchiveRpcPool({
+      expectedChainId: 1,
+      endpoints: [{ id: "alchemy-ethereum-1", url: "https://eth.alchemy.example", envKeyName: "ALCHEMY_API_KEY_1" }],
+      clock,
+    });
+    const alchemyCredPool = new CredentialPool(["key-alch-1"], {
+      providerConfigurationId: "alchemy-1",
+      clock,
+      envKeyNames: ["ALCHEMY_API_KEY_1"],
+    });
+
+    // Fail nodereal on both ethereum and base
+    for (let i = 0; i < 10; i += 1) {
+      ethPool.reportOutcome("nodereal-ethereum-1", "failure");
+      basePool.reportOutcome("nodereal-base-1", "failure");
+      alchemyPool.reportOutcome("alchemy-ethereum-1", "failure");
+    }
+    // Fail alchemy cred pool
+    alchemyCredPool.restoreCooldownState("alchemy-1-key-1", {
+      consecutiveFailures: 10,
+      currentCooldownMs: 86_400_000,
+      cooldownUntil: clock.now() + 86_400_000,
+      firstFailureAt: clock.now() - 86_400_000,
+    });
+
+    const service = new AlertService({
+      configuration: {
+        enabled: true,
+        slackWebhookUrl: "https://hooks.slack.com/services/test-webhook",
+        reportIntervalMs: 86_400_000,
+      },
+      clock,
+      getSources: () => ({
+        rpcPools: [ethPool, basePool, alchemyPool],
+        credentialPools: new Map([["alchemy", alchemyCredPool]]),
+      }),
+    });
+
+    const items = service.collectFaultItems();
+    // Exactly 2 items instead of 4: one for NODEREAL_RPC_API_KEY1, one for ALCHEMY_API_KEY_1
+    expect(items).toHaveLength(2);
+
+    const noderealItem = items.find((it) => it.envKeyName === "NODEREAL_RPC_API_KEY1");
+    expect(noderealItem).toBeDefined();
+    expect(noderealItem?.category).toBe("rpc");
+    expect(noderealItem?.detail).toContain("ethereum");
+    expect(noderealItem?.detail).toContain("base");
+    expect(noderealItem?.detail).toContain("nodereal-ethereum-1");
+    expect(noderealItem?.detail).toContain("nodereal-base-1");
+
+    const alchemyItem = items.find((it) => it.envKeyName === "ALCHEMY_API_KEY_1");
+    expect(alchemyItem).toBeDefined();
+    expect(alchemyItem?.category).toBe("api-key");
+    expect(alchemyItem?.detail).toContain("alchemy");
+    expect(alchemyItem?.detail).toContain("data-api");
+    expect(alchemyItem?.detail).toContain("rpc");
+  });
 });
