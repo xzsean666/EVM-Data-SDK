@@ -148,7 +148,7 @@ export class AlchemyAdapter implements DataProviderAdapter {
     const items = parsed.data.transfers.map((item): Transaction => ({
       chainId: context.chain.chainId, hash: item.hash.toLowerCase(), blockNumber: hexQuantityToDecimal(item.blockNum),
       blockHash: null, transactionIndex: null, timestamp: item.metadata?.blockTimestamp ?? null,
-      from: item.from.toLowerCase(), to: item.to.toLowerCase(), nonce: null, value: item.rawContract.value ? hexQuantityToDecimal(item.rawContract.value) : "0",
+      from: item.from.toLowerCase(), to: item.to && item.to.length > 0 ? item.to.toLowerCase() : null, nonce: null, value: item.rawContract.value ? hexQuantityToDecimal(item.rawContract.value) : "0",
       gasLimit: null, gasUsed: null, gasPrice: null, input: null, status: "unknown", provider: "alchemy",
     }));
     return { items, nextPageKey: normalizeNextPageKey(parsed.data.pageKey) };
@@ -242,7 +242,7 @@ export class AlchemyAdapter implements DataProviderAdapter {
       blockNumber: hexQuantityToDecimal(item.blockNum),
       timestamp: item.metadata?.blockTimestamp ?? null,
       from: item.from.toLowerCase(),
-      to: item.to.toLowerCase(),
+      to: item.to ? item.to.toLowerCase() : "",
       value: item.rawContract.value ? hexQuantityToDecimal(item.rawContract.value) : "0",
       type: "internal",
       status: "unknown",

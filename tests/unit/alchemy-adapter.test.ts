@@ -456,6 +456,39 @@ describe("AlchemyAdapter", () => {
     expect(result).toMatchObject({ code: "INVALID_PROVIDER_RESPONSE" });
   });
 
+  it("accepts contract creation external transactions where to is empty string or null", async () => {
+    const response = {
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        transfers: [
+          {
+            category: "external",
+            uniqueId: "0xcontract:external",
+            asset: "ETH",
+            from: address,
+            to: "",
+            hash: `0x${"2".repeat(64)}`,
+            blockNum: "0x20510bc",
+            rawContract: { value: "0xb5e620f48000", address: null, decimal: "0x12" },
+            metadata: { blockTimestamp: "2025-08-07T10:22:19.000Z" },
+          },
+        ],
+        pageKey: null,
+      },
+    };
+    const adapter = new AlchemyAdapter({
+      transport: new BothDirectionTransport(transfersResponse([], null), response, transfersResponse([], null), transfersResponse([], null)),
+    });
+    const result = await adapter.getTransactions(
+      parseTransactionsRequest({ chain: 1, address }),
+      context(),
+    );
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]?.to).toBeNull();
+    expect(result.items[0]?.hash).toBe(`0x${"2".repeat(64)}`);
+  });
+
 });
 
 function transfer(uniqueId: string, blockNum: string, from: string, to: string): Record<string, unknown> {

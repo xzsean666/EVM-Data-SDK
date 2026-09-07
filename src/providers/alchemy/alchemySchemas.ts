@@ -16,7 +16,7 @@ const transferSchema = z.object({
   uniqueId: z.string().min(1).max(512),
   asset: z.string().nullable().optional(),
   from: address,
-  to: address,
+  to: address.nullable().optional().or(z.literal("")),
   hash,
   blockNum: hexQuantity,
   rawContract: rawContractSchema,

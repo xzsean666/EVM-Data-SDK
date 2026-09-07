@@ -40,7 +40,7 @@ export function mapAlchemyTransfer(value: AlchemyTransfer, chain: ChainDefinitio
     // token's unit scale.
     tokenDecimals: mapTokenDecimals(value.rawContract.decimals, value.rawContract.decimal),
     from: value.from.toLowerCase(),
-    to: value.to.toLowerCase(),
+    to: value.to ? value.to.toLowerCase() : "",
     amount: hexQuantityToDecimal(amount),
     provider: "alchemy",
   };
