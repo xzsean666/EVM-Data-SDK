@@ -314,9 +314,23 @@ export class EvmDataClient {
         pool = this.archiveRpcPool;
       } else {
         const builtins: readonly EthereumArchiveRpcEndpoint[] = defiConfiguration.useBuiltinArchiveRpcs ? (chainId === 1 ? BUILTIN_ETHEREUM_ARCHIVE_RPCS : BUILTIN_BASE_ARCHIVE_RPCS) : [];
-        const custom = defiConfiguration.rpcEndpoints[chain].filter((endpoint) => endpoint.enabled).map((endpoint) => ({ id: endpoint.id, url: endpoint.url }));
+        const custom = defiConfiguration.rpcEndpoints[chain]
+          .filter((endpoint) => endpoint.enabled)
+          .map((endpoint) => ({
+            id: endpoint.id,
+            url: endpoint.url,
+            ...(endpoint.envKeyName !== undefined ? { envKeyName: endpoint.envKeyName } : {}),
+          }));
+        const alchemyProvider = this.configuration.providers.find((p) => p.kind === "alchemy");
+        const alchemyEndpoints: readonly EthereumArchiveRpcEndpoint[] = chainId === 1 && alchemyProvider
+          ? alchemyProvider.apiKeys.map((key, idx) => ({
+              id: `alchemy-ethereum-${idx + 1}`,
+              url: `https://eth-mainnet.g.alchemy.com/v2/${key}`,
+              envKeyName: alchemyProvider.envKeyNames?.[idx] ?? "ALCHEMY_API_KEY",
+            }))
+          : [];
         pool = options.defiArchiveRpcPools?.[chain] ?? new EthereumArchiveRpcPool({
-          endpoints: [...builtins, ...custom],
+          endpoints: mergeArchiveRpcEndpoints([...builtins, ...custom, ...alchemyEndpoints]),
           healthCheckTimeoutMs: defiConfiguration.healthCheckTimeoutMs,
           expectedChainId: chainId,
           multicall3Address: MULTICALL3_ADDRESS,
@@ -334,7 +348,13 @@ export class EvmDataClient {
     this.defi = defiConfiguration.enabled ? new DeFiExchangeRateService({ rpcServices: defiRpcServices }) : null;
     if (uniswapV3Configuration.enabled) {
       const builtin = uniswapV3Configuration.useBuiltinEthereumArchiveRpcs ? BUILTIN_ETHEREUM_ARCHIVE_RPCS : [];
-      const custom = uniswapV3Configuration.rpcEndpoints.filter((endpoint) => endpoint.enabled).map((endpoint) => ({ id: endpoint.id, url: endpoint.url }));
+      const custom = uniswapV3Configuration.rpcEndpoints
+        .filter((endpoint) => endpoint.enabled)
+        .map((endpoint) => ({
+          id: endpoint.id,
+          url: endpoint.url,
+          ...(endpoint.envKeyName !== undefined ? { envKeyName: endpoint.envKeyName } : {}),
+        }));
       const pool = options.uniswapV3ArchiveRpcPool ?? this.archiveRpcPool ?? new EthereumArchiveRpcPool({
         endpoints: mergeArchiveRpcEndpoints([...builtin, ...custom]),
         healthCheckTimeoutMs: uniswapV3Configuration.healthCheckTimeoutMs,
@@ -353,7 +373,13 @@ export class EvmDataClient {
     }
     if (uniswapV4Configuration.enabled) {
       const builtin = uniswapV4Configuration.useBuiltinEthereumArchiveRpcs ? BUILTIN_ETHEREUM_ARCHIVE_RPCS : [];
-      const custom = uniswapV4Configuration.rpcEndpoints.filter((endpoint) => endpoint.enabled).map((endpoint) => ({ id: endpoint.id, url: endpoint.url }));
+      const custom = uniswapV4Configuration.rpcEndpoints
+        .filter((endpoint) => endpoint.enabled)
+        .map((endpoint) => ({
+          id: endpoint.id,
+          url: endpoint.url,
+          ...(endpoint.envKeyName !== undefined ? { envKeyName: endpoint.envKeyName } : {}),
+        }));
       const pool = options.uniswapV3ArchiveRpcPool ?? this.uniswapV3ArchiveRpcPool ?? new EthereumArchiveRpcPool({ endpoints: mergeArchiveRpcEndpoints([...builtin, ...custom]), healthCheckTimeoutMs: uniswapV4Configuration.healthCheckTimeoutMs, expectedChainId: 1, multicall3Address: MULTICALL3_ADDRESS, multicall3DeploymentBlock: MULTICALL3_ETHEREUM_MAINNET_DEPLOYMENT_BLOCK.toString() });
       const executor = new EthereumArchiveRpcExecutor({ pool, randomSource: options.archiveRpcRandomSource ?? systemRandom, attemptTimeoutMs: uniswapV4Configuration.attemptTimeoutMs, totalTimeoutMs: uniswapV4Configuration.totalTimeoutMs, maxRpcAttempts: uniswapV4Configuration.maxRpcAttempts });
       const batchExecutor = new JsonRpcBatchExecutor({ pool, randomSource: options.archiveRpcRandomSource ?? systemRandom, attemptTimeoutMs: uniswapV4Configuration.attemptTimeoutMs, totalTimeoutMs: uniswapV4Configuration.totalTimeoutMs, maxRpcAttempts: uniswapV4Configuration.maxRpcAttempts });
