@@ -17,6 +17,9 @@ importers:
       pg:
         specifier: 8.23.0
         version: 8.23.0
+      token-price-sdk:
+        specifier: link:../token-price-nodejs
+        version: link:../token-price-nodejs
       zod:
         specifier: 4.4.3
         version: 4.4.3

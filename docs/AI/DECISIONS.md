@@ -819,6 +819,39 @@ The user requires flexible dual-storage capabilities: seamless zero-config local
 **Trade-offs:**
 PostgreSQL emulation uses query normalization (`normalizePostgresSql`) rather than heavy ORMs, which keeps dependencies minimal while achieving full feature parity.
 
+## ADR-041: Extract CEX Token Price Microkernel into Standalone Isomorphic `token-price-sdk`
+
+**Status:** Accepted by owner on 2026-09-19
+
+**Date:** 2026-09-19
+
+**Decision:**
+1. Extract all CEX token price, kline aggregation, binary archive caching, token support discovery, and price synchronization services into a standalone repository:
+   - Path: `/ssd0/git/token-price-nodejs`
+   - Git Remote: `https://github.com/xzsean666/token-price-nodejs.git`
+   - NPM Package Name: `token-price-sdk`
+2. Architectural Parity with `evm-call`:
+   - Design `token-price-sdk` as an isomorphic, cross-platform library usable seamlessly in both backend (Node.js/Bun) and frontend (browser / Web Workers / SSR).
+   - Provide dual-storage engine:
+     - Backend (Node.js): `SqlitePriceStorage` using native `node:sqlite` (`DatabaseSync`) or pluggable SQL adapters.
+     - Frontend (Browser): `IndexedDbPriceStorage` using native browser `IndexedDB` with compound indices for $O(\log N)$ directional timestamp searches (`before`, `after`, `nearest`).
+     - In-Memory: `MemoryPriceStorage` for testing and SSR.
+     - Automatic environment detection via `createPriceStorage({ driver: "auto" })`.
+   - Provide isomorphic HTTP transport (`AxiosHttpTransport` in Node.js, `FetchHttpTransport` in browser).
+   - Provide isomorphic decompression (`DecompressionStream("gzip")` and `DecompressionStream("deflate-raw")` with `node:zlib` fallback).
+   - Compact 16-byte fixed-width binary encoding for klines (`KlineBinaryCodec`) based on `DataView` with binary search slicing.
+3. Integrate into `EVM-Data-SDK`:
+   - Declare `"token-price-sdk": "link:../token-price-nodejs"` in `EVM-Data-SDK/package.json`.
+   - Re-export price modules, codecs, and services from `token-price-sdk` with 100% backwards compatibility.
+   - Maintain a dedicated context guide in `docs/TOKEN_PRICE_CONTEXT.md`.
+   - Verify that all 43 existing test suites and 397 unit tests in `EVM-Data-SDK` remain 100% passing.
+
+**Reason:**
+CEX token price tracking, exchange rate polling, and historical kline binary decoding are completely chain-agnostic and valuable outside of full EVM indexers. Extracting them into an isomorphic microkernel enables frontend dApps, wallets, and lightweight trading bots to query and cache prices with native IndexedDB or SQLite without dragging in EVM RPC or heavy blockchain dependencies.
+
+**Trade-offs:**
+Introduces an additional repository dependency (`token-price-sdk`), similar to `evm-call`. This is managed cleanly via local link during development and strict type/test validation through `pnpm check`.
+
 
 
 

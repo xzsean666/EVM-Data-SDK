@@ -43,6 +43,7 @@
     "axios": "1.19.0",
     "evm-call": "github:xzsean666/evm-call#d7a5c16d2bcbda6255d05f1f5b745eac88f699c0",
     "pg": "8.23.0",
+    "token-price-sdk": "link:../token-price-nodejs",
     "zod": "4.4.3"
   },
   "devDependencies": {

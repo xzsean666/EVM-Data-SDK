@@ -313,3 +313,19 @@ export { BinanceArchiveAdapter } from "./price/archive/BinanceArchiveAdapter";
 export { GateArchiveAdapter } from "./price/archive/GateArchiveAdapter";
 export { UnifiedKlineService, getOverlappingCalendarMonths } from "./price/UnifiedKlineService";
 export type { UnifiedKlineServiceOptions } from "./price/UnifiedKlineService";
+export { PriceSyncService } from "./price/PriceSyncService";
+export {
+  TokenPriceClient,
+  createTokenPriceClient,
+  createPriceStorage,
+  SqlitePriceStorage,
+  IndexedDbPriceStorage,
+  MemoryPriceStorage,
+} from "token-price-sdk";
+export type {
+  TokenPriceClientOptions,
+  PriceStorage,
+  CreatePriceStorageOptions,
+  SqliteStorageOptions,
+  IndexedDbStorageOptions,
+} from "token-price-sdk";

@@ -1,29 +1,44 @@
 # Next Session Handoff (任务交接文档)
 
 ## 1. 当前基本信息
-- **任务编号**: TASK-005 (已完成归档)
-- **任务目标**: 存储层双引擎加固与 PostgreSQL 生产级优化（默认 Node 24 原生 SQLite，扩展支持 PostgreSQL 并修复冲突映射、优化线性转译与连接池安全）。
+- **任务编号**: TASK-006 (已完成归档)
+- **任务目标**: 将 CEX Token Price 相关服务提取为独立同构微内核 SDK 仓库（`token-price-sdk`，存储于 `/ssd0/git/token-price-nodejs`），支持跨平台（前端 IndexedDB、后端 SQLite、通用 In-Memory），并在 `EVM-Data-SDK` 中通过依赖与委托无缝集成。
 - **当前状态**: `DONE` (Standby 待命)
 
-## 2. 本次已交付优化细节
-1. **补齐 PostgreSQL 冲突目标映射 (POSTGRES_CONFLICT_TARGETS)**:
-   - 在 `POSTGRES_CONFLICT_TARGETS` 中补充 `sdk_token_support: ["token", "provider"]`，彻底解决 `TokenSupportStore.set()` 在 PostgreSQL 下执行 `INSERT OR REPLACE` 抛出 `Missing conflict target` 的隐患。
-2. **对齐版本迁移 (Migration v6)**:
-   - 在 `PostgresStorageAdapter.initialize()` 中补充记录迁移版本 6，使 SQLite 与 PostgreSQL 在表结构与迁移版本上保持 100% 对齐。
-3. **连接池空闲容错 (Pool Idle Error Handling)**:
-   - 在 `PostgresStorageAdapter` 中为 `pg.Pool` 挂载 `'error'` 事件监听，防止由于网络波动、空闲连接超时断开或数据库重启引发未捕获异常导致 Node 进程崩溃。
-4. **线性参数占位符转译 ($O(N)$ 优化)**:
-   - 将 `normalizePostgresSql` 中原先基于多次字符串切片的 $O(N^2)$ 占位符替换，优化为单遍单调递增的线性计数器 `$1, $2, ...`，提高高并发 SQL 转译效率。
-5. **敏感凭据脱敏**:
-   - 在 `PostgresStorageAdapter` 初始化与连接失败的异常路径中引入 `redactUrl` 与 `redactMessage`，确保数据库连接串中的明文密码不会在任何报错堆栈或日志中泄露。
-6. **完善单元测试覆盖**:
-   - `tests/unit/postgres-storage-contract.test.ts` 新增对 `sdk_token_support` 与 `sdk_cooldown_states` Upsert 语法、参数绑定、异常脱敏的完整用例。
+## 2. 本次已交付工作
+1. **独立仓库建立 (`/ssd0/git/token-price-nodejs`)**:
+   - 远程仓库：`https://github.com/xzsean666/token-price-nodejs.git`，NPM 包名：`token-price-sdk`。
+   - 完整工程化配置（`package.json`, `tsconfig.json`, `tsup.config.ts`, `vitest.config.ts`）。
+2. **同构跨平台与双引擎存储驱动**:
+   - **后端 (Node.js)**：基于 Node 原生 `node:sqlite`（零 C++ 编译）与外置 SQL 转译适配器的 `SqlitePriceStorage`。
+   - **前端 (Browser)**：基于浏览器原生 `IndexedDB` 与复合索引游标的 `IndexedDbPriceStorage`，支持毫秒级 $O(\log N)$ 时间戳临近检索（`before`, `after`, `nearest`）。
+   - **内存驱动 (In-Memory)**：用于快速单测、SSR 的 `MemoryPriceStorage`。
+   - 统一自动探测工厂 `createPriceStorage({ driver: "auto" })`。
+   - 同构 HTTP 传输与流式解压缩（`AxiosHttpTransport`, `FetchHttpTransport`, `DecompressionStream`）。
+3. **微内核服务群**:
+   - `KlineBinaryCodec`：16 字节定长二进制编码器与二分切片检索。
+   - `BinanceArchiveAdapter` & `GateArchiveAdapter`：历史归档包下载与解析。
+   - `KlineArchiveManager`：支持磁盘与 Storage 双层缓存、并发锁定与 24h 过期清理。
+   - `TokenSupportStore` & `TokenSupportService`：三层缓存与负缓存保护，1s 探活。
+   - `UnifiedKlineService`：Binance 优先、Gate 降级、自然月归档+REST 自动缝合。
+   - `PriceSyncService`：多交易所增量补全、断点记录与临近点定向插值。
+   - `TokenPriceClient`：高层 API 统一封装。
+4. **`EVM-Data-SDK` 依赖与集成**:
+   - 添加依赖 `"token-price-sdk": "link:../token-price-nodejs"`。
+   - 所有价格模块、编解码器与存储接口全面委托至 `token-price-sdk`，保持 100% 顶层 API 与类型向后兼容。
+   - 编写权威架构规范文档 `docs/TOKEN_PRICE_CONTEXT.md`，追加 ADR-041。
 
 ## 3. 验证结果
-- 静态检查: `pnpm typecheck`（0 错误），`pnpm lint`（0 警告）。
-- 自动化测试: 43 个测试套件，397 个测试用例全部通过。
-- 构建打包: `pnpm build`（ESM, CJS, d.ts 打包成功）。
-- 打包验证: `pnpm test:package`（tarball 安装与 consumer ESM/CJS/TS 导入验证成功）。
+- `token-price-nodejs`:
+  - 4 套测试（24 个测试用例全部通过，覆盖 SQLite、IndexedDB、Memory、Client）。
+  - `pnpm typecheck`（0 错误），`pnpm build`（ESM, CJS, d.ts 打包成功）。
+- `EVM-Data-SDK`:
+  - `pnpm check` 全部通过：
+    - `pnpm typecheck`（0 错误）
+    - `pnpm lint`（0 警告）
+    - `pnpm test`（43 个测试套件，397 个单测 100% 通过）
+    - `pnpm build`（成功生成 ESM / CJS / d.ts）
+    - `pnpm test:package`（Smoke 测试与 Consumer 验证通过）
 
 ## 4. 下一步任务建议 (Next Actions)
-- 当前待命。系统已具备高可用的 SQLite (默认) 与 PostgreSQL (扩展) 双驱动支持，可无缝支持单机开发与分布式生产环境。
+- 当前待命。系统已成功解耦两大微内核底座（`evm-call` 用于 EVM 链上 RPC / Multicall3，`token-price-sdk` 用于多交易所价格与 K 线服务），`EVM-Data-SDK` 架构清晰健壮，随时可承接新的链上业务需求或发布 NPM 包。
