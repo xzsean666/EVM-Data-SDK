@@ -22,6 +22,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { storageError } from "../domain/errors";
+import { redactMessage, redactUrl } from "../transport/redaction";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS sdk_schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
@@ -104,6 +105,11 @@ export class PostgresStorageAdapter implements StorageAdapter {
     try {
       const pg = await import("pg");
       this.pool = new pg.Pool({ connectionString: this.url, max: 10, application_name: "evm-data-sdk" });
+      if (typeof this.pool?.on === "function") {
+        this.pool.on("error", () => {
+          // Prevent idle client errors from crashing the process
+        });
+      }
       await this.pool.query("SELECT 1");
       await this.pool.query(POSTGRES_SCHEMA);
       for (const statement of [
@@ -118,7 +124,15 @@ export class PostgresStorageAdapter implements StorageAdapter {
       await this.pool.query("INSERT INTO sdk_schema_migrations(version,applied_at) VALUES($1,$2) ON CONFLICT(version) DO NOTHING", [3, new Date().toISOString()]);
       await this.pool.query("INSERT INTO sdk_schema_migrations(version,applied_at) VALUES($1,$2) ON CONFLICT(version) DO NOTHING", [4, new Date().toISOString()]);
       await this.pool.query("INSERT INTO sdk_schema_migrations(version,applied_at) VALUES($1,$2) ON CONFLICT(version) DO NOTHING", [5, new Date().toISOString()]);
-    } catch (error) { await this.pool?.end().catch(() => undefined); this.pool = null; throw storageError("STORAGE_MIGRATION_FAILED", "PostgreSQL storage initialization failed.", error); }
+      await this.pool.query("INSERT INTO sdk_schema_migrations(version,applied_at) VALUES($1,$2) ON CONFLICT(version) DO NOTHING", [6, new Date().toISOString()]);
+    } catch (error) {
+      await this.pool?.end().catch(() => undefined);
+      this.pool = null;
+      const safeUrl = redactUrl(this.url);
+      const rawMessage = error instanceof Error ? error.message : String(error);
+      const safeMessage = redactMessage(rawMessage);
+      throw storageError("STORAGE_MIGRATION_FAILED", `PostgreSQL storage initialization failed for ${safeUrl}: ${safeMessage}`, error);
+    }
   }
   private ready(): any { if (this.pool === null) throw storageError("STORAGE_NOT_INITIALIZED", "Storage is not initialized."); return this.pool; }
   private connection(): any { return this.transactionContext.getStore() ?? this.ready(); }
@@ -149,7 +163,26 @@ const POSTGRES_CONFLICT_TARGETS: Readonly<Record<string, readonly string[]>> = O
   sdk_price_sync_scopes: ["scope_key"],
   sdk_price_points: ["scope_key", "timestamp"],
   sdk_cooldown_states: ["resource_key"],
+  sdk_token_support: ["token", "provider"],
 });
-export function normalizePostgresSql(sql: string): { text: string } { const ignored = /^\s*INSERT OR IGNORE INTO/i.test(sql); const semicolon = /;\s*$/.test(sql); const source = sql.replace(/;\s*$/, ""); let text = source.replace(/CAST\(([^)]+) AS INTEGER\)/gi, "CAST($1 AS NUMERIC)"); text = text.replace(/INSERT OR IGNORE INTO/gi, "INSERT INTO"); const replace = /^\s*INSERT OR REPLACE INTO\s+([\w_]+)\s*\(([^)]*)\)\s*VALUES\s*/i.exec(source); if (replace) { const table = replace[1]!.toLowerCase(); const columns = replace[2]!.split(",").map((column) => column.trim()); const target = POSTGRES_CONFLICT_TARGETS[table]; if (target === undefined) throw new Error(`Missing PostgreSQL conflict target for ${table}`); const base = source.replace(/^\s*INSERT OR REPLACE INTO/i, "INSERT INTO"); text = base + " ON CONFLICT (" + target.join(",") + ") DO UPDATE SET " + columns.map((column) => `${column}=EXCLUDED.${column}`).join(","); } text = text.replace(/\?/g, (_, offset: number) => `$${countQuestionMarks(text.slice(0, offset)) + 1}`); if (ignored && !/ON CONFLICT/i.test(text)) text += " ON CONFLICT DO NOTHING"; return { text: semicolon ? `${text};` : text }; }
-function countQuestionMarks(value: string): number { return (value.match(/\?/g) ?? []).length; }
+export function normalizePostgresSql(sql: string): { text: string } {
+  const ignored = /^\s*INSERT OR IGNORE INTO/i.test(sql);
+  const semicolon = /;\s*$/.test(sql);
+  const source = sql.replace(/;\s*$/, "");
+  let text = source.replace(/CAST\(([^)]+) AS INTEGER\)/gi, "CAST($1 AS NUMERIC)");
+  text = text.replace(/INSERT OR IGNORE INTO/gi, "INSERT INTO");
+  const replace = /^\s*INSERT OR REPLACE INTO\s+([\w_]+)\s*\(([^)]*)\)\s*VALUES\s*/i.exec(source);
+  if (replace) {
+    const table = replace[1]!.toLowerCase();
+    const columns = replace[2]!.split(",").map((column) => column.trim());
+    const target = POSTGRES_CONFLICT_TARGETS[table];
+    if (target === undefined) throw new Error(`Missing PostgreSQL conflict target for ${table}`);
+    const base = source.replace(/^\s*INSERT OR REPLACE INTO/i, "INSERT INTO");
+    text = base + " ON CONFLICT (" + target.join(",") + ") DO UPDATE SET " + columns.map((column) => `${column}=EXCLUDED.${column}`).join(",");
+  }
+  let paramIndex = 0;
+  text = text.replace(/\?/g, () => `$${++paramIndex}`);
+  if (ignored && !/ON CONFLICT/i.test(text)) text += " ON CONFLICT DO NOTHING";
+  return { text: semicolon ? `${text};` : text };
+}
 function queryArgs(sql: string, params?: Record<string, unknown> | unknown[]): [string, unknown[]?] { const normalized = normalizePostgresSql(sql); return params === undefined ? [normalized.text] : [normalized.text, Array.isArray(params) ? params : Object.values(params)]; }

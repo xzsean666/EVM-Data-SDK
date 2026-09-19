@@ -795,6 +795,30 @@ Requires maintaining an external dependency with pinned git hashes. This trade-o
 5. **Scope Boundary & CEX Kline Archive Subsystem**:
    - As explicitly directed by the project owner, the CEX archive and binary Kline caching subsystem (`src/price/archive/`, `TokenSupportService.ts`, `UnifiedKlineService.ts`) is an intentional, core design for rapid kline retrieval and remains preserved in its working state.
 
+## ADR-040: Dual Storage Driver Architecture: Hardened PostgreSQL & Native SQLite Default
+
+**Status:** Accepted by owner on 2026-09-19
+
+**Date:** 2026-09-19
+
+**Decision:**
+1. **Dual Storage Driver Support**:
+   - Default: Node 24 native SQLite (`node:sqlite` DatabaseSync) for lightweight zero-dependency local runs.
+   - Extended: PostgreSQL (`pg.Pool`) when configured via `storage: { url: "postgresql://..." }` or `DATABASE_URL` / `STORAGE_URL`.
+2. **PostgreSQL Transpiler Hardening**:
+   - Include all table conflict targets in `POSTGRES_CONFLICT_TARGETS` (adding `sdk_token_support: ["token", "provider"]`).
+   - Align schema migration versioning across both drivers (migrations 1 through 6).
+   - Use linear $O(N)$ parameter placeholder replacement for `?` to `$1, $2, ...`.
+3. **Connection & Error Safety**:
+   - Attach unhandled error handler to `pg.Pool` to prevent process termination on dropped idle connections.
+   - Automatically redact credentials in PostgreSQL connection URLs and error messages.
+
+**Reason:**
+The user requires flexible dual-storage capabilities: seamless zero-config local runs with SQLite, and scalable persistent multi-process indexing in production with PostgreSQL.
+
+**Trade-offs:**
+PostgreSQL emulation uses query normalization (`normalizePostgresSql`) rather than heavy ORMs, which keeps dependencies minimal while achieving full feature parity.
+
 
 
 
