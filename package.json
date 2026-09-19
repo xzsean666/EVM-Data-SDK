@@ -1,7 +1,7 @@
 {
   "name": "evm-data-sdk",
-  "version": "0.1.0",
-  "description": "Node.js-first TypeScript SDK for indexed EVM data providers.",
+  "version": "0.1.0-singbox.1",
+  "description": "Node.js-first TypeScript SDK for indexed EVM data providers (singbox-version).",
   "type": "module",
   "private": true,
   "sideEffects": false,
