@@ -852,6 +852,30 @@ CEX token price tracking, exchange rate polling, and historical kline binary dec
 **Trade-offs:**
 Introduces an additional repository dependency (`token-price-sdk`), similar to `evm-call`. This is managed cleanly via local link during development and strict type/test validation through `pnpm check`.
 
+## ADR-042: Remove Redundant Price Implementations and Delegate Entirely to `token-price-sdk`
+
+**Status:** Accepted by owner on 2026-09-19
+
+**Date:** 2026-09-19
+
+**Decision:**
+1. Following the established pattern from `evm-call` (ADR-038), completely delete all redundant internal price provider implementations, service shims, duplicate domain models, and redundant unit tests from `EVM-Data-SDK`:
+   - Deleted `src/providers/price/` (21 files: Binance, Coinbase, Gate, GeckoTerminal, OKX adapters, schemas, errors, and mappers).
+   - Deleted `src/price/` (12 files: `PriceProviderRouter`, `PriceRequestExecutor`, `TokenPriceAggregator`, `PriceSyncService`, `TokenSupportService`, `UnifiedKlineService`, and `archive/*`).
+   - Deleted `src/storage/TokenSupportStore.ts` (1 file).
+   - Deleted duplicate domain models in `src/domain/` (7 files: `binanceKlineModels.ts`, `gateKlineModels.ts`, `klineModels.ts`, `priceModels.ts`, `priceOperations.ts`, `priceSyncModels.ts`, `tokenSupportModels.ts`).
+   - Deleted redundant unit test files (5 files: `kline-binary-codec.test.ts`, `kline-archive-manager.test.ts`, `gate-adapter.test.ts`, `token-support.test.ts`, `unified-kline-service.test.ts`), which are fully covered in `token-price-sdk`'s test suite.
+2. Directly re-export all price classes, factories, codecs, normalizers, and TypeScript types from `token-price-sdk` in `src/index.ts`.
+3. Update all consumer services (`TokenService`, `EvmDataClient`, `src/domain/configuration.ts`) and remaining integration tests (`token-price.test.ts`, `evm-data-sync-replay.test.ts`, `postgres-storage-contract.test.ts`) to import directly from `token-price-sdk`.
+4. Ensure 100% public API backwards compatibility.
+
+**Reason:**
+Now that `token-price-sdk` is an established, independently tested external package, keeping duplicate implementation files in `EVM-Data-SDK` introduced code divergence risk, maintenance overhead, and false test redundancy. Removing these 46 files reduces 2,840 redundant lines of code while keeping the public contract completely intact.
+
+**Trade-offs:**
+`EVM-Data-SDK` now cleanly relies on its external dependencies (`evm-call` and `token-price-sdk`), shrinking core codebase complexity. All 38 remaining test suites (372 tests) pass 100%.
+
+
 
 
 

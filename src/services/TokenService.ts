@@ -1,20 +1,9 @@
 import type { Erc20BalancesAtBlock, Erc20BlockRangeResult, Erc20HoldingsAtBlock, Erc20TokenHoldings, Erc20Transfer, Page } from "../domain/models";
 import { normalizeErc20BalancesAtBlockRequest, normalizeErc20BlockRangeRequest, normalizeErc20HoldingsAtBlockRequest, normalizeErc20TokenHoldingsRequest, normalizeErc20TransfersRequest, type Erc20BalancesAtBlockRequest, type Erc20BlockRangeRequest, type Erc20HoldingsAtBlockRequest, type Erc20TokenHoldingsRequest, type Erc20TransfersRequest } from "../domain/operations";
 import { unsupportedOperation } from "../domain/errors";
-import type { TokenPriceAggregationResult } from "../domain/priceModels";
-import {
-  normalizeTokenPriceHistoryRequest,
-  type TokenPriceHistoryRequest,
-} from "../domain/priceOperations";
 import type { RequestExecutor } from "../execution/RequestExecutor";
 import type { BlockRangeScanner } from "../execution/BlockRangeScanner";
-import type { TokenPriceAggregator } from "../price/TokenPriceAggregator";
 import type { ApiChainService } from "./ApiChainService";
-import type { BinanceFiveMinuteKlineRequest, BinanceFiveMinuteKlineResult } from "../domain/binanceKlineModels";
-import { normalizeBinanceFiveMinuteKlineRequest } from "../domain/binanceKlineModels";
-import type { BinanceAdapter } from "../providers/price/binance/BinanceAdapter";
-import type { GateKlineRequest, GateKlinePoint } from "../domain/gateKlineModels";
-import { normalizeGateKlineRequest } from "../domain/gateKlineModels";
 import type {
   Erc20MulticallAtBlockRequest,
   Erc20MulticallAtBlockResult,
@@ -22,11 +11,27 @@ import type {
   MulticallAtBlockResult,
 } from "evm-call";
 import type { RpcService } from "../rpc/RpcService";
-import type { KlinePoint, KlineRequest, KlineResult } from "../domain/klineModels";
-import { normalizeKlineRequest } from "../domain/klineModels";
-import type { TokenSupportProvider, TokenSupportStatusMap } from "../domain/tokenSupportModels";
-import type { TokenSupportService } from "../price/TokenSupportService";
-import type { UnifiedKlineService } from "../price/UnifiedKlineService";
+import {
+  normalizeBinanceFiveMinuteKlineRequest,
+  normalizeGateKlineRequest,
+  normalizeKlineRequest,
+  normalizeTokenPriceHistoryRequest,
+  type BinanceAdapter,
+  type BinanceFiveMinuteKlineRequest,
+  type BinanceFiveMinuteKlineResult,
+  type GateKlinePoint,
+  type GateKlineRequest,
+  type KlinePoint,
+  type KlineRequest,
+  type KlineResult,
+  type TokenPriceAggregationResult,
+  type TokenPriceAggregator,
+  type TokenPriceHistoryRequest,
+  type TokenSupportProvider,
+  type TokenSupportService,
+  type TokenSupportStatusMap,
+  type UnifiedKlineService,
+} from "token-price-sdk";
 
 export class TokenService {
   private nextGateEndpoint = 0;

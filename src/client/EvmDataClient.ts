@@ -17,16 +17,25 @@ import { BlockscoutAdapter } from "../providers/blockscout/BlockscoutAdapter";
 import { AlchemyAdapter } from "../providers/alchemy/AlchemyAdapter";
 import { MoralisAdapter } from "../providers/moralis/MoralisAdapter";
 import type { DataProviderAdapter } from "../providers/DataProviderAdapter";
-import { BinanceAdapter } from "../providers/price/binance/BinanceAdapter";
-import { normalizeBinanceFiveMinuteKlineRequest, type BinanceFiveMinuteKlineRequest, type BinanceFiveMinuteKlineResult } from "../domain/binanceKlineModels";
-import { CoinbaseAdapter } from "../providers/price/coinbase/CoinbaseAdapter";
-import { GeckoTerminalAdapter } from "../providers/price/geckoterminal/GeckoTerminalAdapter";
-import { OkxAdapter } from "../providers/price/okx/OkxAdapter";
-import { GateAdapter } from "../providers/price/gate/GateAdapter";
-import { PriceProviderRouter } from "../price/PriceProviderRouter";
-import { PriceRequestExecutor } from "../price/PriceRequestExecutor";
-import { TokenPriceAggregator } from "../price/TokenPriceAggregator";
-import type { TokenPriceProviderAdapter } from "../price/TokenPriceProviderAdapter";
+import {
+  BinanceAdapter,
+  CoinbaseAdapter,
+  GateAdapter,
+  GeckoTerminalAdapter,
+  KlineArchiveManager,
+  OkxAdapter,
+  PriceProviderRouter,
+  PriceRequestExecutor,
+  PriceSyncService,
+  TokenPriceAggregator,
+  TokenSupportService,
+  TokenSupportStore,
+  UnifiedKlineService,
+  normalizeBinanceFiveMinuteKlineRequest,
+  type BinanceFiveMinuteKlineRequest,
+  type BinanceFiveMinuteKlineResult,
+  type TokenPriceProviderAdapter,
+} from "token-price-sdk";
 import type { HttpTransport } from "../transport/HttpTransport";
 import {
   BUILTIN_ETHEREUM_RPCS as BUILTIN_ETHEREUM_ARCHIVE_RPCS,
@@ -50,16 +59,11 @@ import { createStorageAdapter, type StorageAdapter } from "../storage/StorageAda
 import { CooldownStore } from "../storage/CooldownStore";
 import { SyncService } from "../sync/SyncService";
 import { HistoryService } from "../history/HistoryService";
-import { PriceSyncService } from "../price/PriceSyncService";
 import { AlertService } from "../alert/AlertService";
 import type { AlertReporter } from "../alert/AlertReporter";
 import { SlackWebhookReporter } from "../alert/SlackWebhookReporter";
 import type { Clock } from "../execution/clock";
 import { ChainRegistry as PublicChainRegistry } from "../chains/ChainRegistry";
-import { TokenSupportStore } from "../storage/TokenSupportStore";
-import { TokenSupportService } from "../price/TokenSupportService";
-import { KlineArchiveManager } from "../price/archive/KlineArchiveManager";
-import { UnifiedKlineService } from "../price/UnifiedKlineService";
 
 export interface EvmDataClientOptions {
   readonly transport?: HttpTransport;

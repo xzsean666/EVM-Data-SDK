@@ -3,16 +3,20 @@ import { describe, expect, it } from "vitest";
 import { EvmDataClient } from "../../src/client/EvmDataClient";
 import { parseClientConfiguration } from "../../src/domain/configuration";
 import { EvmDataError } from "../../src/domain/errors";
-import type { TokenPriceProviderName, TokenPriceProviderResult } from "../../src/domain/priceModels";
-import { normalizeTokenPriceHistoryRequest } from "../../src/domain/priceOperations";
-import { BinanceAdapter } from "../../src/providers/price/binance/BinanceAdapter";
-import { CoinbaseAdapter } from "../../src/providers/price/coinbase/CoinbaseAdapter";
-import { GeckoTerminalAdapter } from "../../src/providers/price/geckoterminal/GeckoTerminalAdapter";
-import { OkxAdapter } from "../../src/providers/price/okx/OkxAdapter";
-import { PriceProviderRouter } from "../../src/price/PriceProviderRouter";
-import { PriceRequestExecutor } from "../../src/price/PriceRequestExecutor";
-import { TokenPriceAggregator } from "../../src/price/TokenPriceAggregator";
-import type { PriceProviderAttemptContext, TokenPriceProviderAdapter } from "../../src/price/TokenPriceProviderAdapter";
+import {
+  BinanceAdapter,
+  CoinbaseAdapter,
+  GeckoTerminalAdapter,
+  OkxAdapter,
+  PriceProviderRouter,
+  PriceRequestExecutor,
+  TokenPriceAggregator,
+  normalizeTokenPriceHistoryRequest,
+  type PriceProviderAttemptContext,
+  type TokenPriceProviderAdapter,
+  type TokenPriceProviderName,
+  type TokenPriceProviderResult,
+} from "token-price-sdk";
 import { HttpTransportError, type HttpRequest, type HttpResponse, type HttpTransport } from "../../src/transport/HttpTransport";
 import {
   binanceEthUsdtDailyKlines,

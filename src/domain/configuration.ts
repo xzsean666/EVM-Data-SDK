@@ -4,7 +4,7 @@ import type { ChainDefinition, BuiltinProviderName } from "./chains";
 import { parseChainDefinition } from "./chains";
 import { invalidConfiguration } from "./errors";
 import type { OperationName } from "./operations";
-import type { TokenPriceProviderName } from "./priceModels";
+import type { TokenPriceProviderName } from "token-price-sdk";
 import { EnvLoader } from "../env/EnvLoader";
 
 export const DEFAULT_ATTEMPT_TIMEOUT_MS = 10_000;

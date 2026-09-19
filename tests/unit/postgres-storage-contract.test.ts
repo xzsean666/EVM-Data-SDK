@@ -33,7 +33,7 @@ vi.mock("pg", () => {
 });
 
 import { PostgresStorageAdapter, normalizePostgresSql } from "../../src/storage/StorageAdapter";
-import { TokenSupportStore } from "../../src/storage/TokenSupportStore";
+import { TokenSupportStore } from "token-price-sdk";
 import { CooldownStore } from "../../src/storage/CooldownStore";
 
 describe("PostgreSQL storage contract", () => {

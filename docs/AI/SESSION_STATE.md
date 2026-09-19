@@ -54,19 +54,21 @@
 - `src/client/` (TokenPriceClient, createTokenPriceClient)
 - `tests/` (storage.test.ts, kline-binary-codec.test.ts, token-support.test.ts, client.test.ts - 共 24 个单测全部通过)
 
-### `EVM-Data-SDK` 仓库修改：
+### `EVM-Data-SDK` 仓库修改 (ADR-041 & ADR-042 彻底清理冗余)：
 - `package.json`：添加 `"token-price-sdk": "link:../token-price-nodejs"`
-- `src/index.ts`：导出 `token-price-sdk` 的 Client、Storage 工厂与类型
-- `src/price/archive/KlineBinaryCodec.ts`：re-export 自 `token-price-sdk`
-- `src/price/archive/ArchiveProviderAdapter.ts`：re-export 自 `token-price-sdk`
-- `src/price/archive/BinanceArchiveAdapter.ts`：re-export 自 `token-price-sdk`
-- `src/price/archive/GateArchiveAdapter.ts`：re-export 自 `token-price-sdk`
-- `src/price/archive/KlineArchiveManager.ts`：继承并透传 axios 实例
-- `src/storage/TokenSupportStore.ts`：re-export 自 `token-price-sdk`
-- `src/price/TokenSupportService.ts`：re-export 自 `token-price-sdk`
-- `src/price/UnifiedKlineService.ts`：re-export 自 `token-price-sdk`
-- `src/price/PriceSyncService.ts`：re-export 自 `token-price-sdk`
-- `docs/TOKEN_PRICE_CONTEXT.md`：新增独立的上下文与架构指导文档
-- `docs/AI/DECISIONS.md`：新增 ADR-041
-- `docs/AI/SESSION_STATE.md`：更新当前状态
-- `docs/NEXT_SESSION.md`：交接状态记录
+- `src/index.ts`：从 `token-price-sdk` 统一集中导出所有 price primitives、adapters、models、archive、sync services、client 与 storage 工厂，100% 保持对外 API 向后兼容
+- `src/services/TokenService.ts`：更新为直接从 `token-price-sdk` 引用模型、请求规范化函数与服务类型
+- `src/client/EvmDataClient.ts`：更新为直接从 `token-price-sdk` 引用各 Provider 适配器、路由、执行器与归档管理器
+- `src/domain/configuration.ts`：引用 `token-price-sdk` 的 `TokenPriceProviderName`
+- **物理清理 46 个冗余文件（净删除 2,840 行代码）**：
+  - 删除 `src/providers/price/` 全部 21 个适配器与模型文件
+  - 删除 `src/price/` 全部 12 个内部服务与归档文件
+  - 删除 `src/storage/TokenSupportStore.ts` 临时 re-export 文件
+  - 删除 `src/domain/` 下 7 个重复模型文件（`binanceKlineModels.ts`, `gateKlineModels.ts`, `klineModels.ts`, `priceModels.ts`, `priceOperations.ts`, `priceSyncModels.ts`, `tokenSupportModels.ts`）
+  - 删除 `tests/unit/` 下 5 个重复单测文件（`kline-binary-codec.test.ts`, `kline-archive-manager.test.ts`, `gate-adapter.test.ts`, `token-support.test.ts`, `unified-kline-service.test.ts`）
+- `tests/unit/token-price.test.ts`、`tests/unit/evm-data-sync-replay.test.ts`、`tests/unit/postgres-storage-contract.test.ts` 更新引用
+- 全部 38 个测试套件（372 个单测）100% 通过，`pnpm check`（typecheck, lint, test, build, test:package）全绿通过
+- `docs/TOKEN_PRICE_CONTEXT.md`：上下文与架构指导文档
+- `docs/AI/DECISIONS.md`：新增 ADR-041 与 ADR-042
+- `docs/NEXT_SESSION.md`：更新交接状态
+

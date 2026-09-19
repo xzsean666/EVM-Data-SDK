@@ -112,21 +112,6 @@ export type {
 } from "./domain/operations";
 export type { DatasetUpdateRequest, DatasetUpdateResult, RecollectRequest, RecollectResult, SyncAuditRequest, SyncAuditResult, SyncDataset, SyncStatus } from "./domain/syncModels";
 export type { HistoryAddressRequest, HistoryInitialState, ReplayStatus, UserStateAtBlockRequest, UserStateAtBlockResult, TokenFlowHistoryRequest, HistoryReplayRequest, HistoryRebuildRequest, HistoryReplayResult, HistoryRebuildResult } from "./domain/historyModels";
-export type { PriceUpdateRequest, PriceUpdateResult, PriceRecollectRequest, PricePointQuery, PriceAtResult, PriceSyncScopeRequest } from "./domain/priceSyncModels";
-export type {
-  NormalizedTokenPriceRequest,
-  TokenPriceHistoryRequest,
-  TokenPriceRange,
-} from "./domain/priceOperations";
-export type {
-  TokenPriceAggregationResult,
-  TokenPricePoint,
-  TokenPriceProviderFailure,
-  TokenPriceProviderName,
-  TokenPriceProviderResult,
-} from "./domain/priceModels";
-export type { BinanceFiveMinuteKlineRequest, BinanceFiveMinuteKlinePoint, BinanceFiveMinuteKlineResult } from "./domain/binanceKlineModels";
-export type { GateKlineRequest, GateKlinePoint } from "./domain/gateKlineModels";
 export type { PageInfo } from "./domain/pagination";
 export type {
   BlockRange,
@@ -165,12 +150,6 @@ export { SqliteStorageAdapter, PostgresStorageAdapter } from "./storage/StorageA
 export type { EvmDataClientOptions } from "./client/EvmDataClient";
 export type { DataProviderAdapter, ProviderAdapterFailure } from "./providers/DataProviderAdapter";
 export { BlockscoutAdapter } from "./providers/blockscout/BlockscoutAdapter";
-export { GateAdapter } from "./providers/price/gate/GateAdapter";
-export type {
-  PriceProviderAttemptContext,
-  PriceProxyLease,
-  TokenPriceProviderAdapter,
-} from "./price/TokenPriceProviderAdapter";
 export {
   ArchiveRpcTransport,
   JsonRpcCallError,
@@ -286,35 +265,29 @@ export type {
   SaveCooldownParams,
 } from "./storage/CooldownStore";
 
-export type {
-  KlineInterval,
-  KlinePoint,
-  KlineRequest,
-  KlineResult,
-  NormalizedKlineRequest,
-} from "./domain/klineModels";
-export { normalizeKlineRequest } from "./domain/klineModels";
-
-export type {
-  TokenSupportProvider,
-  TokenSupportRecord,
-  TokenSupportStatusMap,
-} from "./domain/tokenSupportModels";
-
-export { TokenSupportStore } from "./storage/TokenSupportStore";
-export { TokenSupportService } from "./price/TokenSupportService";
-export type { TokenSupportServiceOptions } from "./price/TokenSupportService";
-
-export { KlineBinaryCodec, KLINE_RECORD_SIZE } from "./price/archive/KlineBinaryCodec";
-export { KlineArchiveManager } from "./price/archive/KlineArchiveManager";
-export type { KlineArchiveManagerOptions } from "./price/archive/KlineArchiveManager";
-export type { ArchiveProviderAdapter } from "./price/archive/ArchiveProviderAdapter";
-export { BinanceArchiveAdapter } from "./price/archive/BinanceArchiveAdapter";
-export { GateArchiveAdapter } from "./price/archive/GateArchiveAdapter";
-export { UnifiedKlineService, getOverlappingCalendarMonths } from "./price/UnifiedKlineService";
-export type { UnifiedKlineServiceOptions } from "./price/UnifiedKlineService";
-export { PriceSyncService } from "./price/PriceSyncService";
 export {
+  BinanceAdapter,
+  CoinbaseAdapter,
+  GeckoTerminalAdapter,
+  OkxAdapter,
+  GateAdapter,
+  PriceProviderRouter,
+  PriceRequestExecutor,
+  TokenPriceAggregator,
+  TokenSupportStore,
+  TokenSupportService,
+  KlineBinaryCodec,
+  KLINE_RECORD_SIZE,
+  KlineArchiveManager,
+  BinanceArchiveAdapter,
+  GateArchiveAdapter,
+  UnifiedKlineService,
+  getOverlappingCalendarMonths,
+  PriceSyncService,
+  normalizeKlineRequest,
+  normalizeTokenPriceHistoryRequest,
+  normalizeBinanceFiveMinuteKlineRequest,
+  normalizeGateKlineRequest,
   TokenPriceClient,
   createTokenPriceClient,
   createPriceStorage,
@@ -322,10 +295,46 @@ export {
   IndexedDbPriceStorage,
   MemoryPriceStorage,
 } from "token-price-sdk";
+
 export type {
+  PriceUpdateRequest,
+  PriceUpdateResult,
+  PriceRecollectRequest,
+  PricePointQuery,
+  PriceAtResult,
+  PriceSyncScopeRequest,
+  NormalizedTokenPriceRequest,
+  TokenPriceHistoryRequest,
+  TokenPriceRange,
+  TokenPriceAggregationResult,
+  TokenPricePoint,
+  TokenPriceProviderFailure,
+  TokenPriceProviderName,
+  TokenPriceProviderResult,
+  BinanceFiveMinuteKlineRequest,
+  BinanceFiveMinuteKlinePoint,
+  BinanceFiveMinuteKlineResult,
+  GateKlineRequest,
+  GateKlinePoint,
+  PriceProviderAttemptContext,
+  PriceProxyLease,
+  TokenPriceProviderAdapter,
+  KlineInterval,
+  KlinePoint,
+  KlineRequest,
+  KlineResult,
+  NormalizedKlineRequest,
+  TokenSupportProvider,
+  TokenSupportRecord,
+  TokenSupportStatusMap,
+  TokenSupportServiceOptions,
+  KlineArchiveManagerOptions,
+  ArchiveProviderAdapter,
+  UnifiedKlineServiceOptions,
   TokenPriceClientOptions,
   PriceStorage,
   CreatePriceStorageOptions,
   SqliteStorageOptions,
   IndexedDbStorageOptions,
 } from "token-price-sdk";
+

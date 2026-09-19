@@ -23,10 +23,11 @@
    - `UnifiedKlineService`：Binance 优先、Gate 降级、自然月归档+REST 自动缝合。
    - `PriceSyncService`：多交易所增量补全、断点记录与临近点定向插值。
    - `TokenPriceClient`：高层 API 统一封装。
-4. **`EVM-Data-SDK` 依赖与集成**:
+4. **`EVM-Data-SDK` 依赖委托与彻底清理冗余 (ADR-041 & ADR-042)**:
    - 添加依赖 `"token-price-sdk": "link:../token-price-nodejs"`。
-   - 所有价格模块、编解码器与存储接口全面委托至 `token-price-sdk`，保持 100% 顶层 API 与类型向后兼容。
-   - 编写权威架构规范文档 `docs/TOKEN_PRICE_CONTEXT.md`，追加 ADR-041。
+   - 所有价格模块、编解码器与存储接口全面委托并统一从 `token-price-sdk` 导出，保持 100% 顶层 API 与类型向后兼容。
+   - 物理清理 46 个冗余实现、领域模型及单测文件（净删减 2,840 行冗余代码）。
+   - 编写权威架构规范文档 `docs/TOKEN_PRICE_CONTEXT.md`，追加 ADR-041 与 ADR-042。
 
 ## 3. 验证结果
 - `token-price-nodejs`:
@@ -36,9 +37,10 @@
   - `pnpm check` 全部通过：
     - `pnpm typecheck`（0 错误）
     - `pnpm lint`（0 警告）
-    - `pnpm test`（43 个测试套件，397 个单测 100% 通过）
+    - `pnpm test`（38 个测试套件，372 个单测 100% 通过）
     - `pnpm build`（成功生成 ESM / CJS / d.ts）
     - `pnpm test:package`（Smoke 测试与 Consumer 验证通过）
 
 ## 4. 下一步任务建议 (Next Actions)
-- 当前待命。系统已成功解耦两大微内核底座（`evm-call` 用于 EVM 链上 RPC / Multicall3，`token-price-sdk` 用于多交易所价格与 K 线服务），`EVM-Data-SDK` 架构清晰健壮，随时可承接新的链上业务需求或发布 NPM 包。
+- 当前待命。系统已成功解耦两大微内核底座（`evm-call` 用于 EVM 链上 RPC / Multicall3，`token-price-sdk` 用于多交易所价格与 K 线服务），`EVM-Data-SDK` 完全移除了冗余代码，架构高度解耦、清晰健壮，随时可承接新的链上业务需求或发布 NPM 包。
+

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { SqliteStorageAdapter, PostgresStorageAdapter, normalizePostgresSql } from "../../src/storage/StorageAdapter";
 import { SyncService } from "../../src/sync/SyncService";
 import { HistoryService } from "../../src/history/HistoryService";
-import { PriceSyncService } from "../../src/price/PriceSyncService";
+import { PriceSyncService } from "token-price-sdk";
 
 const address = "0x1111111111111111111111111111111111111111";
 const token = "0x2222222222222222222222222222222222222222";
