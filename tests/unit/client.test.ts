@@ -332,31 +332,19 @@ describe("EvmDataClient", () => {
     expect(transport.requests).toHaveLength(0);
   });
 
-  it("routes API-chain endpoints through the configured managed VLESS proxy", async () => {
+  it("routes API-chain endpoints through the configured HTTP proxy in proxy-only mode", async () => {
     const transport = new SequenceTransport([{ status: "1", message: "OK", result: "12345" }]);
-    const advancedProxyManager = {
-      assertReady: vi.fn(),
-      acquire: vi.fn().mockResolvedValue({ id: "sing-box-loopback", url: "http://127.0.0.1:3128" }),
-      report: vi.fn(),
-      initialize: vi.fn(),
-      close: vi.fn(),
-    };
     const client = new EvmDataClient({
       providers: [{ kind: "etherscan", apiKeys: ["key"] }],
       requestPolicy: { allowDirect: false, maxTotalAttempts: 1 },
-      advancedProxy: {
-        kind: "sing-box",
-        urls: ["vless://11111111-1111-4111-8111-111111111111@proxy.example:443?security=tls&type=tcp&sni=proxy.example"],
-      },
-    }, { transport, advancedProxyManager: advancedProxyManager as never });
+      proxies: [{ url: "http://127.0.0.1:3128" }],
+    }, { transport });
 
     await client.chain.getLatestBlockNumber({
       chain: "ethereum",
       now: new Date("2026-08-06T00:00:00.000Z"),
     });
 
-    expect(advancedProxyManager.assertReady).toHaveBeenCalledTimes(1);
-    expect(advancedProxyManager.acquire).toHaveBeenCalledTimes(1);
     expect(transport.requests[0]?.proxy).toMatchObject({
       protocol: "http",
       host: "127.0.0.1",
@@ -481,14 +469,7 @@ describe("EvmDataClient chainlink/Archive RPC composition (v0.4)", () => {
     expect(transport.requests).toHaveLength(0);
   });
 
-  it("initializes the managed proxy and the Archive RPC pool concurrently", async () => {
-    const advancedProxyManager = {
-      assertReady: vi.fn(),
-      acquire: vi.fn(),
-      report: vi.fn(),
-      initialize: vi.fn().mockResolvedValue(undefined),
-      close: vi.fn(),
-    };
+  it("initializes an Archive RPC pool when chainlink is enabled", async () => {
     const archiveRpcPool = {
       initialize: vi.fn().mockResolvedValue(undefined),
       healthySnapshot: vi.fn().mockReturnValue([]),
@@ -497,19 +478,13 @@ describe("EvmDataClient chainlink/Archive RPC composition (v0.4)", () => {
     };
     const client = new EvmDataClient({
       providers: [{ kind: "etherscan", apiKeys: ["key"] }],
-      advancedProxy: {
-        kind: "sing-box",
-        urls: ["vless://11111111-1111-4111-8111-111111111111@proxy.example:443?security=tls&type=tcp&sni=proxy.example"],
-      },
       chainlink: { enabled: true },
     }, {
-      advancedProxyManager: advancedProxyManager as never,
       archiveRpcPool: archiveRpcPool as never,
     });
 
     await client.initialize();
 
-    expect(advancedProxyManager.initialize).toHaveBeenCalledTimes(1);
     expect(archiveRpcPool.initialize).toHaveBeenCalledTimes(1);
   });
 
@@ -571,22 +546,12 @@ describe("EvmDataClient DeFi composition (v0.5)", () => {
       }),
     };
 
-    const advancedProxyRoute = {
-      assertReady: vi.fn(),
-      acquire: vi.fn().mockResolvedValue({ id: "managed-1", url: "http://127.0.0.1:45603", leaseToken: 1 }),
-      report: vi.fn(),
-    };
-
     const client = new EvmDataClient({
       providers: [{ kind: "etherscan", apiKeys: ["key1"] }],
-      advancedProxy: {
-        kind: "sing-box",
-        urls: ["vless://11111111-1111-4111-8111-111111111111@proxy.example:443?security=tls&type=tcp&sni=proxy.example"],
-      },
+      proxies: [{ url: "http://127.0.0.1:45603" }],
       requestPolicy: { allowDirect: true },
     }, {
       transport: transport as never,
-      advancedProxyManager: advancedProxyRoute as never,
     });
 
     const result = await client.chain.getLatestBlockNumber({ chain: "ethereum" });

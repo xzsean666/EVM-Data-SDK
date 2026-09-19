@@ -679,9 +679,9 @@ endpoint is unavailable on non-Ethereum chains.
 
 Version 0.4 is accepted by the owner on 2026-08-07. The full design,
 verification evidence, algorithms, and implementation queue are in
-[CHAINLINK_ETHEREUM_ARCHIVE_RPC_MULTICALL3_UPGRADE.md](./CHAINLINK_ETHEREUM_ARCHIVE_RPC_MULTICALL3_UPGRADE.md),
+[CHAINLINK_ETHEREUM_ARCHIVE_RPC_MULTICALL3_UPGRADE.md](./archive/historical_upgrades/CHAINLINK_ETHEREUM_ARCHIVE_RPC_MULTICALL3_UPGRADE.md),
 with endpoint/feed maintenance procedure in
-[CHAINLINK_ETHEREUM_ARCHIVE_RPC_MAINTENANCE.md](./CHAINLINK_ETHEREUM_ARCHIVE_RPC_MAINTENANCE.md).
+[CHAINLINK_ETHEREUM_ARCHIVE_RPC_MAINTENANCE.md](./archive/CHAINLINK_ETHEREUM_ARCHIVE_RPC_MAINTENANCE.md).
 
 ### 13.1 Product contract
 

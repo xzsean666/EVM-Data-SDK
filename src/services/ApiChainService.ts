@@ -22,11 +22,9 @@ import type {
   ProxyLease,
 } from '../providers/DataProviderAdapter'
 import { ProxyPool } from '../execution/ProxyPool'
-import type { ManagedProxyRoute } from '../proxy/SingBoxProxyManager'
 
 export interface ApiChainServiceOptions {
   readonly proxyPool: ProxyPool
-  readonly advancedProxyRoute?: ManagedProxyRoute
 }
 
 /** API-only chain metadata operations backed by indexed explorer APIs. */
@@ -37,7 +35,6 @@ export class ApiChainService {
     readonly apiKeys: readonly string[]
   }[]
   private readonly proxyPool: ProxyPool
-  private readonly advancedProxyRoute: ManagedProxyRoute | undefined
   private readonly allowDirect: boolean
   private readonly transactionContextCache = new Map<string, { readonly value: TransactionContext; readonly expiresAt: number }>()
   private readonly transactionContextInFlight = new Map<string, Promise<TransactionContext>>()
@@ -50,7 +47,6 @@ export class ApiChainService {
   ) {
     this.registry = new ChainRegistry(configuration.chains)
     this.proxyPool = options.proxyPool
-    this.advancedProxyRoute = options.advancedProxyRoute
     this.allowDirect = configuration.requestPolicy.allowDirect ?? true
     this.providers = adapters.flatMap((adapter, index) => {
       const apiKeys = configuration.providers[index]?.apiKeys ?? []
@@ -462,7 +458,7 @@ export class ApiChainService {
     signal: AbortSignal | undefined,
     work: (context: ProviderAttemptContext) => Promise<T>,
   ): Promise<T> {
-    const proxy = await this.acquireProxy(signal)
+    const proxy = await this.acquireProxy()
     try {
       const result = await work(providerContext(chain, candidate.apiKey, signal, proxy))
       this.reportProxy(proxy, 'success')
@@ -476,16 +472,7 @@ export class ApiChainService {
     }
   }
 
-  private async acquireProxy(signal: AbortSignal | undefined): Promise<ProxyLease | null> {
-    if (this.advancedProxyRoute !== undefined) {
-      try {
-        this.advancedProxyRoute.assertReady()
-        return await this.advancedProxyRoute.acquire(signal)
-      } catch (error) {
-        if (this.allowDirect) return null
-        throw error
-      }
-    }
+  private async acquireProxy(): Promise<ProxyLease | null> {
     const lease = this.proxyPool.acquire()
     if (lease !== undefined) return lease
     if (this.allowDirect) return null
@@ -499,7 +486,6 @@ export class ApiChainService {
   private reportProxy(lease: ProxyLease | null, outcome: 'success' | 'proxy_failure' | 'neutral') {
     if (lease === null) return
     this.proxyPool.report(lease, outcome)
-    this.advancedProxyRoute?.report(lease, outcome)
   }
 }
 

@@ -12,7 +12,7 @@ import { isHttpTransportError, type HttpTransport } from "../transport/HttpTrans
  * This module owns exactly one thing: sending JSON-RPC single/batch requests and
  * validating the shape of the responses. It never accepts a proxy, never
  * reads `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY`, and never routes
- * through `ProxyPool` or `SingBoxProxyManager` — there is no proxy parameter
+ * through `ProxyPool` — there is no proxy parameter
  * on call options at all, so that boundary is enforced by the
  * type signature, not just by convention. Endpoint health, retry, endpoint
  * selection, and ABI knowledge belong to pool and executor layers, not here.

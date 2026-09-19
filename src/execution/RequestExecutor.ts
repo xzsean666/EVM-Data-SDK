@@ -25,15 +25,12 @@ import { ProxyPool } from "./ProxyPool";
 import { isHttpTransportError } from "../transport/HttpTransport";
 import { redactMessage } from "../transport/redaction";
 import { isEvmDataError } from "../domain/errors";
-import type { ManagedProxyRoute } from "../proxy/SingBoxProxyManager";
 
 export interface RequestExecutorOptions {
   readonly router: ProviderRouter;
   readonly requestPolicy: NormalizedRequestPolicy;
   readonly credentialPools?: ReadonlyMap<string, CredentialPool> | Readonly<Record<string, CredentialPool>>;
   readonly proxyPool?: ProxyPool;
-  /** One optional managed loopback HTTP route for advanced proxies. */
-  readonly advancedProxyRoute?: ManagedProxyRoute;
   readonly retryPolicy?: RetryPolicy;
   readonly clock?: Clock;
   readonly random?: RandomSource;
@@ -79,7 +76,6 @@ export class RequestExecutor {
   private readonly requestPolicy: NormalizedRequestPolicy;
   private readonly credentialPools: ReadonlyMap<string, CredentialPool> | Readonly<Record<string, CredentialPool>>;
   private readonly proxyPool: ProxyPool;
-  private readonly advancedProxyRoute: ManagedProxyRoute | undefined;
   private readonly retryPolicy: RetryPolicy;
   private readonly clock: Clock;
   private readonly random: RandomSource;
@@ -95,7 +91,6 @@ export class RequestExecutor {
     this.requestPolicy = options.requestPolicy;
     this.credentialPools = options.credentialPools ?? new Map();
     this.proxyPool = options.proxyPool ?? new ProxyPool([], { allowDirect: options.requestPolicy.allowDirect });
-    this.advancedProxyRoute = options.advancedProxyRoute;
     this.retryPolicy = options.retryPolicy ?? new RetryPolicy();
     this.clock = options.clock ?? systemClock;
     this.random = options.random ?? systemRandom;
@@ -115,7 +110,6 @@ export class RequestExecutor {
     request: NormalizedProviderRequest,
     providerPin?: BlockRangeProviderPin,
   ): Promise<ExecutorResult | BlockRangeWindowExecution> {
-    this.advancedProxyRoute?.assertReady();
     if (request.signal?.aborted === true) {
       throw callerAborted();
     }
@@ -388,16 +382,9 @@ export class RequestExecutor {
   ): Promise<ProxyLease | null | undefined> {
     while (true) {
       const now = this.ensureSignalAndDeadline(deadline, signal);
-      const preferManaged = this.advancedProxyRoute !== undefined && this.nextAdvancedProxy();
-      if (preferManaged) {
-        return this.acquireManagedProxy(deadline, signal);
-      }
       const lease = this.proxyPool.acquire(now);
       if (lease !== undefined) {
         return lease;
-      }
-      if (this.advancedProxyRoute !== undefined) {
-        return this.acquireManagedProxy(deadline, signal);
       }
       if (this.proxyPool.isExhausted(now)) {
         return undefined;
@@ -410,48 +397,12 @@ export class RequestExecutor {
     }
   }
 
-  private advancedProxySequence = false;
-
-  private nextAdvancedProxy(): boolean {
-    this.advancedProxySequence = !this.advancedProxySequence;
-    return this.advancedProxySequence;
-  }
-
   private hasAvailableProxy(): boolean {
-    return this.proxyPool.hasAvailable() || this.advancedProxyRoute !== undefined;
-  }
-
-  private async acquireManagedProxy(deadline: number, signal: AbortSignal | undefined): Promise<ProxyLease> {
-    const route = this.advancedProxyRoute;
-    if (route === undefined) {
-      throw new EvmDataError({ code: "PROXY_ERROR", message: "No managed proxy route is configured.", retryable: false });
-    }
-    const remaining = this.ensureSignalAndDeadline(deadline, signal);
-    const controller = new AbortController();
-    const forwardAbort = () => controller.abort();
-    signal?.addEventListener("abort", forwardAbort, { once: true });
-    const timeout = setTimeout(() => controller.abort(), remaining);
-    try {
-      return await route.acquire(controller.signal);
-    } catch (error: unknown) {
-      if (signal?.aborted === true) throw callerAborted();
-      if (controller.signal.aborted === true) {
-        throw new EvmDataError({
-          code: "REQUEST_TIMEOUT",
-          message: "Overall request deadline exceeded while preparing the managed proxy.",
-          retryable: false,
-        });
-      }
-      throw error;
-    } finally {
-      clearTimeout(timeout);
-      signal?.removeEventListener("abort", forwardAbort);
-    }
+    return this.proxyPool.hasAvailable();
   }
 
   private reportProxy(lease: ProxyLease, outcome: "success" | "proxy_failure" | "neutral"): void {
     this.proxyPool.report(lease, outcome);
-    this.advancedProxyRoute?.report(lease, outcome);
   }
 
   private async pace(provider: string, deadline: number, signal: AbortSignal | undefined): Promise<void> {

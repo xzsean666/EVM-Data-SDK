@@ -7,7 +7,6 @@ import type { NormalizedTokenPriceRequest } from "../domain/priceOperations";
 import { ProxyPool } from "../execution/ProxyPool";
 import type { Clock, WaitFunction } from "../execution/clock";
 import { systemClock, systemWait } from "../execution/clock";
-import type { ManagedProxyRoute } from "../proxy/SingBoxProxyManager";
 import { isHttpTransportError } from "../transport/HttpTransport";
 import type { TokenPriceProviderAdapter } from "./TokenPriceProviderAdapter";
 
@@ -23,8 +22,7 @@ const RETRYABLE_CODES = new Set<TokenPriceProviderFailureCode>([
 export interface PriceRequestExecutorOptions {
   readonly configuration: NormalizedPriceConfiguration;
   readonly proxies: readonly { readonly url: string }[];
-  /** Optional managed loopback proxy route used only by proxy-only requests. */
-  readonly advancedProxyRoute?: ManagedProxyRoute;
+  readonly proxyPool?: ProxyPool;
   readonly clock?: Clock;
   readonly wait?: WaitFunction;
   readonly observe?: ObservationCallback;
@@ -36,13 +34,13 @@ export class PriceRequestExecutor {
   private readonly clock: Clock;
   private readonly wait: WaitFunction;
   private readonly correlationIdFactory: () => string;
-  private readonly advancedProxyRoute: ManagedProxyRoute | undefined;
 
   constructor(private readonly options: PriceRequestExecutorOptions) {
-    this.proxyPool = options.configuration.routeMode === "proxy-only"
-      ? new ProxyPool(options.proxies, { allowDirect: false })
-      : null;
-    this.advancedProxyRoute = options.advancedProxyRoute;
+    this.proxyPool = options.proxyPool ?? (
+      options.configuration.routeMode === "proxy-only"
+        ? new ProxyPool(options.proxies, { allowDirect: false })
+        : null
+    );
     this.clock = options.clock ?? systemClock;
     this.wait = options.wait ?? systemWait;
     this.correlationIdFactory = options.correlationIdFactory ?? randomUUID;
@@ -52,11 +50,10 @@ export class PriceRequestExecutor {
     request: NormalizedTokenPriceRequest,
     adapters: readonly TokenPriceProviderAdapter[],
   ): Promise<TokenPriceAggregationResult> {
-    if (this.options.configuration.routeMode === "proxy-only") this.advancedProxyRoute?.assertReady();
     if (request.signal !== undefined && request.signal.aborted) {
       throw callerAborted();
     }
-    if (this.options.configuration.routeMode === "proxy-only" && this.options.proxies.length === 0 && this.advancedProxyRoute === undefined) {
+    if (this.options.configuration.routeMode === "proxy-only" && this.options.proxies.length === 0) {
       throw new EvmDataError({
         code: "PROXY_ERROR",
         message: "Token price proxy-only mode requires a configured HTTP(S) proxy.",
@@ -65,7 +62,7 @@ export class PriceRequestExecutor {
     }
     const deadline = this.clock.now() + this.options.configuration.totalTimeoutMs;
     const maximumConcurrency = this.options.configuration.routeMode === "proxy-only"
-      ? Math.min(this.options.configuration.maxProviderConcurrency, Math.max(1, this.options.proxies.length + (this.advancedProxyRoute === undefined ? 0 : 1)))
+      ? Math.min(this.options.configuration.maxProviderConcurrency, Math.max(1, this.options.proxies.length))
       : this.options.configuration.maxProviderConcurrency;
     const settled = await runBounded(
       adapters,
@@ -132,7 +129,7 @@ export class PriceRequestExecutor {
       }
       const proxy = this.options.configuration.routeMode === "direct"
         ? null
-        : await this.acquireProxy(request.signal);
+        : this.acquireProxy();
       if (proxy === undefined) {
         throw new EvmDataError({ code: "PROXY_ERROR", message: "No configured proxy route is available for token prices.", retryable: false, provider: adapter.name });
       }
@@ -170,15 +167,12 @@ export class PriceRequestExecutor {
     throw lastFailure ?? new EvmDataError({ code: "PROVIDER_UNAVAILABLE", message: "Token price provider did not complete.", retryable: true, provider: adapter.name });
   }
 
-  private async acquireProxy(signal: AbortSignal | undefined) {
-    const lease = this.proxyPool?.acquire();
-    if (lease !== undefined) return lease;
-    return this.advancedProxyRoute?.acquire(signal);
+  private acquireProxy(): ReturnType<ProxyPool["acquire"]> {
+    return this.proxyPool?.acquire();
   }
 
   private reportProxy(proxy: NonNullable<ReturnType<ProxyPool["acquire"]>>, outcome: "success" | "proxy_failure" | "neutral"): void {
     this.proxyPool?.report(proxy, outcome);
-    this.advancedProxyRoute?.report(proxy, outcome);
   }
 
   private observe(

@@ -27,7 +27,6 @@ import { PriceRequestExecutor } from "../price/PriceRequestExecutor";
 import { TokenPriceAggregator } from "../price/TokenPriceAggregator";
 import type { TokenPriceProviderAdapter } from "../price/TokenPriceProviderAdapter";
 import type { HttpTransport } from "../transport/HttpTransport";
-import { SingBoxProxyManager } from "../proxy/SingBoxProxyManager";
 import { BUILTIN_ETHEREUM_ARCHIVE_RPCS } from "../rpc/builtinEthereumArchiveRpcs";
 import { BUILTIN_BASE_ARCHIVE_RPCS } from "../rpc/builtinBaseArchiveRpcs";
 import { EthereumArchiveRpcPool, type EthereumArchiveRpcEndpoint } from "../rpc/EthereumArchiveRpcPool";
@@ -58,8 +57,6 @@ export interface EvmDataClientOptions {
   readonly transport?: HttpTransport;
   readonly adapters?: Partial<Record<"etherscan" | "blockscout" | "alchemy" | "moralis", DataProviderAdapter>>;
   readonly priceAdapters?: Partial<Record<"binance" | "okx" | "coinbase" | "geckoterminal", TokenPriceProviderAdapter>>;
-  /** Test seam for the optional managed proxy; it never changes public configuration. */
-  readonly advancedProxyManager?: SingBoxProxyManager;
   /** Test seam for deterministic Archive RPC endpoint selection; defaults to `systemRandom`. */
   readonly archiveRpcRandomSource?: RandomSource;
   /** Test seam for the Archive RPC pool used by `chainlink`/`rpc`. */
@@ -86,7 +83,6 @@ export class EvmDataClient {
 
   private readonly configuration: NormalizedClientConfiguration;
   private readonly credentialPools: ReadonlyMap<string, CredentialPool>;
-  private readonly advancedProxyManager: SingBoxProxyManager | null;
   private readonly archiveRpcPool: EthereumArchiveRpcPool | null;
   private readonly defiArchiveRpcPools: readonly EthereumArchiveRpcPool[];
   private readonly uniswapV3ArchiveRpcPool: EthereumArchiveRpcPool | null;
@@ -159,9 +155,6 @@ export class EvmDataClient {
     });
     this.credentialPools = credentialPools;
     const proxyPool = new ProxyPool(this.configuration.proxies, { allowDirect: this.configuration.requestPolicy.allowDirect });
-    this.advancedProxyManager = this.configuration.advancedProxy === undefined
-      ? null
-      : options.advancedProxyManager ?? new SingBoxProxyManager(this.configuration.advancedProxy);
     const observe = this.configuration.logger === undefined && this.configuration.telemetry === undefined
       ? undefined
       : (event: Parameters<NonNullable<NormalizedClientConfiguration["logger"]>>[0]) => {
@@ -173,7 +166,6 @@ export class EvmDataClient {
       requestPolicy: this.configuration.requestPolicy,
       credentialPools,
       proxyPool,
-      ...(this.advancedProxyManager === null ? {} : { advancedProxyRoute: this.advancedProxyManager }),
       ...(observe === undefined ? {} : { observe }),
     });
     const priceConfiguration = this.configuration.price;
@@ -193,12 +185,15 @@ export class EvmDataClient {
             throw invalidConfiguration("Invalid price provider configuration.", error);
           }
         });
+    const priceProxyPool = priceConfiguration.routeMode === "proxy-only"
+      ? (this.configuration.requestPolicy.allowDirect === false ? proxyPool : new ProxyPool(this.configuration.proxies, { allowDirect: false }))
+      : null;
     const priceAggregator = new TokenPriceAggregator(
         new PriceProviderRouter(priceAdapters),
         new PriceRequestExecutor({
           configuration: priceConfiguration,
           proxies: this.configuration.proxies,
-          ...(this.advancedProxyManager === null ? {} : { advancedProxyRoute: this.advancedProxyManager }),
+          ...(priceProxyPool === null ? {} : { proxyPool: priceProxyPool }),
           ...(observe === undefined ? {} : { observe }),
         }),
       );
@@ -207,7 +202,6 @@ export class EvmDataClient {
       entries.map((entry) => entry.adapter),
       {
         proxyPool,
-        ...(this.advancedProxyManager === null ? {} : { advancedProxyRoute: this.advancedProxyManager }),
       },
     );
     this.address = new AddressService(executor, this.chain, {
@@ -530,9 +524,6 @@ export class EvmDataClient {
 
   async initialize(signal?: AbortSignal): Promise<void> {
     const tasks: Promise<void>[] = [];
-    if (this.advancedProxyManager !== null) {
-      tasks.push(this.advancedProxyManager.initialize(signal));
-    }
     if (this.archiveRpcPool !== null) {
       tasks.push(this.archiveRpcPool.initialize(signal));
     }
@@ -561,7 +552,6 @@ export class EvmDataClient {
   }
 
   async close(): Promise<void> {
-    await this.advancedProxyManager?.close();
     await this.storage.close();
   }
 }

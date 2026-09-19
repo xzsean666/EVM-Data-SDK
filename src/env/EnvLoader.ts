@@ -104,17 +104,6 @@ export class EnvLoader {
     return undefined;
   }
 
-  private findLocalSingBoxBinary(): string | undefined {
-    const candidates = [
-      path.join(process.cwd(), "examples/sing-box-prewarm/.verified-sing-box/1.13.16/linux-x64/sing-box"),
-      path.join(process.cwd(), ".verified-sing-box/1.13.16/linux-x64/sing-box"),
-    ];
-    for (const candidate of candidates) {
-      if (fs.existsSync(candidate)) return candidate;
-    }
-    return undefined;
-  }
-
   /**
    * Get value of an environment key with optional fallback to process.env.
    */
@@ -450,10 +439,6 @@ export class EnvLoader {
     const seen = new Set<string>();
     for (const { value: rawUrl } of proxyUrls) {
       if (!rawUrl || rawUrl.includes("example.com")) continue;
-      // If it's a proxy protocol that belongs to Sing-box, skip here
-      if (/^(?:vless|vmess|ss|trojan|hysteria|hysteria2|tuic):\/\//i.test(rawUrl)) {
-        continue;
-      }
       try {
         const parsed = new URL(rawUrl);
         if (parsed.protocol !== "http:" && parsed.protocol !== "https:") continue;
@@ -476,37 +461,6 @@ export class EnvLoader {
   }
 
   /**
-   * Parses sing-box URLs from SING_BOX_URL(s), VLESS_URL(s), or proxy URLs with node protocol schemes.
-   */
-  getSingBoxUrls(): readonly string[] {
-    const singBoxPattern = /^(?:SING_BOX|VLESS|VMESS|TROJAN|SHADOWSOCKS|SS|EVM_DATA_SDK_VLESS)(?:_SUBSCRIPTION)?_URL(?:_?\d+)?$/i;
-    const directPattern = this.getKeysByPattern(singBoxPattern);
-    const proxyUrls = this.getKeysByPattern(/^PROXY_URL(?:_?\d+)?$/i);
-
-    const seen = new Set<string>();
-    const urls: string[] = [];
-
-    const addUrl = (url: string) => {
-      if (url && !seen.has(url) && !url.includes("example.com") && !url.includes("11111111-1111-1111-1111-111111111111")) {
-        seen.add(url);
-        urls.push(url);
-      }
-    };
-
-    for (const { value: url } of directPattern) {
-      addUrl(url);
-    }
-
-    for (const { value: url } of proxyUrls) {
-      if (/^(?:vless|vmess|ss|trojan|hysteria|hysteria2|tuic):\/\//i.test(url)) {
-        addUrl(url);
-      }
-    }
-
-    return Object.freeze(urls);
-  }
-
-  /**
    * Reads storage URL from DATABASE_URL, STORAGE_URL, or SQLITE_PATH.
    */
   getStorageUrl(): string | undefined {
@@ -523,18 +477,6 @@ export class EnvLoader {
     const baseRpcEndpoints = this.getRpcEndpoints("base");
 
     const proxies = overrides.proxies ?? (this.getProxies().length > 0 ? this.getProxies() : undefined);
-    const singBoxUrls = this.getSingBoxUrls();
-    const binaryPath = this.get("SING_BOX_BINARY_PATH") ?? this.findLocalSingBoxBinary();
-    const advancedProxy =
-      overrides.advancedProxy !== undefined
-        ? overrides.advancedProxy
-        : (singBoxUrls.length > 0
-            ? {
-                kind: "sing-box" as const,
-                urls: singBoxUrls,
-                ...(binaryPath ? { singBox: { binaryPath } } : {}),
-              }
-            : undefined);
 
     const storageUrl = this.getStorageUrl();
     const storage = overrides.storage ?? (storageUrl ? { url: storageUrl } : undefined);
@@ -581,7 +523,6 @@ export class EnvLoader {
       ...overrides,
       ...(providers.length > 0 ? { providers } : {}),
       ...(proxies ? { proxies } : {}),
-      ...(advancedProxy ? { advancedProxy } : {}),
       ...(storage ? { storage } : {}),
       ...(chainlink ? { chainlink } : {}),
       ...(defi ? { defi } : {}),

@@ -8,13 +8,16 @@ This file is the entry point for every AI or human engineering session in this r
 
 Before changing the repository, read these files in order:
 
-1. `Agent.md`
-2. `docs/SPEC.md`
-3. `docs/ARCHITECTURE.md`
-4. `docs/BUILD.md`
-5. `docs/INTEGRATIONS.md`
-6. `docs/DECISIONS.md`
-7. `docs/NEXT_SESSION.md`
+1. `Agent.md` (or `AGENTS.md`)
+2. `docs/AI_AGENT_PROMPT.md`
+3. `docs/AI/GOAL.md`
+4. `docs/AI/TASK_INDEX.md`
+5. `docs/AI/SESSION_STATE.md`
+6. `docs/AI/ARCHITECTURE.md`
+7. `docs/AI/DECISIONS.md`
+8. `docs/SPEC.md`
+9. `docs/BUILD.md`
+10. `docs/INTEGRATIONS.md`
 
 Do not rely on previous conversations or hidden context. The repository documents are the source of truth. If the documents disagree, stop and resolve the disagreement in documentation before implementation.
 
@@ -75,12 +78,15 @@ Review module boundaries, dependency direction, naming, readability, side effect
 
 ## Documentation Ownership
 
+- `docs/AI_AGENT_PROMPT.md`: engineering guidelines and task execution rules.
+- `docs/AI/GOAL.md`: master project vision, principles, and roadmap.
+- `docs/AI/TASK_INDEX.md`: task backlog, priorities, and dependency tracking.
+- `docs/AI/SESSION_STATE.md`: live handoff, completed work, and session state.
+- `docs/AI/ARCHITECTURE.md`: component boundaries and data flow.
+- `docs/AI/DECISIONS.md`: accepted or proposed architecture decisions and alternatives.
 - `docs/SPEC.md`: product behavior and acceptance criteria.
-- `docs/ARCHITECTURE.md`: component boundaries and data flow.
 - `docs/BUILD.md`: local development, verification, packaging, and release.
 - `docs/INTEGRATIONS.md`: external APIs, tools, versions, and current caveats.
-- `docs/DECISIONS.md`: accepted or proposed architecture decisions and alternatives.
-- `docs/NEXT_SESSION.md`: live handoff and ordered work queue.
 
 Any behavior change must update the relevant documents in the same milestone.
 

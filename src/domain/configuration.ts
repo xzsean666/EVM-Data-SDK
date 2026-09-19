@@ -34,33 +34,6 @@ export interface ProxyConfiguration {
   readonly url: string;
 }
 
-export interface SingBoxRuntimeConfiguration {
-  readonly version?: string;
-  readonly binaryPath?: string;
-  readonly cacheDir?: string;
-  readonly downloadMode?: "lazy" | "eager";
-  readonly startupTimeoutMs?: number;
-}
-
-export interface SingBoxProxyConfiguration {
-  readonly kind: "sing-box";
-  readonly urls: readonly string[];
-  readonly singBox?: SingBoxRuntimeConfiguration;
-}
-
-export interface NormalizedSingBoxRuntimeConfiguration {
-  readonly version: string;
-  readonly binaryPath?: string;
-  readonly cacheDir?: string;
-  readonly downloadMode: "lazy" | "eager";
-  readonly startupTimeoutMs: number;
-}
-
-export interface NormalizedSingBoxProxyConfiguration {
-  readonly kind: "sing-box";
-  readonly urls: readonly string[];
-  readonly singBox: NormalizedSingBoxRuntimeConfiguration;
-}
 
 export interface TelemetryEvent {
   readonly operation: OperationName;
@@ -168,7 +141,7 @@ type NormalizedProviderConfiguration =
 /**
  * One direct-only Ethereum Archive RPC endpoint used exclusively by the
  * opt-in Chainlink Archive RPC feature (see ADR-028/ADR-029). Never routed
- * through `ProxyPool` or `SingBoxProxyManager`.
+ * through `ProxyPool`.
  */
 export interface EthereumArchiveRpcEndpointConfiguration {
   /** Unique redaction-safe identifier used in status and telemetry. */
@@ -290,7 +263,6 @@ export interface ClientConfiguration {
   readonly chains?: readonly ChainDefinition[];
   readonly requestPolicy?: RequestPolicy;
   readonly proxies?: readonly ProxyConfiguration[];
-  readonly advancedProxy?: SingBoxProxyConfiguration;
   /** Explicit memory safety bound for one completed block-range request. */
   readonly maxRangeRecords?: number;
   /** Explicit progress bound for adaptive closed-range splitting. */
@@ -332,7 +304,6 @@ export interface NormalizedClientConfiguration {
   readonly chains: readonly ChainDefinition[];
   readonly requestPolicy: NormalizedRequestPolicy;
   readonly proxies: readonly ProxyConfiguration[];
-  readonly advancedProxy?: NormalizedSingBoxProxyConfiguration;
   readonly maxRangeRecords: number;
   readonly maxRangeWindows: number;
   readonly price?: NormalizedPriceConfiguration;
@@ -371,18 +342,6 @@ const policySchema = z
   })
   .strict();
 const proxySchema = z.object({ url: z.string().trim().min(1).max(2048) }).strict();
-const singBoxRuntimeSchema = z.object({
-  version: z.string().trim().min(1).max(32).default("1.13.16"),
-  binaryPath: z.string().trim().min(1).max(4096).optional(),
-  cacheDir: z.string().trim().min(1).max(4096).optional(),
-  downloadMode: z.enum(["lazy", "eager"]).default("lazy"),
-  startupTimeoutMs: z.number().int().positive().max(86_400_000).default(10_000),
-}).strict();
-const advancedProxySchema = z.object({
-  kind: z.literal("sing-box"),
-  urls: z.array(z.string().trim().min(1).max(8192)).min(1).max(32),
-  singBox: singBoxRuntimeSchema.optional(),
-}).strict();
 const priceProviderSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("binance"), baseUrl: z.string().trim().min(1).max(2048).optional(), enabled: z.boolean().optional().default(true), allowInsecureHttp: z.boolean().optional().default(false) }).strict(),
   z.object({ kind: z.literal("okx"), baseUrl: z.string().trim().min(1).max(2048).optional(), enabled: z.boolean().optional().default(true), allowInsecureHttp: z.boolean().optional().default(false) }).strict(),
@@ -462,7 +421,6 @@ const clientShapeSchema = z
     chains: z.array(z.unknown()).max(256).optional().default([]),
     requestPolicy: policySchema.optional(),
     proxies: z.array(proxySchema).max(64).optional().default([]),
-    advancedProxy: advancedProxySchema.optional(),
     maxRangeRecords: z.number().int().positive().max(10_000_000).default(DEFAULT_MAX_RANGE_RECORDS),
     maxRangeWindows: z.number().int().positive().max(1_000_000).default(DEFAULT_MAX_RANGE_WINDOWS),
     chainlink: chainlinkSchema.optional(),
@@ -497,10 +455,6 @@ export function parseClientConfiguration(input: unknown): NormalizedClientConfig
       const mergedProxies = inputRecord.proxies !== undefined
         ? inputRecord.proxies
         : envConfig.proxies;
-
-      const mergedAdvancedProxy = inputRecord.advancedProxy !== undefined
-        ? inputRecord.advancedProxy
-        : envConfig.advancedProxy;
 
       const mergedStorage = inputRecord.storage !== undefined
         ? inputRecord.storage
@@ -552,7 +506,6 @@ export function parseClientConfiguration(input: unknown): NormalizedClientConfig
         ...inputRecord,
         ...(mergedProviders !== undefined ? { providers: mergedProviders } : {}),
         ...(mergedProxies !== undefined ? { proxies: mergedProxies } : {}),
-        ...(mergedAdvancedProxy !== undefined ? { advancedProxy: mergedAdvancedProxy } : {}),
         ...(mergedStorage !== undefined ? { storage: mergedStorage } : {}),
         ...(mergedChainlink !== undefined ? { chainlink: mergedChainlink } : {}),
         ...(mergedDefi !== undefined ? { defi: mergedDefi } : {}),
@@ -601,9 +554,6 @@ export function parseClientConfiguration(input: unknown): NormalizedClientConfig
   const chains = parsed.data.chains.map((chain) => parseChainDefinition(chain));
   const requestPolicy = normalizeRequestPolicy(parsed.data.requestPolicy ?? {});
   const proxies = parsed.data.proxies.map((proxy) => normalizeProxy(proxy));
-  const advancedProxy = parsed.data.advancedProxy === undefined
-    ? undefined
-    : normalizeAdvancedProxy(parsed.data.advancedProxy);
 
   const configuration: NormalizedClientConfiguration = {
     providers: Object.freeze(providers),
@@ -613,7 +563,6 @@ export function parseClientConfiguration(input: unknown): NormalizedClientConfig
     chains: Object.freeze(chains),
     requestPolicy,
     proxies: Object.freeze(proxies),
-    ...(advancedProxy === undefined ? {} : { advancedProxy }),
     maxRangeRecords: parsed.data.maxRangeRecords,
     maxRangeWindows: parsed.data.maxRangeWindows,
     price,
@@ -743,30 +692,6 @@ function normalizeChainlinkConfiguration(
     maxCallsPerMulticall: value.maxCallsPerMulticall,
     maxRpcAttempts: value.maxRpcAttempts,
     maxConcurrentRpcAttempts: value.maxConcurrentRpcAttempts,
-  });
-}
-
-function normalizeAdvancedProxy(
-  value: z.output<typeof advancedProxySchema>,
-): NormalizedSingBoxProxyConfiguration {
-  const runtime = value.singBox ?? {
-    version: "1.13.16",
-    downloadMode: "lazy" as const,
-    startupTimeoutMs: 10_000,
-  };
-  if (!/^\d+\.\d+\.\d+$/.test(runtime.version)) {
-    throw invalidConfiguration("sing-box version must be a fixed semantic version.");
-  }
-  return Object.freeze({
-    kind: "sing-box" as const,
-    urls: Object.freeze(value.urls.map((url) => url.trim())),
-    singBox: Object.freeze({
-      version: runtime.version,
-      ...(runtime.binaryPath === undefined ? {} : { binaryPath: runtime.binaryPath }),
-      ...(runtime.cacheDir === undefined ? {} : { cacheDir: runtime.cacheDir }),
-      downloadMode: runtime.downloadMode,
-      startupTimeoutMs: runtime.startupTimeoutMs,
-    }),
   });
 }
 

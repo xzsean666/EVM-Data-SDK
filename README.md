@@ -91,7 +91,7 @@ for (const price of result.prices) {
 With `chainlink.enabled: true` and no other configuration, the SDK selects a
 random built-in public Ethereum Archive RPC endpoint per call from
 `src/rpc/builtinEthereumArchiveRpcs.ts` (see
-[`docs/CHAINLINK_ETHEREUM_ARCHIVE_RPC_MAINTENANCE.md`](./docs/CHAINLINK_ETHEREUM_ARCHIVE_RPC_MAINTENANCE.md)
+[`docs/archive/CHAINLINK_ETHEREUM_ARCHIVE_RPC_MAINTENANCE.md`](./docs/archive/CHAINLINK_ETHEREUM_ARCHIVE_RPC_MAINTENANCE.md)
 for how that registry is maintained and verified). Supply your own endpoint(s)
 instead with `chainlink.rpcEndpoints` and `chainlink.useBuiltinEthereumArchiveRpcs: false`:
 
@@ -116,7 +116,7 @@ Multicall3 batching without the Chainlink decoding layer.
 
 To add another chain (for example Base) to this Chainlink/Archive RPC/Multicall3
 feature, start from
-[`docs/CHAINLINK_ARCHIVE_RPC_MULTICALL3_ADD_CHAIN_HANDOFF.md`](./docs/CHAINLINK_ARCHIVE_RPC_MULTICALL3_ADD_CHAIN_HANDOFF.md)
+[`docs/archive/CHAINLINK_ARCHIVE_RPC_MULTICALL3_ADD_CHAIN_HANDOFF.md`](./docs/archive/CHAINLINK_ARCHIVE_RPC_MULTICALL3_ADD_CHAIN_HANDOFF.md)
 instead of exploring the codebase from scratch — it maps every Ethereum-specific
 file and decision point that must be revisited.
 

@@ -194,13 +194,11 @@ describe("EnvLoader & Env Management", () => {
       const content = `
         HTTP_PROXY=http://127.0.0.1:8080
         PROXY_URL1=http://127.0.0.1:8081
-        SING_BOX_URL=http://127.0.0.1:9090
         DATABASE_URL=postgres://user:pass@localhost:5432/evmdb
       `;
       const loader = new EnvLoader({ content, fallbackToProcessEnv: false });
 
       expect(loader.getProxies()).toHaveLength(2);
-      expect(loader.getSingBoxUrls()).toEqual(["http://127.0.0.1:9090"]);
       expect(loader.getStorageUrl()).toBe("postgres://user:pass@localhost:5432/evmdb");
     });
   });

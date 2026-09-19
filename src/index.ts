@@ -25,8 +25,6 @@ export type {
   ProviderConfigurationBase,
   ProxyConfiguration,
   RequestPolicy,
-  SingBoxProxyConfiguration,
-  SingBoxRuntimeConfiguration,
   TelemetryEvent,
 } from "./domain/configuration";
 export type {
@@ -164,8 +162,6 @@ export { ApiChainService } from './services/ApiChainService';
 export { EvmDataClient } from "./client/EvmDataClient";
 export { SqliteStorageAdapter, PostgresStorageAdapter } from "./storage/StorageAdapter";
 export type { EvmDataClientOptions } from "./client/EvmDataClient";
-export { prewarmSingBox, SUPPORTED_SING_BOX_VERSION } from "./proxy/SingBoxBinaryManager";
-export type { PrewarmSingBoxOptions } from "./proxy/SingBoxBinaryManager";
 export type { DataProviderAdapter, ProviderAdapterFailure } from "./providers/DataProviderAdapter";
 export { BlockscoutAdapter } from "./providers/blockscout/BlockscoutAdapter";
 export type {
