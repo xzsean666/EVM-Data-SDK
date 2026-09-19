@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { archiveRpcUnavailable } from "../../src/domain/errors";
+import { archiveRpcUnavailable } from "evm-call";
 import type { ArchiveRpcCallOptions, ArchiveRpcTransport } from "../../src/rpc/ArchiveRpcTransport";
 import { EthereumArchiveRpcExecutor } from "../../src/rpc/EthereumArchiveRpcExecutor";
 import type { EthereumArchiveRpcEndpoint, EthereumArchiveRpcPool } from "../../src/rpc/EthereumArchiveRpcPool";
@@ -38,6 +38,22 @@ function fakeTransport(handlers: Readonly<Record<string, MethodHandler>>): Archi
         return Promise.reject(error);
       }
       return Promise.resolve(result);
+    },
+    batchCall: (options: { readonly endpointUrl: string; readonly requests: readonly { readonly id: string | number; readonly method: string; readonly params?: readonly unknown[] }[] }) => {
+      const handler = handlers[options.endpointUrl];
+      if (handler === undefined) {
+        return Promise.reject(new Error(`No fake handler registered for ${options.endpointUrl}.`));
+      }
+      try {
+        const results = options.requests.map((req) => ({
+          id: req.id,
+          success: true,
+          result: handler(req.method, req.params ?? []),
+        }));
+        return Promise.resolve(results);
+      } catch (error: unknown) {
+        return Promise.reject(error);
+      }
     },
   } as unknown as ArchiveRpcTransport;
 }

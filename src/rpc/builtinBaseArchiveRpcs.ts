@@ -1,21 +1,8 @@
 /**
- * Public Base Mainnet Archive RPC candidates. These are direct-only and are
- * health-probed during client initialization; IDs, rather than URLs, are the
- * only endpoint identifier exposed by the SDK.
+ * Built-in unauthenticated public Base Mainnet Archive RPC candidates.
+ * Delegated to the unified base library `evm-call`.
  */
-export interface BuiltinBaseArchiveRpcCandidate {
-  readonly id: string;
-  readonly url: string;
-}
+import { BUILTIN_BASE_RPCS, type BuiltinRpcEndpoint } from "evm-call";
 
-export const BUILTIN_BASE_ARCHIVE_RPCS: readonly BuiltinBaseArchiveRpcCandidate[] = Object.freeze([
-  Object.freeze({ id: "base-org-public", url: "https://mainnet.base.org" }),
-  Object.freeze({ id: "base-developer-public", url: "https://developer-access-mainnet.base.org" }),
-  Object.freeze({ id: "base-tenderly-public", url: "https://base.gateway.tenderly.co" }),
-  Object.freeze({ id: "base-blastapi", url: "https://base-mainnet.public.blastapi.io" }),
-  Object.freeze({ id: "base-drpc", url: "https://base.drpc.org" }),
-  Object.freeze({ id: "base-meowrpc", url: "https://base.meowrpc.com" }),
-  Object.freeze({ id: "base-publicnode", url: "https://base-rpc.publicnode.com" }),
-  Object.freeze({ id: "base-llamarpc", url: "https://base.llamarpc.com" }),
-  Object.freeze({ id: "base-1rpc", url: "https://1rpc.io/base" }),
-]);
+export type BuiltinBaseArchiveRpcCandidate = BuiltinRpcEndpoint;
+export const BUILTIN_BASE_ARCHIVE_RPCS: readonly BuiltinBaseArchiveRpcCandidate[] = BUILTIN_BASE_RPCS;

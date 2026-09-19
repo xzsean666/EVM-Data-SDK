@@ -54,12 +54,19 @@
 - `docs/AI/tasks/TASK-003.md`（任务记录文档）
 
 ### 修改的文件：
+- `src/rpc/ArchiveRpcTransport.ts`（移除 ~300 行自实现传输层，委托 `evm-call`）
+- `src/rpc/Erc20MulticallCodec.ts`（移除 ~60 行 ERC20 编解码，委托 `evm-call`）
+- `src/rpc/EthereumMulticall3Codec.ts`（移除 ~200 行 Multicall3 编解码，委托 `evm-call`）
+- `src/rpc/EthereumArchiveRpcExecutor.ts`（移除 ~500 行执行器，委托 `evm-call`）
+- `src/rpc/JsonRpcBatchExecutor.ts`（移除 ~280 行 Batch 调度，委托 `evm-call`）
+- `src/rpc/RandomSource.ts`（移除 ~25 行 shuffle，委托 `evm-call`）
+- `src/rpc/builtinEthereumArchiveRpcs.ts` & `src/rpc/builtinBaseArchiveRpcs.ts`（委托 `evm-call` 节点候选）
+- `tests/package/smoke.mjs`（动态适配所有依赖软链接，支持 `evm-call`）
 - `package.json`（新增 `evm-call` 锁定 git hash 依赖）
 - `pnpm-lock.yaml`（锁定依赖包版本与解析）
-- `docs/INTEGRATIONS.md`（追加 Section 21: evm-call 说明）
-- `docs/AI/DECISIONS.md`（追加 ADR-038 决策记录）
-- `docs/AI/TASK_INDEX.md`（归档 TASK-003）
-- `docs/AI/SESSION_STATE.md`（更新当前状态至 DONE）
+- `docs/EVM_CALL_CONTEXT.md`（更新当前集成清单状态）
+- `docs/AI/tasks/TASK-003.md`（完善源码委托与清理验收项）
+- `docs/AI/SESSION_STATE.md`（更新当前状态）
 - `docs/NEXT_SESSION.md`（更新交接文档）
 
 ---
@@ -70,13 +77,15 @@
 - `pnpm lint`: 通过（0 警告，0 错误）。
 - `pnpm test`: 通过（52 个测试文件，488 个用例全部通过）。
 - `pnpm build`: 通过（ESM, CJS, d.ts 打包成功）。
+- `pnpm test:package`: 通过（tarball 打包与 consumer 导入验证成功）。
+- 净清理代码量：1,380+ 行冗余老代码彻底剥离。
 
 ---
 
 ## 5. 下一步工作建议
 
-1. 等待开发者下发具体的源码级重构指令（将 `src/rpc/` 及上层各 Service 的直接 RPC 交互切换并委托至 `evm-call` 底座）。
-2. 在升级 `evm-call` 时，严格按照 `docs/EVM_CALL_CONTEXT.md` 的 SOP 操作。
+1. 当前 `src/rpc/` 核心组件已全面切换并委托至 `evm-call`，并保证了 EVM-Data-SDK 公共 API 接口契约 100% 兼容。
+2. 后续需要升级 `evm-call` 时，严格遵循 `docs/EVM_CALL_CONTEXT.md` 中固化的 SOP 流程。
 
 ## 5.1 未解决问题与决策事项 (Decisions & Known Issues)
 

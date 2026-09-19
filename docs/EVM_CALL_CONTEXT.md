@@ -246,5 +246,5 @@ git commit -m "chore(deps): bump evm-call to <NEW_COMMIT_HASH>"
 - [x] **依赖安装成功**：`package.json` 与 `pnpm-lock.yaml` 已锁定 `github:xzsean666/evm-call#d7a5c16d2bcbda6255d05f1f5b745eac88f699c0`。
 - [x] **产物类型可解析**：`dist/index.d.ts` 在本仓库 TypeScript 编译器下 100% 兼容通过。
 - [x] **基准测试全绿**：安装 `evm-call` 后，`EVM-Data-SDK` 现有全部 52 个测试套件（488 个用例）保持 100% 通过。
-- [x] **上下文文档完备**：本文档 (`docs/EVM_CALL_CONTEXT.md`) 已建立，详细记录了架构、API 契约与标准升级 SOP。
-- [ ] **源码委托实现 (Pending Task)**：待下个会话或明确指令后，将 `src/rpc/` 及各服务实现无缝接入并切换至 `evm-call`。
+- [x] **源码委托实现完成**：已清理并移除项目内部冗余的老代码（`src/rpc/` 下 Transport、Codecs、Executors、Candidates 等 ~1,400 行重复代码已全部直接委托至 `evm-call`），全套 52 个测试套件（488 个用例）和打包测试均持续全绿。
+

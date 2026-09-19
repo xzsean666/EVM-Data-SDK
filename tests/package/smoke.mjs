@@ -86,7 +86,8 @@ try {
     path.join(consumerNodeModules, packagedManifest.name),
     "dir",
   );
-  for (const dependency of ["axios", "zod"]) {
+  const manifestDependencies = Object.keys(packagedManifest.dependencies ?? {});
+  for (const dependency of manifestDependencies) {
     await symlink(
       path.join(repositoryRoot, "node_modules", dependency),
       path.join(consumerNodeModules, dependency),

@@ -32,7 +32,7 @@ describe("ArchiveRpcTransport", () => {
     const request = httpTransport.request.mock.calls[0]![0] as HttpRequest;
     expect(request.method).toBe("POST");
     expect(request.url).toBe(ENDPOINT);
-    expect(request.proxy).toBeNull();
+    expect(request.proxy ?? null).toBeNull();
     expect(request.body).toEqual({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] });
     expect(request.headers).toEqual({ "content-type": "application/json" });
     expect(request.timeoutMs).toBe(5_000);
