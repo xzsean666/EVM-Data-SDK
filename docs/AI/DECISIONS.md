@@ -712,3 +712,44 @@ A managed `sing-box` subprocess added substantial complexity (cross-platform bin
 **Trade-offs:**
 The SDK no longer supports direct VLESS/Shadowsocks node URLs. Callers requiring VLESS or Shadowsocks must run their own external tunnel/proxy and supply the resulting HTTP(S) proxy endpoint to the SDK.
 
+## ADR-037: Token Support Discovery and Unified Binary Kline Archive Architecture
+
+**Status:** Accepted by owner on 2026-09-19
+
+**Date:** 2026-09-19
+
+**Decision:**
+1. **Token Support Discovery & SQLite Caching**:
+   - Provide `client.token.isTokenSupported(token, provider)` and `client.token.getTokenSupport(token)`.
+   - In-memory cache + SQLite persistence (`sdk_token_support`).
+   - When probing an exchange:
+     - Binance: `/api/v3/exchangeInfo?symbol=${token}USDT` with strict 1s timeout (`timeoutMs: 1000`).
+     - Gate: `/api/v4/spot/currency_pairs/${token}_USDT` with strict 1s timeout (`timeoutMs: 1000`).
+     - Definite results (active/tradable = true, invalid symbol/not found = false) are cached to SQLite and memory.
+     - Uncertain outcomes (timeouts, network errors, 5xx) MUST NEVER be cached to SQLite.
+     - Support bulk preloading (`preloadSupportedTokens`) into memory (~2500 Binance, ~3000 Gate pairs, negligible RAM).
+2. **Priority Routing for Klines**:
+   - Expose `client.token.getKlines(request)` and `client.token.getKlinesPrices(request)`.
+   - Priority is strictly Binance first, then Gate as fallback.
+   - If neither supports the token, fail fast with `TOKEN_NOT_FOUND`.
+3. **Historical Archive Kline Ingestion (> 1 Natural Month)**:
+   - For ranges before the current natural month boundary (`< YYYY-MM-01 00:00:00 UTC`), do NOT fetch via REST API.
+   - Fetch monthly archive packages:
+     - Binance: `https://data.binance.vision/data/spot/monthly/klines/...` (.zip).
+     - Gate: `https://download.gatedata.org/spot/candlesticks_...` (.csv.gz).
+   - Enforce single concurrency (`AsyncLock`) across downloads ("一次下载一个").
+   - Standardize all exchange archives into a **Unified Fixed-Length Binary Format (`.bin`)** on disk:
+     - 16 bytes per candle: `[timestamp_ms (8 bytes UInt64LE), price_usd (8 bytes DoubleLE)]`.
+     - Completely homogenizes heterogeneous upstream exchange formats.
+     - Ultra-compact (~138 KB per month for 5m klines).
+     - Sub-millisecond `O(log N)` binary search range slicing without string parsing or decompression during query.
+   - 1-day disk cache TTL with automatic file cleanup (`fs.unlink` for `now - mtime > 86_400_000`).
+   - Seamless transparent range stitching: caller requests any `[start, end)` time range, internal logic stitches archive months + recent REST API data and returns clean sorted points.
+
+**Reason:**
+Heterogeneous upstream archives (ZIP vs GZ, seconds vs milliseconds, different column orders) require a unified adapter abstraction. JSON caching is memory-heavy, slow to parse, and takes 5-10x more disk space. A unified fixed-length binary file is 100% exchange-agnostic, extremely compact, and enables zero-copy binary search slicing.
+
+**Trade-offs:**
+Upstream archives must be decoded once during initial download to produce the `.bin` file. This one-time CPU cost is rewarded with instant subsequent reads and minimal disk consumption.
+
+

@@ -267,3 +267,31 @@ export type {
   PersistedCooldownRecord,
   SaveCooldownParams,
 } from "./storage/CooldownStore";
+
+export type {
+  KlineInterval,
+  KlinePoint,
+  KlineRequest,
+  KlineResult,
+  NormalizedKlineRequest,
+} from "./domain/klineModels";
+export { normalizeKlineRequest } from "./domain/klineModels";
+
+export type {
+  TokenSupportProvider,
+  TokenSupportRecord,
+  TokenSupportStatusMap,
+} from "./domain/tokenSupportModels";
+
+export { TokenSupportStore } from "./storage/TokenSupportStore";
+export { TokenSupportService } from "./price/TokenSupportService";
+export type { TokenSupportServiceOptions } from "./price/TokenSupportService";
+
+export { KlineBinaryCodec, KLINE_RECORD_SIZE } from "./price/archive/KlineBinaryCodec";
+export { KlineArchiveManager } from "./price/archive/KlineArchiveManager";
+export type { KlineArchiveManagerOptions } from "./price/archive/KlineArchiveManager";
+export type { ArchiveProviderAdapter } from "./price/archive/ArchiveProviderAdapter";
+export { BinanceArchiveAdapter } from "./price/archive/BinanceArchiveAdapter";
+export { GateArchiveAdapter } from "./price/archive/GateArchiveAdapter";
+export { UnifiedKlineService, getOverlappingCalendarMonths } from "./price/UnifiedKlineService";
+export type { UnifiedKlineServiceOptions } from "./price/UnifiedKlineService";

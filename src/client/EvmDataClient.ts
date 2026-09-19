@@ -53,6 +53,10 @@ import { AlertService } from "../alert/AlertService";
 import { SlackWebhookReporter } from "../alert/SlackWebhookReporter";
 import type { Clock } from "../execution/clock";
 import { ChainRegistry as PublicChainRegistry } from "../chains/ChainRegistry";
+import { TokenSupportStore } from "../storage/TokenSupportStore";
+import { TokenSupportService } from "../price/TokenSupportService";
+import { KlineArchiveManager } from "../price/archive/KlineArchiveManager";
+import { UnifiedKlineService } from "../price/UnifiedKlineService";
 
 export interface EvmDataClientOptions {
   readonly transport?: HttpTransport;
@@ -89,6 +93,9 @@ export class EvmDataClient {
   private readonly uniswapV3ArchiveRpcPool: EthereumArchiveRpcPool | null;
   private readonly storage: StorageAdapter;
   readonly cooldownStore: CooldownStore;
+  readonly tokenSupportStore: TokenSupportStore;
+  readonly tokenSupportService: TokenSupportService;
+  readonly klineArchiveManager: KlineArchiveManager;
   readonly sync: SyncService;
   readonly history: HistoryService;
   readonly price: PriceSyncService;
@@ -210,6 +217,21 @@ export class EvmDataClient {
       maxRangeWindows: this.configuration.maxRangeWindows,
     });
     const defiRpcServices = new Map<1 | 8453, RpcService>();
+    this.tokenSupportStore = new TokenSupportStore(this.storage);
+    this.tokenSupportService = new TokenSupportService(
+      this.tokenSupportStore,
+      options.transport === undefined ? {} : { transport: options.transport },
+    );
+    this.klineArchiveManager = new KlineArchiveManager();
+    const gateAdapter = (priceAdapters.find((a) => a.name === "gate") as GateAdapter | undefined) ??
+      new GateAdapter(options.transport === undefined ? {} : { transport: options.transport });
+    const unifiedKlineService = new UnifiedKlineService(
+      this.tokenSupportService,
+      this.klineArchiveManager,
+      this.binanceKlines,
+      gateAdapter,
+      options.transport === undefined ? {} : { transport: options.transport },
+    );
     this.token = new TokenService(
       executor,
       new BlockRangeScanner({
@@ -222,6 +244,8 @@ export class EvmDataClient {
       priceConfiguration.tokenAliases,
       this.binanceKlines,
       (chainId) => (chainId === 1 ? this.rpc ?? defiRpcServices.get(chainId) : defiRpcServices.get(chainId)) ?? null,
+      this.tokenSupportService,
+      unifiedKlineService,
     );
     const publicRegistry = new PublicChainRegistry(this.configuration.chains);
     this.sync = new SyncService({ storage: this.storage, address: this.address, token: this.token, chain: this.chain, resolveChain: (chain) => publicRegistry.resolve(chain), maxWindowBlocks: this.configuration.sync.maxWindowBlocks, reorgOverlapBlocks: this.configuration.sync.reorgOverlapBlocks });
@@ -532,6 +556,7 @@ export class EvmDataClient {
     if (this.uniswapV3ArchiveRpcPool !== null && !this.defiArchiveRpcPools.includes(this.uniswapV3ArchiveRpcPool) && this.uniswapV3ArchiveRpcPool !== this.archiveRpcPool) tasks.push(this.uniswapV3ArchiveRpcPool.initialize(signal));
     await this.storage.initialize();
     await this.restorePersistedCooldowns();
+    await this.tokenSupportService.initialize();
     await Promise.all(tasks);
   }
 

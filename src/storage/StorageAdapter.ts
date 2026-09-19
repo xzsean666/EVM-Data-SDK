@@ -38,11 +38,13 @@ CREATE TABLE IF NOT EXISTS sdk_replay_current(chain_id INTEGER NOT NULL,address 
 CREATE TABLE IF NOT EXISTS sdk_price_sync_scopes(scope_key TEXT PRIMARY KEY,next_from TEXT NOT NULL,target_to TEXT,updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS sdk_price_points(scope_key TEXT NOT NULL,timestamp TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(scope_key,timestamp));
 CREATE TABLE IF NOT EXISTS sdk_cooldown_states(resource_key TEXT PRIMARY KEY,category TEXT NOT NULL,env_key_name TEXT,failure_count INTEGER NOT NULL,current_cooldown_ms INTEGER NOT NULL,cooldown_until INTEGER,first_failure_at INTEGER,updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS sdk_token_support(token TEXT NOT NULL, provider TEXT NOT NULL, supported INTEGER NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(token, provider));
 CREATE INDEX IF NOT EXISTS sdk_erc20_transfers_scope_block ON sdk_erc20_transfers(chain_id,address,block_number);
 CREATE INDEX IF NOT EXISTS sdk_transactions_scope_block ON sdk_transactions(chain_id,address,block_number);
 CREATE INDEX IF NOT EXISTS sdk_internal_scope_block ON sdk_internal_native_transfers(chain_id,address,block_number);
 CREATE INDEX IF NOT EXISTS sdk_price_points_scope_time ON sdk_price_points(scope_key,timestamp);
 CREATE INDEX IF NOT EXISTS sdk_cooldown_states_category ON sdk_cooldown_states(category);
+CREATE INDEX IF NOT EXISTS sdk_token_support_token ON sdk_token_support(token);
 `;
 
 export class SqliteStorageAdapter implements StorageAdapter {
@@ -70,6 +72,7 @@ export class SqliteStorageAdapter implements StorageAdapter {
       this.db.prepare("INSERT OR IGNORE INTO sdk_schema_migrations(version, applied_at) VALUES(?, ?)").run(3, new Date().toISOString());
       this.db.prepare("INSERT OR IGNORE INTO sdk_schema_migrations(version, applied_at) VALUES(?, ?)").run(4, new Date().toISOString());
       this.db.prepare("INSERT OR IGNORE INTO sdk_schema_migrations(version, applied_at) VALUES(?, ?)").run(5, new Date().toISOString());
+      this.db.prepare("INSERT OR IGNORE INTO sdk_schema_migrations(version, applied_at) VALUES(?, ?)").run(6, new Date().toISOString());
     } catch (error) {
       this.db = null;
       throw storageError("STORAGE_MIGRATION_FAILED", "SQLite storage initialization failed.", error);

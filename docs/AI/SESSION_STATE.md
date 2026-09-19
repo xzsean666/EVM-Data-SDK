@@ -2,9 +2,9 @@
 
 ## 1. 当前基本信息
 
-- **当前 Goal**: 模块化 examples 示例目录，并在多源现货代币价格聚合器中集成 Gate.io (GateAdapter)。
-- **当前 Task**: 集成 Gate.io 现货价格提供商至 `client.token.getPriceHistory`，完善单元测试与示例。
-- **当前状态**: `DONE`（GateAdapter 接入完成，全量测试 48 个文件 471 个用例通过，examples 运行验证通过）。
+- **当前 Goal**: 优化价格体系：Token 支持度检测、Kline 优先级聚合（Binance -> Gate）与统一定长二进制历史归档缓存系统。
+- **当前 Task**: [TASK-002](tasks/TASK-002.md) 实现 TokenSupportService、KlineBinaryCodec、KlineArchiveManager 与 UnifiedKlineService。
+- **当前状态**: `DONE`
 
 ---
 
@@ -31,51 +31,55 @@
    - 统一采用纯轻量级的 `ProxyPool` 调度标准 HTTP/HTTPS 代理。
    - 确立全局 Proxy-Only 规范：代理模式下严格禁止 direct 直连（`allowDirect: false`），无代理可用时快速失败返回脱敏 `PROXY_ERROR`。
    - 支持自适应区块区间的 ERC-20 与交易流式分片读取 (`BlockRangeScanner`)。
-6. **模块化 Examples 示例体系**
+6. **Token 支持度检测与确定性 SQLite 缓存**
+   - `TokenSupportService` 实现内存缓存 + SQLite 持久化 + 1s 严格超时探活（确定性 200/400/404 缓存，超时/网络错误/5xx 绝不写库）。
+   - 支持 `preloadSupportedTokens` 批量预载 Binance 与 Gate 交易对至内存。
+7. **统一定长二进制历史归档与 Kline 聚合服务 (ADR-037)**
+   - `KlineBinaryCodec` 实现 16 字节紧凑定长二进制文件 (`.bin`) 存储（UInt64LE 毫秒时间戳 + DoubleLE 价格），单月 5m 数据仅 ~138 KB，支持 $O(\log N)$ 二分快速区间切片。
+   - `KlineArchiveManager` 依托纯 Node.js 内置 `zlib` 解压 Binance ZIP 与 Gate CSV.GZ 归档包，通过 `AsyncLock` 保证单并发下载，24 小时 TTL 磁盘缓存并自动清理过期文件。
+   - `UnifiedKlineService` 实现按自然月月初自动切分（历史月归档 + 当月 REST API），合并去重并统一暴露 `getKlines` 与 `getKlinesPrices`（严格 Binance 优先，Gate 次之）。
+8. **模块化 Examples 示例体系**
    - `examples/` 目录下提供 11 个独立模块文件（`01_env_and_client_init.ts` 至 `11_alerts_and_cooldowns.ts`）与 `common.ts`、`README.md`。
 
 ---
 
 ## 3. 本次会话修改与创建的文件
 
-### 删除的文件：
-- `src/proxy/SingBoxBinaryManager.ts`
-- `src/proxy/SingBoxConfigBuilder.ts`
-- `src/proxy/SingBoxProxyManager.ts`
-- `src/proxy/SingBoxRuntime.ts`
-- `src/proxy/SingBoxUrlParser.ts`
-- `tests/unit/sing-box.test.ts`
-- `examples/sing-box-prewarm/`（整个示例目录）
-
 ### 创建的文件：
-- `docs/AI/tasks/TASK-001.md`（TASK-001 细粒度任务规范，已标记 DONE）
+- `src/domain/klineModels.ts`
+- `src/domain/tokenSupportModels.ts`
+- `src/storage/TokenSupportStore.ts`
+- `src/price/TokenSupportService.ts`
+- `src/price/archive/KlineBinaryCodec.ts`
+- `src/price/archive/ArchiveProviderAdapter.ts`
+- `src/price/archive/BinanceArchiveAdapter.ts`
+- `src/price/archive/GateArchiveAdapter.ts`
+- `src/price/archive/KlineArchiveManager.ts`
+- `src/price/UnifiedKlineService.ts`
+- `tests/unit/kline-binary-codec.test.ts`
+- `tests/unit/token-support.test.ts`
+- `tests/unit/kline-archive-manager.test.ts`
+- `tests/unit/unified-kline-service.test.ts`
+- `docs/AI/tasks/TASK-002.md`
 
 ### 修改的文件：
-- `src/domain/configuration.ts`（移除 SingBox 配置类型、Schema 与 normalize 方法）
-- `src/domain/errors.ts`（移除 8 个 `SING_BOX_*` 错误码）
-- `src/env/EnvLoader.ts`（移除 `getSingBoxUrls`、`findLocalSingBoxBinary`，净化代理解析）
-- `src/index.ts`（清理 sing-box 导出）
-- `src/client/EvmDataClient.ts`（移除 `SingBoxProxyManager`，统一注入与共享单例 `ProxyPool`）
-- `src/execution/RequestExecutor.ts`（移除 `advancedProxyRoute` 与 `acquireManagedProxy`）
-- `src/price/PriceRequestExecutor.ts`（移除 `advancedProxyRoute`，支持共享 `proxyPool` 并优化 proxy-only 校验）
-- `src/services/ApiChainService.ts`（移除 `advancedProxyRoute`，直接走 `ProxyPool`）
-- `src/rpc/ArchiveRpcTransport.ts`（清理注释中的 sing-box 引用）
-- `tests/unit/client.test.ts`（重构代理测试为标准 HTTP 代理测试）
-- `tests/unit/env-loader.test.ts`（移除 `SING_BOX_URL` 测试）
-- `docs/AI/GOAL.md`（同步 v0.3 里程碑说明）
-- `docs/AI/ARCHITECTURE.md`（更新代理架构章节与模块边界）
-- `docs/AI/DECISIONS.md`（标记 ADR-023 废弃，新增 ADR-036 HTTP Proxy-Only）
-- `docs/AI/TASK_INDEX.md`（归档 TASK-001）
+- `src/storage/StorageAdapter.ts`（增加 `sdk_token_support` 表结构与版本 6 迁移）
+- `src/services/TokenService.ts`（接入 TokenSupportService 与 UnifiedKlineService）
+- `src/client/EvmDataClient.ts`（装配并依赖注入新增服务）
+- `src/index.ts`（导出新增公开类型与服务）
+- `tests/unit/evm-data-sync-replay.test.ts`（同步更新版本 6 迁移断言）
+- `docs/AI/DECISIONS.md`（记录 ADR-037 统一定长二进制归档与 Token 支持度检测架构）
+- `docs/AI/TASK_INDEX.md`（归档 TASK-002）
 - `docs/AI/SESSION_STATE.md`（更新当前状态至 DONE）
+- `docs/NEXT_SESSION.md`（更新交接文档）
 
 ---
 
 ## 4. 已运行的验证命令及结果
 
-- `grep -rnI -E "(sing-box|singbox|vless)" src/ tests/`: 确认 0 匹配。
 - `pnpm typecheck`: 通过（0 错误）。
 - `pnpm lint`: 通过（0 警告，0 错误）。
-- `pnpm test`: 通过（47 个测试文件，463 个测试用例全部通过）。
+- `pnpm test`: 通过（52 个测试文件，488 个测试用例全部通过）。
 - `pnpm build`: 通过（ESM, CJS, d.ts 正常打包）。
 - `pnpm test:package`: 通过（tarball 打包与导入验证成功）。
 
@@ -87,14 +91,15 @@
    - 现 `package.json` 中的包名为私有占位符，待确定最终 npm scope 与名称。
    - 开源许可证（License）待最终确定。
 2. **Git 提交身份**：
-   - 遵循规范，当前不自动执行提交或推送。
+   - 遵循规范，当前不自动执行推送。
 
 ---
 
 ## 6. 风险与假设 (Risks and Assumptions)
 
-- 调用方现已统一使用标准 HTTP/HTTPS 代理服务，不再需要 SDK 充当客户端拉起外部隧道进程。
-- Chainlink / DeFi Archive RPC 节点继续保持 direct-only 约束（ADR-028），杜绝私有节点 API Token 经公共代理外泄。
+- 归档下载依托交易所公开数据源（Binance data.binance.vision、Gate data.gateapi.io），不消耗 REST API 频率额度。
+- 单并发下载控制避免同时拉取过多归档包耗尽带宽。
+- 1 天本地磁盘缓存自动基于 mtime 清理，无常驻后台定时器。
 
 ---
 
@@ -112,3 +117,4 @@
 4. `docs/AI/SESSION_STATE.md`
 5. `docs/AI/ARCHITECTURE.md`
 6. `docs/AI/DECISIONS.md`
+

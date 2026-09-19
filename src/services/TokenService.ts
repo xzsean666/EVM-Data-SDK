@@ -18,6 +18,11 @@ import { normalizeGateKlineRequest } from "../domain/gateKlineModels";
 import type { Erc20MulticallAtBlockRequest, Erc20MulticallAtBlockResult } from "../domain/erc20MulticallModels";
 import type { MulticallAtBlockRequest, MulticallAtBlockResult } from "../domain/rpcModels";
 import type { RpcService } from "../rpc/RpcService";
+import type { KlinePoint, KlineRequest, KlineResult } from "../domain/klineModels";
+import { normalizeKlineRequest } from "../domain/klineModels";
+import type { TokenSupportProvider, TokenSupportStatusMap } from "../domain/tokenSupportModels";
+import type { TokenSupportService } from "../price/TokenSupportService";
+import type { UnifiedKlineService } from "../price/UnifiedKlineService";
 
 export class TokenService {
   private nextGateEndpoint = 0;
@@ -29,6 +34,8 @@ export class TokenService {
     private readonly tokenAliases: Readonly<Record<string, string>> = {},
     private readonly binanceAdapter: BinanceAdapter | null = null,
     private readonly rpcResolver: ((chainId: 1 | 8453) => RpcService | null) | null = null,
+    private readonly tokenSupportService: TokenSupportService | null = null,
+    private readonly unifiedKlineService: UnifiedKlineService | null = null,
   ) {}
 
   getErc20Transfers(request: Erc20TransfersRequest): Promise<Page<Erc20Transfer>> {
@@ -163,4 +170,69 @@ export class TokenService {
     await Promise.all(Array.from({ length: Math.min(3, chunks.length) }, () => worker()));
     return results.flat().sort((a, b) => a.timestamp - b.timestamp);
   }
+
+  /**
+   * Fetches unified K-line data, prioritizing Binance first, then Gate.
+   * Data older than 1 natural month is fetched via monthly archive packages (.bin cached).
+   * Data in the current natural month is fetched via REST API.
+   */
+  getKlines(request: KlineRequest): Promise<KlineResult> {
+    if (!this.unifiedKlineService) {
+      return Promise.reject(unsupportedOperation("Unified kline service is not configured."));
+    }
+    return this.unifiedKlineService.getKlines(normalizeKlineRequest(request));
+  }
+
+  /**
+   * Fetches unified K-line price points, prioritizing Binance first, then Gate.
+   */
+  getKlinesPrices(request: KlineRequest): Promise<readonly KlinePoint[]> {
+    if (!this.unifiedKlineService) {
+      return Promise.reject(unsupportedOperation("Unified kline service is not configured."));
+    }
+    return this.unifiedKlineService.getKlinesPrices(normalizeKlineRequest(request));
+  }
+
+  /**
+   * Checks whether a specific provider (binance or gate) supports the token.
+   * Checks: in-memory cache -> SQLite -> 1s probe.
+   * Timeouts/uncertain outcomes are NOT cached to SQLite.
+   */
+  isTokenSupported(token: string, provider: TokenSupportProvider, signal?: AbortSignal): Promise<boolean> {
+    if (!this.tokenSupportService) {
+      return Promise.reject(unsupportedOperation("Token support service is not configured."));
+    }
+    return this.tokenSupportService.isTokenSupported(token, provider, signal);
+  }
+
+  /**
+   * Returns a map of provider -> support status for the given token.
+   */
+  getTokenSupport(token: string, signal?: AbortSignal): Promise<TokenSupportStatusMap> {
+    if (!this.tokenSupportService) {
+      return Promise.reject(unsupportedOperation("Token support service is not configured."));
+    }
+    return this.tokenSupportService.getTokenSupport(token, signal);
+  }
+
+  /**
+   * Returns a list of providers that definitively support the given token.
+   */
+  getSupportedProviders(token: string, signal?: AbortSignal): Promise<readonly TokenSupportProvider[]> {
+    if (!this.tokenSupportService) {
+      return Promise.reject(unsupportedOperation("Token support service is not configured."));
+    }
+    return this.tokenSupportService.getSupportedProviders(token, signal);
+  }
+
+  /**
+   * Preloads all spot trading pairs from Binance and Gate into memory and SQLite.
+   */
+  preloadSupportedTokens(providers?: readonly TokenSupportProvider[]): Promise<void> {
+    if (!this.tokenSupportService) {
+      return Promise.reject(unsupportedOperation("Token support service is not configured."));
+    }
+    return this.tokenSupportService.preloadSupportedTokens(providers);
+  }
 }
+

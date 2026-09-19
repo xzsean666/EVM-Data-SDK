@@ -18,10 +18,12 @@ Official documentation:
 
 - Exchange information: https://developers.binance.com/docs/binance-spot-api-docs/rest-api/general-endpoints#exchange-information
 - Kline/candlestick data: https://developers.binance.com/docs/binance-spot-api-docs/rest-api/market-data-endpoints#klinecandlestick-data
+- Public data repository: https://github.com/binance/binance-public-data
 
 SDK endpoints: https://api.binance.com/api/v3/exchangeInfo and /api/v3/klines.
+Monthly archive endpoint: `https://data.binance.vision/data/spot/monthly/klines/{SYMBOL}/{INTERVAL}/{SYMBOL}-{INTERVAL}-{YYYY-MM}.zip`
 
-Important notes: The adapter resolves only an active Spot BASEUSDT market and requests interval=1d. Binance accepts up to 1,000 klines per request, so the adapter chunks larger internal ranges at 1,000 calendar days (the public v0.2 maximum is 366). It maps open time, open, high, low, close, and volume; price is close. HTTP 418/429 is rate-limited and retryable within the bounded price attempt policy.
+Important notes: The adapter resolves only an active Spot BASEUSDT market and requests interval=1d (or intraday intervals like 5m/1h for klines). Binance accepts up to 1,000 klines per request, so the adapter chunks larger internal ranges at 1,000 calendar days (the public v0.2 maximum is 366). It maps open time, open, high, low, close, and volume; price is close. HTTP 418/429 is rate-limited and retryable within the bounded price attempt policy. For data older than the current natural month, monthly archive ZIP files are downloaded with concurrency 1, decoded in pure Node.js (`zlib.inflateRawSync`), and cached in a unified binary format (`.bin`).
 
 ### OKX Market API
 
@@ -63,10 +65,13 @@ Official documentation:
 
 - Currency pairs: https://www.gate.io/docs/developers/apiv4/en/#get-details-of-a-specifc-currency-pair
 - Candlesticks: https://www.gate.io/docs/developers/apiv4/en/#market-candlesticks
+- Historical Quotation Data: https://www.gate.io/docs/developers/historical_data/
 
 SDK endpoints: `https://api.gateio.ws/api/v4/spot/currency_pairs/{pair}` and `/api/v4/spot/candlesticks`.
+Monthly archive endpoint: `https://download.gatedata.org/spot/candlesticks_{INTERVAL}/{YYYYMM}/{MARKET}-{YYYYMM}.csv.gz`
 
-Important notes: The adapter selects only a live `trade_status="tradable"` `BASE_USDT` spot market. It requests `interval=1d` with `from` and `to` timestamps in Unix seconds. Gate candlestick rows follow `[timestamp_sec, quote_volume, close, high, low, open, base_volume, is_final]`; price maps to `close`. The adapter chunks queries into 180-day intervals to avoid provider truncation. Missing calendar days are surfaced in `missingDates`. HTTP 429 is parsed with `retry-after` header and classified as `RATE_LIMITED`.
+Important notes: The adapter selects only a live `trade_status="tradable"` `BASE_USDT` spot market. It requests `interval=1d` with `from` and `to` timestamps in Unix seconds. Gate candlestick rows follow `[timestamp_sec, volume, close, high, low, open]`; price maps to `close` (or `open` for legacy 1h). The adapter chunks queries into 180-day intervals to avoid provider truncation. Missing calendar days are surfaced in `missingDates`. HTTP 429 is parsed with `retry-after` header and classified as `RATE_LIMITED`. For data older than the current natural month, monthly archive `.csv.gz` files are downloaded with concurrency 1, decompressed in pure Node.js (`zlib.gunzipSync`), and cached in a unified binary format (`.bin`).
+
 
 ## 1. Etherscan
 
