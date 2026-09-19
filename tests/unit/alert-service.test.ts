@@ -279,4 +279,48 @@ describe("AlertService", () => {
     expect(alchemySummary?.failedKeys).toBe(1);
     expect(alchemySummary?.availableKeys).toBe(0);
   });
+
+  it("supports pluggable custom AlertReporter implementations", async () => {
+    const clock = new FakeClock();
+    const reportedCalls: Array<{ destination: string; itemCount: number }> = [];
+
+    const customReporter = {
+      async report(
+        destination: string,
+        items: readonly import("../../src/alert/SlackWebhookReporter").AlertFaultItem[],
+      ) {
+        reportedCalls.push({ destination, itemCount: items.length });
+        return { success: true };
+      },
+    };
+
+    const rpcPool = new EthereumArchiveRpcPool({
+      endpoints: [{ id: "ep-fail-1", url: "https://fail.example", envKeyName: "CUSTOM_FAIL_KEY" }],
+      clock,
+    });
+    for (let i = 0; i < 10; i += 1) {
+      rpcPool.reportOutcome("ep-fail-1", "failure");
+    }
+
+    const service = new AlertService({
+      configuration: {
+        enabled: true,
+        slackWebhookUrl: "custom://destination-channel",
+        reportIntervalMs: 60_000,
+      },
+      reporter: customReporter,
+      clock,
+      getSources: () => ({
+        rpcPools: [rpcPool],
+      }),
+    });
+
+    const result = await service.checkAndReportAlerts();
+    expect(result).toBe(true);
+    expect(reportedCalls).toHaveLength(1);
+    expect(reportedCalls[0]).toEqual({
+      destination: "custom://destination-channel",
+      itemCount: 1,
+    });
+  });
 });

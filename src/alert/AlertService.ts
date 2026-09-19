@@ -3,6 +3,7 @@ import type { Clock } from "../execution/clock";
 import { systemClock } from "../execution/clock";
 import type { CredentialPool } from "../execution/CredentialPool";
 import type { RpcPool as EthereumArchiveRpcPool } from "evm-call";
+import type { AlertReporter } from "./AlertReporter";
 import { SlackWebhookReporter, type AlertFaultItem, type KeyFamilySummary } from "./SlackWebhookReporter";
 
 export interface AlertSources {
@@ -12,7 +13,7 @@ export interface AlertSources {
 
 export interface AlertServiceOptions {
   readonly configuration: NormalizedAlertConfiguration;
-  readonly reporter?: SlackWebhookReporter | undefined;
+  readonly reporter?: AlertReporter | undefined;
   readonly clock?: Clock | undefined;
   readonly getSources?: (() => AlertSources) | undefined;
 }
@@ -55,7 +56,7 @@ interface RawFault {
 
 export class AlertService {
   private readonly configuration: NormalizedAlertConfiguration;
-  private readonly reporter: SlackWebhookReporter;
+  private readonly reporter: AlertReporter;
   private readonly clock: Clock;
   private readonly getSources?: (() => AlertSources) | undefined;
   private lastReportSentAt: number | null = null;

@@ -231,6 +231,28 @@ export class CredentialPool {
     }
   }
 
+  getLeaseByValue(value: string): CredentialLease | undefined {
+    const entry = this.entries.find((candidate) => candidate.value === value);
+    return entry?.lease;
+  }
+
+  isKeyCoolingDown(value: string, now = this.clock.now()): boolean {
+    const entry = this.entries.find((candidate) => candidate.value === value);
+    if (entry === undefined) return false;
+    return entry.disabled || entry.tracker.isCoolingDown(now) || (entry.cooldownUntil !== null && entry.cooldownUntil > now);
+  }
+
+  reportByValue(
+    value: string,
+    outcome: CredentialPoolOutcome,
+    now = this.clock.now(),
+    cooldownMs = this.rateCooldownMs,
+  ): void {
+    const entry = this.entries.find((candidate) => candidate.value === value);
+    if (entry === undefined) return;
+    this.report(entry.lease, outcome, now, cooldownMs);
+  }
+
   hasAvailable(now = this.clock.now()): boolean {
     return this.entries.some((entry) => isUsable(entry, now));
   }

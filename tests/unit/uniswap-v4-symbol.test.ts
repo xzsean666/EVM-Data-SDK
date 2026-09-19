@@ -26,4 +26,19 @@ describe("Uniswap V4 symbol lookup", () => {
     await expect(service.getTokenPricesAtBlockUsd({ chain: 1, blockNumber: "25707989", tokens: ["ASTR"] })).rejects.toMatchObject({ code: "UNISWAP_V4_PRICE_DATA_UNAVAILABLE" });
     expect(calls[0]?.callData).toMatch(/^0xc815641c/);
   });
+
+  it("encodes a PoolKey and computes deterministic 32-byte Keccak-256 PoolId without throwing", async () => {
+    const { encodePoolKey, poolIdFromKey, keccak256 } = await import("../../src/defi/uniswap/v4/UniswapV4PoolKeyCodec");
+    expect(keccak256(Buffer.from("test"))).toBe("0x9c22ff5f21f0b81b113e63f7db6da94fedef11b2119b4088b89664fb9a3cb658");
+    const poolKey = encodePoolKey({
+      currency0: "0x0000000000000000000000000000000000000001",
+      currency1: "0x0000000000000000000000000000000000000002",
+      fee: 3000,
+      tickSpacing: 60,
+      hooks: "0x0000000000000000000000000000000000000000",
+    });
+    expect(poolKey).toMatch(/^0x[0-9a-f]{320}$/);
+    const poolId = poolIdFromKey(poolKey);
+    expect(poolId).toMatch(/^0x[0-9a-f]{64}$/);
+  });
 });

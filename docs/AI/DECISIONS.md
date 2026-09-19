@@ -772,5 +772,29 @@ Centralizing raw RPC pooling, stepped backoff cooldowns, native Buffer/BigInt Mu
 **Trade-offs:**
 Requires maintaining an external dependency with pinned git hashes. This trade-off is mitigated by strict CI/CD verification (`pnpm check`) and the standardized upgrade SOP.
 
+## ADR-039: Comprehensive Architecture Optimization, Transport Convergence, and Dead-Stub Pruning
+
+**Status:** Accepted by owner on 2026-09-19
+
+**Date:** 2026-09-19
+
+**Decision:**
+1. **Network Transport Convergence (`KlineArchiveManager`)**:
+   - Refactor `KlineArchiveManager` to strictly use the `HttpTransport` abstraction instead of raw `axios.get`.
+   - Support `responseType: "arraybuffer"` in `HttpRequest` and `AxiosHttpTransport`.
+   - Ensure all kline archive downloads strictly respect proxy configurations (`ProxyPool`), timeouts, and error redaction.
+2. **ApiChainService & CredentialPool Cooldown Convergence**:
+   - Link `ApiChainService` with `CredentialPool` so that candidate iterations check cooldown state and record outcomes (`success`, `rate_limited`, `authentication_failed`).
+   - Eliminate state desynchronization where API keys throttled in `ApiChainService` remained unmarked in the central `CredentialPool`.
+3. **Uniswap V4 Dead-Stub Pruning & Real Keccak256 Codec**:
+   - Remove throwing stub in `poolIdFromKey` and implement a pure-JS Keccak256 calculation for `encodePoolKey` / `poolIdFromKey`.
+   - Remove fake candidate pools (`poolDeploymentBlock: "999999999999999999"`, `fee: 0`) from `UNISWAP_V4_TOKEN_REGISTRY` so that queries evaluate only verified, genuine pools and fail predictably without synthetic error noise.
+4. **Decoupled Alerting Architecture**:
+   - Introduce generic `AlertReporter` interface in `AlertService`.
+   - Decouple `AlertService` from hardcoded Slack message formats, making `SlackWebhookReporter` an implementation of `AlertReporter`.
+5. **Scope Boundary & CEX Kline Archive Subsystem**:
+   - As explicitly directed by the project owner, the CEX archive and binary Kline caching subsystem (`src/price/archive/`, `TokenSupportService.ts`, `UnifiedKlineService.ts`) is an intentional, core design for rapid kline retrieval and remains preserved in its working state.
+
+
 
 

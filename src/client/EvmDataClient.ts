@@ -52,6 +52,7 @@ import { SyncService } from "../sync/SyncService";
 import { HistoryService } from "../history/HistoryService";
 import { PriceSyncService } from "../price/PriceSyncService";
 import { AlertService } from "../alert/AlertService";
+import type { AlertReporter } from "../alert/AlertReporter";
 import { SlackWebhookReporter } from "../alert/SlackWebhookReporter";
 import type { Clock } from "../execution/clock";
 import { ChainRegistry as PublicChainRegistry } from "../chains/ChainRegistry";
@@ -72,7 +73,7 @@ export interface EvmDataClientOptions {
   readonly defiArchiveRpcPools?: Partial<Record<"ethereum" | "base", EthereumArchiveRpcPool>>;
   /** Test seam for the opt-in Uniswap V3 Ethereum Archive RPC pool. */
   readonly uniswapV3ArchiveRpcPool?: EthereumArchiveRpcPool;
-  readonly alertReporter?: SlackWebhookReporter;
+  readonly alertReporter?: AlertReporter;
   readonly alertService?: AlertService;
   readonly clock?: Clock;
 }
@@ -212,6 +213,7 @@ export class EvmDataClient {
       entries.map((entry) => entry.adapter),
       {
         proxyPool,
+        credentialPools: this.credentialPools,
       },
     );
     this.address = new AddressService(executor, this.chain, {

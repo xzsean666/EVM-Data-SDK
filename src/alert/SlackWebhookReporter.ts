@@ -28,11 +28,10 @@ export interface SlackWebhookReporterOptions {
   readonly timeoutMs?: number;
 }
 
-export interface SlackWebhookReportResult {
-  readonly success: boolean;
-  readonly status?: number | null;
-  readonly error?: string;
-}
+import type { AlertReporter, AlertReportResult } from "./AlertReporter";
+
+export type { AlertReporter, AlertReportResult };
+export type SlackWebhookReportResult = AlertReportResult;
 
 export function formatDuration(durationMs: number): string {
   if (durationMs <= 0) {
@@ -178,7 +177,7 @@ export function buildSlackAlertPayload(
   });
 }
 
-export class SlackWebhookReporter {
+export class SlackWebhookReporter implements AlertReporter {
   private readonly transport: HttpTransport;
   private readonly timeoutMs: number;
 

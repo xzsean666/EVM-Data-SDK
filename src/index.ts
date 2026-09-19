@@ -259,10 +259,15 @@ export {
 } from "./alert/SlackWebhookReporter";
 export type {
   AlertFaultItem,
+  KeyFamilySummary,
   SlackWebhookPayload,
   SlackWebhookReporterOptions,
   SlackWebhookReportResult,
 } from "./alert/SlackWebhookReporter";
+export type {
+  AlertReporter,
+  AlertReportResult,
+} from "./alert/AlertReporter";
 
 export { AlertService } from "./alert/AlertService";
 export type {

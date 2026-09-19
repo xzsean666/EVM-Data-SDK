@@ -2,9 +2,9 @@
 
 ## 1. 当前基本信息
 
-- **当前 Goal**: 将所有与 EVM RPC 的底层交互委托至 `/ssd0/git/evm-call` 基座，建立 Context 文档并固化基于 Git Hash 的平滑升级机制，彻底清理项目内冗余老代码与垫片。
-- **当前 Task**: [TASK-003](tasks/TASK-003.md) 引入 `evm-call` Git 依赖、生成 Context 规范文档、彻底清理 20 个冗余文件。
-- **当前状态**: `DONE` (Standby 待命)
+- **当前 Goal**: 全面架构优化与治理（ADR-039 & TASK-004）已全部完成并通过全套验证。
+- **当前 Task**: [TASK-004](tasks/TASK-004.md) 全面架构优化与治理。
+- **当前状态**: `STANDBY` (已就绪并归档)
 
 ---
 

@@ -23,8 +23,11 @@ import type {
 } from '../providers/DataProviderAdapter'
 import { ProxyPool } from '../execution/ProxyPool'
 
+import type { CredentialPool } from '../execution/CredentialPool'
+
 export interface ApiChainServiceOptions {
   readonly proxyPool: ProxyPool
+  readonly credentialPools?: ReadonlyMap<string, CredentialPool> | undefined
 }
 
 /** API-only chain metadata operations backed by indexed explorer APIs. */
@@ -33,9 +36,11 @@ export class ApiChainService {
   private readonly providers: readonly {
     readonly adapter: DataProviderAdapter
     readonly apiKeys: readonly string[]
+    readonly configurationId?: string | undefined
   }[]
   private readonly proxyPool: ProxyPool
   private readonly allowDirect: boolean
+  private readonly credentialPools?: ReadonlyMap<string, CredentialPool> | undefined
   private readonly transactionContextCache = new Map<string, { readonly value: TransactionContext; readonly expiresAt: number }>()
   private readonly transactionContextInFlight = new Map<string, Promise<TransactionContext>>()
   private readonly transactionContextCacheTtlMs = 60_000
@@ -48,9 +53,12 @@ export class ApiChainService {
     this.registry = new ChainRegistry(configuration.chains)
     this.proxyPool = options.proxyPool
     this.allowDirect = configuration.requestPolicy.allowDirect ?? true
+    this.credentialPools = options.credentialPools
     this.providers = adapters.flatMap((adapter, index) => {
-      const apiKeys = configuration.providers[index]?.apiKeys ?? []
-      return apiKeys.length === 0 ? [] : [{ adapter, apiKeys }]
+      const providerConfig = configuration.providers[index]
+      const apiKeys = providerConfig?.apiKeys ?? []
+      const configurationId = providerConfig ? `${providerConfig.kind}-${index + 1}` : undefined
+      return apiKeys.length === 0 ? [] : [{ adapter, apiKeys, configurationId }]
     })
   }
 
@@ -322,8 +330,10 @@ export class ApiChainService {
     let lastError: unknown
     for (const configuredProvider of this.providers) {
       if (!(configuredProvider.adapter instanceof EtherscanAdapter)) continue
+      const pool = configuredProvider.configurationId ? this.credentialPools?.get(configuredProvider.configurationId) : undefined
       for (const apiKey of configuredProvider.apiKeys) {
-        const candidate = { adapter: configuredProvider.adapter, apiKey }
+        if (pool?.isKeyCoolingDown(apiKey)) continue
+        const candidate = { adapter: configuredProvider.adapter, apiKey, configurationId: configuredProvider.configurationId }
         try {
           return await this.withCandidateContext(chain, candidate, signal, (context) =>
             work(configuredProvider.adapter as EtherscanAdapter, context),
@@ -347,9 +357,12 @@ export class ApiChainService {
     for (const configuredProvider of this.providers) {
       const adapter = configuredProvider.adapter
       if (!(adapter instanceof EtherscanAdapter) && !(adapter instanceof AlchemyAdapter)) continue
+      const pool = configuredProvider.configurationId ? this.credentialPools?.get(configuredProvider.configurationId) : undefined
       for (const apiKey of configuredProvider.apiKeys) {
+        if (pool?.isKeyCoolingDown(apiKey)) continue
+        const candidate = { adapter, apiKey, configurationId: configuredProvider.configurationId }
         try {
-          return await this.withCandidateContext(chain, { adapter, apiKey }, signal, (context) => work(adapter, context))
+          return await this.withCandidateContext(chain, candidate, signal, (context) => work(adapter, context))
         } catch (error) {
           lastError = error
           if (!canTryAnotherApiCredential(error)) throw error
@@ -390,9 +403,12 @@ export class ApiChainService {
       if (!(adapter instanceof EtherscanAdapter) &&
           !(adapter instanceof MoralisAdapter) &&
           !(options.includeAlchemy === true && adapter instanceof AlchemyAdapter)) continue
+      const pool = configuredProvider.configurationId ? this.credentialPools?.get(configuredProvider.configurationId) : undefined
       for (const apiKey of configuredProvider.apiKeys) {
+        if (pool?.isKeyCoolingDown(apiKey)) continue
+        const candidate = { adapter, apiKey, configurationId: configuredProvider.configurationId }
         try {
-          return await this.withCandidateContext(chain, { adapter, apiKey }, signal, (context) =>
+          return await this.withCandidateContext(chain, candidate, signal, (context) =>
             work(adapter, context),
           )
         } catch (error) {
@@ -414,9 +430,12 @@ export class ApiChainService {
     for (const configuredProvider of this.providers) {
       const adapter = configuredProvider.adapter
       if (!(adapter instanceof MoralisAdapter)) continue
+      const pool = configuredProvider.configurationId ? this.credentialPools?.get(configuredProvider.configurationId) : undefined
       for (const apiKey of configuredProvider.apiKeys) {
+        if (pool?.isKeyCoolingDown(apiKey)) continue
+        const candidate = { adapter, apiKey, configurationId: configuredProvider.configurationId }
         try {
-          return await this.withCandidateContext(chain, { adapter, apiKey }, signal, (context) =>
+          return await this.withCandidateContext(chain, candidate, signal, (context) =>
             work(adapter, context),
           )
         } catch (error) {
@@ -438,9 +457,12 @@ export class ApiChainService {
     for (const configuredProvider of this.providers) {
       const adapter = configuredProvider.adapter
       if (!(adapter instanceof MoralisAdapter)) continue
+      const pool = configuredProvider.configurationId ? this.credentialPools?.get(configuredProvider.configurationId) : undefined
       for (const apiKey of configuredProvider.apiKeys) {
+        if (pool?.isKeyCoolingDown(apiKey)) continue
+        const candidate = { adapter, apiKey, configurationId: configuredProvider.configurationId }
         try {
-          return await this.withCandidateContext(chain, { adapter, apiKey }, signal, (context) =>
+          return await this.withCandidateContext(chain, candidate, signal, (context) =>
             work(adapter, context),
           )
         } catch (error) {
@@ -454,17 +476,26 @@ export class ApiChainService {
 
   private async withCandidateContext<T>(
     chain: ReturnType<ChainRegistry['resolve']>,
-    candidate: { readonly adapter: DataProviderAdapter; readonly apiKey: string },
+    candidate: { readonly adapter: DataProviderAdapter; readonly apiKey: string; readonly configurationId?: string | undefined },
     signal: AbortSignal | undefined,
     work: (context: ProviderAttemptContext) => Promise<T>,
   ): Promise<T> {
+    const pool = candidate.configurationId ? this.credentialPools?.get(candidate.configurationId) : undefined
     const proxy = await this.acquireProxy()
     try {
       const result = await work(providerContext(chain, candidate.apiKey, signal, proxy))
       this.reportProxy(proxy, 'success')
+      pool?.reportByValue(candidate.apiKey, 'success')
       return result
     } catch (error) {
       this.reportProxy(proxy, proxyOutcome(error))
+      if (pool && isEvmDataError(error)) {
+        if (error.code === 'AUTHENTICATION_FAILED') {
+          pool.reportByValue(candidate.apiKey, 'authentication_failed')
+        } else if (error.code === 'RATE_LIMITED' || (error.retryable && /rate|429|limit/i.test(error.message))) {
+          pool.reportByValue(candidate.apiKey, 'rate_limited')
+        }
+      }
       if (proxy !== null && this.allowDirect && proxyOutcome(error) === 'proxy_failure') {
         return await work(providerContext(chain, candidate.apiKey, signal, null))
       }
