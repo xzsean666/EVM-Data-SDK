@@ -1,4 +1,4 @@
-import type { MulticallAtBlockCall, MulticallAtBlockCallResult } from "../domain/rpcModels";
+import type { MulticallAtBlockCall, MulticallAtBlockCallResult } from "evm-call";
 import type { DeFiTokenDefinition } from "./DeFiTokenDefinition";
 
 export interface DeFiAdapterEvaluation {

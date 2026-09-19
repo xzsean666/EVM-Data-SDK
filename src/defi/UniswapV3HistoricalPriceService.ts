@@ -1,5 +1,5 @@
 import { invalidRequest, uniswapV3PriceDataUnavailable } from "../domain/errors";
-import type { MulticallAtBlockRequest, MulticallAtBlockResult } from "../domain/rpcModels";
+import type { MulticallAtBlockRequest, MulticallAtBlockResult } from "evm-call";
 import { parseUniswapV3HistoricalPriceRequest, parseUniswapV3TokenPriceAtBlockRequest, parseUniswapV3TokenPricesAtBlockRequest, type UniswapV3HistoricalPriceRequest, type UniswapV3HistoricalPriceResult, type UniswapV3PriceFailure, type UniswapV3HistoricalPrice, type UniswapV3TokenPriceAtBlockRequest, type UniswapV3TokenPriceAtBlockResult, type UniswapV3TokenPricesAtBlockRequest, type UniswapV3TokenPricesAtBlockResult } from "../domain/uniswapV3HistoricalPriceModels";
 import type { UniswapV3TokenDefinition } from "./UniswapV3TokenDefinition";
 import { UNISWAP_V3_TOKEN_REGISTRY, uniswapV3RegistryVersion } from "./uniswapV3TokenRegistry";

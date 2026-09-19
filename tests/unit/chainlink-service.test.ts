@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { ChainlinkService, type ChainlinkMulticallService } from "../../src/chainlink/ChainlinkService";
 import type { ChainlinkFeedDefinition } from "../../src/chainlink/ChainlinkFeedDefinition";
-import type { MulticallAtBlockCallResult, MulticallAtBlockRequest, MulticallAtBlockResult } from "../../src/domain/rpcModels";
+import type { MulticallAtBlockCallResult, MulticallAtBlockRequest, MulticallAtBlockResult } from "evm-call";
 
 const BLOCK_NUMBER = "18000000";
 const BLOCK_HASH = `0x${"ab".repeat(32)}`;

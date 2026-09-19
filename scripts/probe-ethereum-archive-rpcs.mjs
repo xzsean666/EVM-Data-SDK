@@ -34,8 +34,8 @@ import {
   decodeGetBlockNumberResult,
   MULTICALL3_ADDRESS,
   MULTICALL3_GET_BLOCK_NUMBER_SELECTOR,
-} from "../src/rpc/EthereumMulticall3Codec.ts";
-import { BUILTIN_ETHEREUM_ARCHIVE_RPCS } from "../src/rpc/builtinEthereumArchiveRpcs.ts";
+  BUILTIN_ETHEREUM_RPCS as BUILTIN_ETHEREUM_ARCHIVE_RPCS,
+} from "evm-call";
 
 const REPEAT_COUNT = 3;
 const TIMEOUT_MS = Number(process.env.EVM_SDK_PROBE_TIMEOUT_MS ?? 10_000);

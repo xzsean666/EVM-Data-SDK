@@ -63,23 +63,24 @@ export type {
   MulticallAtBlockResult,
   NativeBalanceAtBlockRequest,
   NativeBalanceAtBlockResult,
-} from "./domain/rpcModels";
-export type {
   JsonRpcRequest,
   JsonRpcError,
   JsonRpcBatchItemResult,
   JsonRpcBatchExecutionOptions,
   NormalizedJsonRpcRequest,
   NormalizedJsonRpcBatchRequest,
-} from "./domain/jsonRpcModels";
-export { parseJsonRpcRequests } from "./domain/jsonRpcModels";
-export type {
   Erc20ReadMethod,
   Erc20MulticallCall,
   Erc20MulticallAtBlockRequest,
   Erc20MulticallAtBlockResult,
   Erc20MulticallCallResult,
-} from "./domain/erc20MulticallModels";
+} from "evm-call";
+export {
+  parseJsonRpcRequests,
+  parseMulticallAtBlockRequest,
+  parseNativeBalanceAtBlockRequest,
+  parseErc20MulticallAtBlockRequest,
+} from "evm-call";
 export type {
   AlchemyRoute,
   BlockscoutRoute,
@@ -170,30 +171,42 @@ export type {
   PriceProxyLease,
   TokenPriceProviderAdapter,
 } from "./price/TokenPriceProviderAdapter";
-export { ArchiveRpcTransport, JsonRpcCallError, isJsonRpcCallError } from "./rpc/ArchiveRpcTransport";
+export {
+  ArchiveRpcTransport,
+  JsonRpcCallError,
+  isJsonRpcCallError,
+  JsonRpcBatchExecutor,
+  EthereumArchiveRpcExecutor,
+  RpcPool,
+  ERC20_READ_SELECTORS,
+  encodeErc20Read,
+  decodeErc20Read,
+  encodeAggregate3,
+  decodeAggregate3Result,
+  MULTICALL3_ADDRESS,
+  MULTICALL3_BASE_MAINNET_DEPLOYMENT_BLOCK,
+  MULTICALL3_ETHEREUM_MAINNET_DEPLOYMENT_BLOCK,
+  BUILTIN_ETHEREUM_RPCS as BUILTIN_ETHEREUM_ARCHIVE_RPCS,
+  BUILTIN_BASE_RPCS as BUILTIN_BASE_ARCHIVE_RPCS,
+} from "evm-call";
 export type {
   ArchiveRpcCallOptions,
   ArchiveRpcBatchCallOptions,
   ArchiveRpcTransportOptions,
   JsonRpcBatchResponseItem,
-} from "./rpc/ArchiveRpcTransport";
-export { JsonRpcBatchExecutor } from "./rpc/JsonRpcBatchExecutor";
-export type {
   JsonRpcBatchExecutorOptions,
   RpcPoolLike,
   RpcEndpoint,
-} from "./rpc/JsonRpcBatchExecutor";
+  RpcPoolOptions,
+  BuiltinRpcEndpoint as BuiltinEthereumArchiveRpcCandidate,
+  BuiltinRpcEndpoint as BuiltinBaseArchiveRpcCandidate,
+} from "evm-call";
 export { RpcService } from "./rpc/RpcService";
 export type { ArchiveRpcMulticallExecutor, RpcServiceOptions } from "./rpc/RpcService";
-export { ERC20_READ_SELECTORS, encodeErc20Read, decodeErc20Read } from "./rpc/Erc20MulticallCodec";
 export { ChainlinkService } from "./chainlink/ChainlinkService";
 export type { ChainlinkMulticallService, ChainlinkServiceOptions } from "./chainlink/ChainlinkService";
 export type { ChainlinkFeedDefinition } from "./chainlink/ChainlinkFeedDefinition";
 export { ETHEREUM_MAINNET_CHAINLINK_PRICE_FEEDS } from "./chainlink/ethereumMainnetPriceFeeds.generated";
-export { BUILTIN_ETHEREUM_ARCHIVE_RPCS } from "./rpc/builtinEthereumArchiveRpcs";
-export type { BuiltinEthereumArchiveRpcCandidate } from "./rpc/builtinEthereumArchiveRpcs";
-export { BUILTIN_BASE_ARCHIVE_RPCS } from "./rpc/builtinBaseArchiveRpcs";
-export type { BuiltinBaseArchiveRpcCandidate } from "./rpc/builtinBaseArchiveRpcs";
 export { DeFiExchangeRateService } from "./defi/DeFiExchangeRateService";
 export type { DeFiMulticallService, DeFiExchangeRateServiceOptions } from "./defi/DeFiExchangeRateService";
 export { DEFI_TOKEN_REGISTRY } from "./defi/defiTokenRegistry";

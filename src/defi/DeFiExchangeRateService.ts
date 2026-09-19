@@ -1,8 +1,12 @@
 import { defiExchangeRateDataUnavailable, invalidRequest } from "../domain/errors";
 import type { DeFiExchangeRate, DeFiExchangeRateFailure, DeFiExchangeRateSnapshot, DeFiExchangeRateSnapshotRequest } from "../domain/defiExchangeRateModels";
 import { parseDeFiExchangeRateSnapshotRequest } from "../domain/defiExchangeRateModels";
-import type { MulticallAtBlockCallResult, MulticallAtBlockRequest, MulticallAtBlockResult } from "../domain/rpcModels";
-import { MULTICALL3_GET_BLOCK_NUMBER_SELECTOR } from "../rpc/EthereumMulticall3Codec";
+import {
+  MULTICALL3_GET_BLOCK_NUMBER_SELECTOR,
+  type MulticallAtBlockCallResult,
+  type MulticallAtBlockRequest,
+  type MulticallAtBlockResult,
+} from "evm-call";
 import { adapterCalls, CallRevertedError, evaluateAdapter, NotDeployedAtBlockError } from "./DeFiProtocolAdapter";
 import type { DeFiTokenDefinition } from "./DeFiTokenDefinition";
 import { DEFI_TOKEN_REGISTRY, registryVersion } from "./defiTokenRegistry";

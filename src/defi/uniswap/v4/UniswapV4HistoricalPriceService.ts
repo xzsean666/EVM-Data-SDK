@@ -1,7 +1,7 @@
 import { invalidRequest, uniswapV4PriceDataUnavailable } from "../../../domain/errors";
 import { ratioForSqrtPrice } from "../../UniswapV3PriceMath";
 import { parseUniswapV4HistoricalPriceRequest, parseUniswapV4TokenPriceAtBlockRequest, parseUniswapV4TokenPricesAtBlockRequest, type UniswapV4HistoricalPrice, type UniswapV4HistoricalPriceResult, type UniswapV4PriceFailure, type UniswapV4TokenPriceAtBlockRequest, type UniswapV4TokenPriceAtBlockResult, type UniswapV4TokenPricesAtBlockRequest, type UniswapV4TokenPricesAtBlockResult } from "../../../domain/uniswapV4HistoricalPriceModels";
-import type { MulticallAtBlockResult } from "../../../domain/rpcModels";
+import type { MulticallAtBlockResult } from "evm-call";
 import { encodeStateViewSlot0, decodeUniswapV4StateViewSlot0 } from "./UniswapV4StateViewCodec";
 import { UNISWAP_V4_TOKEN_REGISTRY, uniswapV4RegistryVersion } from "./uniswapV4PoolRegistry";
 import type { UniswapV4PoolDefinition } from "./UniswapV4PoolDefinition";

@@ -2,7 +2,7 @@ import type { NormalizedAlertConfiguration } from "../domain/configuration";
 import type { Clock } from "../execution/clock";
 import { systemClock } from "../execution/clock";
 import type { CredentialPool } from "../execution/CredentialPool";
-import type { EthereumArchiveRpcPool } from "../rpc/EthereumArchiveRpcPool";
+import type { RpcPool as EthereumArchiveRpcPool } from "evm-call";
 import { SlackWebhookReporter, type AlertFaultItem, type KeyFamilySummary } from "./SlackWebhookReporter";
 
 export interface AlertSources {
@@ -78,17 +78,19 @@ export class AlertService {
         const states = pool.getAllCooldownStates(now);
         for (const state of states) {
           if (state.isMaxCooldown) {
-            const rawKey = `rpc:${pool.expectedChainId}:${state.id}`;
+            const poolWithChain = pool as { readonly chainId?: number; readonly expectedChainId?: number };
+            const chainId = poolWithChain.chainId ?? poolWithChain.expectedChainId ?? 1;
+            const rawKey = `rpc:${chainId}:${state.id}`;
             if (seenRawKeys.has(rawKey)) continue;
             seenRawKeys.add(rawKey);
 
-            const chainName = pool.expectedChainId === 8453 ? "base" : "ethereum";
+            const chainName = chainId === 8453 ? "base" : "ethereum";
             rawFaults.push({
               id: state.id,
               category: "rpc",
               envKeyName: state.envKeyName,
               chainName,
-              expectedChainId: pool.expectedChainId,
+              expectedChainId: chainId,
               totalCooldownDurationMs: state.totalCooldownDurationMs,
               currentCooldownMs: state.currentCooldownMs,
             });

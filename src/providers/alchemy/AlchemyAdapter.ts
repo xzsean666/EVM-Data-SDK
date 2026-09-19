@@ -8,7 +8,7 @@ import type { CapabilityRequest, DataProviderAdapter, ProviderBlockRangeWindowRe
 import { classifyAlchemyHttpResponse, classifyAlchemyJsonRpcError, normalizeAlchemyTransportError } from "./alchemyErrors";
 import { alchemyJsonRpcResponseSchema, alchemyTokenBalancesResultSchema, alchemyTransfersResultSchema, type AlchemyTransfer } from "./alchemySchemas";
 import { mapAlchemyTransfer, hexQuantityToDecimal } from "./alchemyMapper";
-import { decodeAggregate3Result, encodeAggregate3, MULTICALL3_ADDRESS } from "../../rpc/EthereumMulticall3Codec";
+import { decodeAggregate3Result, encodeAggregate3, MULTICALL3_ADDRESS } from "evm-call";
 
 export interface AlchemyAdapterOptions {
   readonly transport?: HttpTransport;

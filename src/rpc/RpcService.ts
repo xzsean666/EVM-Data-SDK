@@ -1,31 +1,26 @@
 import {
   decodeAggregate3Result,
+  decodeErc20Read,
   encodeAggregate3,
+  encodeErc20Read,
   MULTICALL3_ADDRESS,
   MULTICALL3_BASE_MAINNET_DEPLOYMENT_BLOCK,
   MULTICALL3_ETHEREUM_MAINNET_DEPLOYMENT_BLOCK,
-} from "./EthereumMulticall3Codec";
-import { multicallNotDeployedAtBlock, unsupportedChain, unsupportedOperation } from "../domain/errors";
-import {
+  parseErc20MulticallAtBlockRequest,
   parseMulticallAtBlockRequest,
+  type Erc20MulticallAtBlockRequest,
+  type Erc20MulticallAtBlockResult,
+  type Erc20MulticallCallResult,
+  type JsonRpcBatchExecutionOptions,
+  type JsonRpcBatchExecutor,
+  type JsonRpcBatchItemResult,
+  type JsonRpcRequest,
   type MulticallAtBlockCallResult,
   type MulticallAtBlockRequest,
   type MulticallAtBlockResult,
   type NormalizedMulticallAtBlockCall,
-} from "../domain/rpcModels";
-import {
-  parseErc20MulticallAtBlockRequest,
-  type Erc20MulticallAtBlockRequest,
-  type Erc20MulticallAtBlockResult,
-  type Erc20MulticallCallResult,
-} from "../domain/erc20MulticallModels";
-import { decodeErc20Read, encodeErc20Read } from "./Erc20MulticallCodec";
-import type { JsonRpcBatchExecutor } from "./JsonRpcBatchExecutor";
-import type {
-  JsonRpcBatchExecutionOptions,
-  JsonRpcBatchItemResult,
-  JsonRpcRequest,
-} from "../domain/jsonRpcModels";
+} from "evm-call";
+import { multicallNotDeployedAtBlock, unsupportedChain, unsupportedOperation } from "../domain/errors";
 
 /**
  * Port implemented by `EthereumArchiveRpcExecutor` (P3). This service owns

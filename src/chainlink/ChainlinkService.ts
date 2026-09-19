@@ -14,7 +14,7 @@ import type {
   MulticallAtBlockCallResult,
   MulticallAtBlockRequest,
   MulticallAtBlockResult,
-} from "../domain/rpcModels";
+} from "evm-call";
 import type { ChainlinkFeedDefinition } from "./ChainlinkFeedDefinition";
 import {
   DECIMALS_SELECTOR,

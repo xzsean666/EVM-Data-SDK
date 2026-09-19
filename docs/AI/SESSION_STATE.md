@@ -2,8 +2,8 @@
 
 ## 1. 当前基本信息
 
-- **当前 Goal**: 将所有与 EVM RPC 的底层交互委托至 `/ssd0/git/evm-call` 基座，建立 Context 文档并固化基于 Git Hash 的平滑升级机制。
-- **当前 Task**: [TASK-003](tasks/TASK-003.md) 引入 `evm-call` Git 依赖、生成 Context 规范文档与升级 SOP。
+- **当前 Goal**: 将所有与 EVM RPC 的底层交互委托至 `/ssd0/git/evm-call` 基座，建立 Context 文档并固化基于 Git Hash 的平滑升级机制，彻底清理项目内冗余老代码与垫片。
+- **当前 Task**: [TASK-003](tasks/TASK-003.md) 引入 `evm-call` Git 依赖、生成 Context 规范文档、彻底清理 20 个冗余文件。
 - **当前状态**: `DONE` (Standby 待命)
 
 ---
@@ -15,15 +15,17 @@
    - 通过 `pnpm add github:xzsean666/evm-call#d7a5c16d2bcbda6255d05f1f5b745eac88f699c0` 成功集成底座依赖。
    - 建立权威规范文档 `docs/EVM_CALL_CONTEXT.md`，详尽记录 `evm-call` 的架构特征、API 规范、错误码、与 SDK 内部模块的委托映射表以及未来升级更新 Hash 的标准操作规程 (SOP)。
    - 更新 `docs/INTEGRATIONS.md` 与 `docs/AI/DECISIONS.md` (ADR-038)。
+   - **彻底物理删除 20 个冗余文件**（8 个 rpc 胶水垫片、3 个重复模型文件、9 个重复底层单测，净精简 ~4,500 行代码）。
+   - `EthereumArchiveRpcPool` 瘦身为 28 行继承自 `RpcPool` 的兼容薄层；`src/index.ts` 直接 re-export `evm-call`，保证 100% 向下兼容。
 2. **多级阶梯退避冷却与告警 (Stepped Cooldown & Slack Alerting)**
    - `CooldownTracker` 实现 `1m -> 5m -> 15m -> 30m -> 1h -> 2h -> 4h -> 8h -> 12h -> 24h` 确定性退避。
-   - `EthereumArchiveRpcPool` 与 `CredentialPool` 全面接入退避熔断机制。
+   - `EthereumArchiveRpcPool`（底层委托 `evm-call` `RpcPool`）与 `CredentialPool` 全面接入退避熔断机制。
    - `SlackWebhookReporter` 与 `AlertService` 实现 24 小时聚合静默告警与敏感信息脱敏。
    - `CooldownStore` 基于 Node 24 原生 SQLite 实现本地跨进程持久化。
 3. **多链 Archive RPC 与 Multicall3 基础能力**
    - 提取并暴露通用、ABI 无关的 `client.token.getMulticallAtBlock()` 与 `client.rpc.multicallAtBlock()`。
    - 支持 ERC-20 标准接口批量回溯读取 `client.token.multicallErc20AtBlock()`。
-   - 内置 Ethereum 及 Base 链的 Archive RPC 节点池探测、随机绑定与失败重试机制。
+   - 内置 Ethereum 及 Base 链的 Archive RPC 节点池探测、随机绑定与失败重试机制（由 `evm-call` 提供）。
 4. **DeFi 兑换率快照 (DeFi Exchange Rate Snapshot)**
    - 支持以太坊和 Base 链主流 DeFi 协议（LST、Aave V2/V3 aTokens、Compound V2 cTokens、ERC-4626 借贷池、LP 池）的精确区块兑换率计算。
 5. **历史价格服务与聚合器**
@@ -47,76 +49,35 @@
 
 ---
 
-## 3. 本次会话修改与创建的文件
+## 3. 本次会话物理删除与修改的文件
 
-### 创建的文件：
-- `docs/EVM_CALL_CONTEXT.md`（权威上下文与升级 SOP 文档）
-- `docs/AI/tasks/TASK-003.md`（任务记录文档）
+### 物理删除的文件 (共 20 个):
+- `src/domain/jsonRpcModels.ts`
+- `src/domain/erc20MulticallModels.ts`
+- `src/domain/rpcModels.ts`
+- `src/rpc/ArchiveRpcTransport.ts`
+- `src/rpc/Erc20MulticallCodec.ts`
+- `src/rpc/EthereumArchiveRpcExecutor.ts`
+- `src/rpc/EthereumMulticall3Codec.ts`
+- `src/rpc/JsonRpcBatchExecutor.ts`
+- `src/rpc/RandomSource.ts`
+- `src/rpc/builtinBaseArchiveRpcs.ts`
+- `src/rpc/builtinEthereumArchiveRpcs.ts`
+- `tests/unit/archive-rpc-transport.test.ts`
+- `tests/unit/builtin-base-archive-rpcs.test.ts`
+- `tests/unit/builtin-ethereum-archive-rpcs.test.ts`
+- `tests/unit/erc20-multicall.test.ts`
+- `tests/unit/ethereum-archive-rpc-executor.test.ts`
+- `tests/unit/ethereum-archive-rpc-pool.test.ts`
+- `tests/unit/json-rpc-batch-executor.test.ts`
+- `tests/unit/multicall3-codec.test.ts`
+- `tests/unit/random-source.test.ts`
 
 ### 修改的文件：
-- `src/rpc/ArchiveRpcTransport.ts`（移除 ~300 行自实现传输层，委托 `evm-call`）
-- `src/rpc/Erc20MulticallCodec.ts`（移除 ~60 行 ERC20 编解码，委托 `evm-call`）
-- `src/rpc/EthereumMulticall3Codec.ts`（移除 ~200 行 Multicall3 编解码，委托 `evm-call`）
-- `src/rpc/EthereumArchiveRpcExecutor.ts`（移除 ~500 行执行器，委托 `evm-call`）
-- `src/rpc/JsonRpcBatchExecutor.ts`（移除 ~280 行 Batch 调度，委托 `evm-call`）
-- `src/rpc/RandomSource.ts`（移除 ~25 行 shuffle，委托 `evm-call`）
-- `src/rpc/builtinEthereumArchiveRpcs.ts` & `src/rpc/builtinBaseArchiveRpcs.ts`（委托 `evm-call` 节点候选）
-- `tests/package/smoke.mjs`（动态适配所有依赖软链接，支持 `evm-call`）
-- `package.json`（新增 `evm-call` 锁定 git hash 依赖）
-- `pnpm-lock.yaml`（锁定依赖包版本与解析）
-- `docs/EVM_CALL_CONTEXT.md`（更新当前集成清单状态）
-- `docs/AI/tasks/TASK-003.md`（完善源码委托与清理验收项）
-- `docs/AI/SESSION_STATE.md`（更新当前状态）
-- `docs/NEXT_SESSION.md`（更新交接文档）
-
----
-
-## 4. 已运行的验证命令及结果
-
-- `pnpm typecheck`: 通过（0 错误）。
-- `pnpm lint`: 通过（0 警告，0 错误）。
-- `pnpm test`: 通过（52 个测试文件，488 个用例全部通过）。
-- `pnpm build`: 通过（ESM, CJS, d.ts 打包成功）。
-- `pnpm test:package`: 通过（tarball 打包与 consumer 导入验证成功）。
-- 净清理代码量：1,380+ 行冗余老代码彻底剥离。
-
----
-
-## 5. 下一步工作建议
-
-1. 当前 `src/rpc/` 核心组件已全面切换并委托至 `evm-call`，并保证了 EVM-Data-SDK 公共 API 接口契约 100% 兼容。
-2. 后续需要升级 `evm-call` 时，严格遵循 `docs/EVM_CALL_CONTEXT.md` 中固化的 SOP 流程。
-
-## 5.1 未解决问题与决策事项 (Decisions & Known Issues)
-
-1. **发布配置未决**：
-   - 现 `package.json` 中的包名为私有占位符，待确定最终 npm scope 与名称。
-   - 开源许可证（License）待最终确定。
-2. **Git 提交身份**：
-   - 遵循规范，当前不自动执行推送。
-
----
-
-## 6. 风险与假设 (Risks and Assumptions)
-
-- 归档下载依托交易所公开数据源（Binance data.binance.vision、Gate data.gateapi.io），不消耗 REST API 频率额度。
-- 单并发下载控制避免同时拉取过多归档包耗尽带宽。
-- 1 天本地磁盘缓存自动基于 mtime 清理，无常驻后台定时器。
-
----
-
-## 7. 下一步应该执行的 Task
-
-- 当前处于待命状态（Standby）。等待开发者指示或下发新的任务。
-
----
-
-## 8. 下一次 Session 应先读取的文件
-
-1. `docs/AI_AGENT_PROMPT.md`
-2. `docs/AI/GOAL.md`
-3. `docs/AI/TASK_INDEX.md`
-4. `docs/AI/SESSION_STATE.md`
-5. `docs/AI/ARCHITECTURE.md`
-6. `docs/AI/DECISIONS.md`
-
+- `src/rpc/EthereumArchiveRpcPool.ts`（简化为 28 行薄层，继承 `evm-call` 的 `RpcPool`）
+- `src/rpc/RpcService.ts`（直接导入 `evm-call` 编解码器与模型）
+- `src/index.ts`（直接 re-export `evm-call` 导出的所有 RPC 原语与类型）
+- `src/client/EvmDataClient.ts`（直接使用 `evm-call` 原语）
+- `src/defi/*`、`src/services/*`、`src/providers/alchemy/*`、`src/alert/*`（改为直接导入 `evm-call`）
+- `tests/unit/*`（同步更新导入路径与类型）
+- `docs/NEXT_SESSION.md`、`docs/AI/SESSION_STATE.md`

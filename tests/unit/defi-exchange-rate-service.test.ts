@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { DeFiExchangeRateService, type DeFiMulticallService } from "../../src/defi/DeFiExchangeRateService";
 import type { DeFiTokenDefinition } from "../../src/defi/DeFiTokenDefinition";
 import { DEFI_TOKEN_REGISTRY } from "../../src/defi/defiTokenRegistry";
-import type { MulticallAtBlockRequest, MulticallAtBlockResult } from "../../src/domain/rpcModels";
+import type { MulticallAtBlockRequest, MulticallAtBlockResult } from "evm-call";
 
 const TOKEN = "0x1111111111111111111111111111111111111111";
 const UNDERLYING = "0x2222222222222222222222222222222222222222";
@@ -15,7 +15,7 @@ const manifest: readonly DeFiTokenDefinition[] = Object.freeze([
 ]);
 
 function fakeRpc(results: Readonly<Record<string, { readonly success: boolean; readonly returnData: string }>>) {
-  const multicallAtBlock = vi.fn(async (request: MulticallAtBlockRequest): Promise<MulticallAtBlockResult> => Object.freeze({ chainId: request.chain === "base" || request.chain === 8453 ? 8453 : 1, blockNumber: request.blockNumber, blockHash: `0x${"ab".repeat(32)}`, blockTimestamp: "1700000000", rpcEndpointId: "fixture-rpc", multicallBatches: 1, results: Object.freeze(request.calls.map((call) => Object.freeze({ id: call.id, ...(results[call.id] ?? { success: true, returnData: word(1n) }) }))) }));
+  const multicallAtBlock = vi.fn(async (request: MulticallAtBlockRequest): Promise<MulticallAtBlockResult> => Object.freeze({ chainId: request.chain === "base" || request.chain === 8453 ? 8453 : 1, blockNumber: String(request.blockNumber), blockHash: `0x${"ab".repeat(32)}`, blockTimestamp: "1700000000", rpcEndpointId: "fixture-rpc", multicallBatches: 1, results: Object.freeze(request.calls.map((call) => Object.freeze({ id: call.id, ...(results[call.id] ?? { success: true, returnData: word(1n) }) }))) }));
   return { multicallAtBlock } as DeFiMulticallService & { multicallAtBlock: ReturnType<typeof vi.fn> };
 }
 
@@ -63,7 +63,7 @@ describe("DeFiExchangeRateService", () => {
   it("submits every configured chain registry call in one Multicall3 request", async () => {
     const multicallAtBlock = vi.fn(async (request: MulticallAtBlockRequest): Promise<MulticallAtBlockResult> => Object.freeze({
       chainId: request.chain === "base" || request.chain === 8453 ? 8453 : 1,
-      blockNumber: request.blockNumber,
+      blockNumber: String(request.blockNumber),
       blockHash: `0x${"ab".repeat(32)}`,
       blockTimestamp: "1700000000",
       rpcEndpointId: "fixture-rpc",

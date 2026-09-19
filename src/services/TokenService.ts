@@ -15,8 +15,12 @@ import { normalizeBinanceFiveMinuteKlineRequest } from "../domain/binanceKlineMo
 import type { BinanceAdapter } from "../providers/price/binance/BinanceAdapter";
 import type { GateKlineRequest, GateKlinePoint } from "../domain/gateKlineModels";
 import { normalizeGateKlineRequest } from "../domain/gateKlineModels";
-import type { Erc20MulticallAtBlockRequest, Erc20MulticallAtBlockResult } from "../domain/erc20MulticallModels";
-import type { MulticallAtBlockRequest, MulticallAtBlockResult } from "../domain/rpcModels";
+import type {
+  Erc20MulticallAtBlockRequest,
+  Erc20MulticallAtBlockResult,
+  MulticallAtBlockRequest,
+  MulticallAtBlockResult,
+} from "evm-call";
 import type { RpcService } from "../rpc/RpcService";
 import type { KlinePoint, KlineRequest, KlineResult } from "../domain/klineModels";
 import { normalizeKlineRequest } from "../domain/klineModels";

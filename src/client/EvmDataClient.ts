@@ -28,22 +28,24 @@ import { PriceRequestExecutor } from "../price/PriceRequestExecutor";
 import { TokenPriceAggregator } from "../price/TokenPriceAggregator";
 import type { TokenPriceProviderAdapter } from "../price/TokenPriceProviderAdapter";
 import type { HttpTransport } from "../transport/HttpTransport";
-import { BUILTIN_ETHEREUM_ARCHIVE_RPCS } from "../rpc/builtinEthereumArchiveRpcs";
-import { BUILTIN_BASE_ARCHIVE_RPCS } from "../rpc/builtinBaseArchiveRpcs";
-import { EthereumArchiveRpcPool, type EthereumArchiveRpcEndpoint } from "../rpc/EthereumArchiveRpcPool";
-import { EthereumArchiveRpcExecutor } from "../rpc/EthereumArchiveRpcExecutor";
-import { JsonRpcBatchExecutor } from "../rpc/JsonRpcBatchExecutor";
-import { RpcService } from "../rpc/RpcService";
-import { ChainlinkService } from "../chainlink/ChainlinkService";
-import { DeFiExchangeRateService } from "../defi/DeFiExchangeRateService";
-import { MULTICALL3_ADDRESS, MULTICALL3_BASE_MAINNET_DEPLOYMENT_BLOCK, MULTICALL3_ETHEREUM_MAINNET_DEPLOYMENT_BLOCK } from "../rpc/EthereumMulticall3Codec";
-import { UniswapV3HistoricalPriceService } from "../defi/UniswapV3HistoricalPriceService";
-import { UniswapV4HistoricalPriceService } from "../defi/uniswap/v4/UniswapV4HistoricalPriceService";
 import {
+  BUILTIN_ETHEREUM_RPCS as BUILTIN_ETHEREUM_ARCHIVE_RPCS,
+  BUILTIN_BASE_RPCS as BUILTIN_BASE_ARCHIVE_RPCS,
+  EthereumArchiveRpcExecutor,
+  JsonRpcBatchExecutor,
+  MULTICALL3_ADDRESS,
+  MULTICALL3_BASE_MAINNET_DEPLOYMENT_BLOCK,
+  MULTICALL3_ETHEREUM_MAINNET_DEPLOYMENT_BLOCK,
   parseNativeBalanceAtBlockRequest,
   type NativeBalanceAtBlockRequest,
   type NativeBalanceAtBlockResult,
-} from "../domain/rpcModels";
+} from "evm-call";
+import { EthereumArchiveRpcPool, type EthereumArchiveRpcEndpoint } from "../rpc/EthereumArchiveRpcPool";
+import { RpcService } from "../rpc/RpcService";
+import { ChainlinkService } from "../chainlink/ChainlinkService";
+import { DeFiExchangeRateService } from "../defi/DeFiExchangeRateService";
+import { UniswapV3HistoricalPriceService } from "../defi/UniswapV3HistoricalPriceService";
+import { UniswapV4HistoricalPriceService } from "../defi/uniswap/v4/UniswapV4HistoricalPriceService";
 import { createStorageAdapter, type StorageAdapter } from "../storage/StorageAdapter";
 import { CooldownStore } from "../storage/CooldownStore";
 import { SyncService } from "../sync/SyncService";

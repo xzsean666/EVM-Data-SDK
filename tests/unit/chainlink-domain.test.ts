@@ -4,7 +4,7 @@ import { parseClientConfiguration } from "../../src/domain/configuration";
 import {
   parseMulticallAtBlockRequest,
   MAX_MULTICALL_CALLS_PER_REQUEST,
-} from "../../src/domain/rpcModels";
+} from "evm-call";
 import { parseChainlinkTokenPricesAtBlockRequest } from "../../src/domain/chainlinkModels";
 
 const multicall3Address = "0xcA11bde05977b3631167028862bE2a173976CA11";
