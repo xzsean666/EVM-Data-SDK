@@ -347,13 +347,14 @@ const priceProviderSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("okx"), baseUrl: z.string().trim().min(1).max(2048).optional(), enabled: z.boolean().optional().default(true), allowInsecureHttp: z.boolean().optional().default(false) }).strict(),
   z.object({ kind: z.literal("coinbase"), baseUrl: z.string().trim().min(1).max(2048).optional(), enabled: z.boolean().optional().default(true), allowInsecureHttp: z.boolean().optional().default(false) }).strict(),
   z.object({ kind: z.literal("geckoterminal"), baseUrl: z.string().trim().min(1).max(2048).optional(), enabled: z.boolean().optional().default(true), allowInsecureHttp: z.boolean().optional().default(false) }).strict(),
+  z.object({ kind: z.literal("gate"), baseUrl: z.string().trim().min(1).max(2048).optional(), enabled: z.boolean().optional().default(true), allowInsecureHttp: z.boolean().optional().default(false) }).strict(),
 ]);
 const priceSchema = z.object({
-  providers: z.array(priceProviderSchema).max(4).optional(),
+  providers: z.array(priceProviderSchema).max(5).optional(),
   routeMode: z.enum(["direct", "proxy-only"]).default("direct"),
   attemptTimeoutMs: z.number().int().positive().max(86_400_000).default(DEFAULT_ATTEMPT_TIMEOUT_MS),
   totalTimeoutMs: z.number().int().positive().max(86_400_000).default(DEFAULT_TOTAL_TIMEOUT_MS),
-  maxProviderConcurrency: z.number().int().min(1).max(4).default(4),
+  maxProviderConcurrency: z.number().int().min(1).max(5).default(5),
   tokenAliases: z.record(z.string().trim().min(1).max(128), z.string().trim().min(1).max(128)).optional().default({}),
   geckoNetworks: z.array(z.string().trim().min(1).max(128)).min(1).max(64).optional().default(["eth", "bsc", "polygon_pos", "arbitrum", "base", "optimism"]),
 }).strict();

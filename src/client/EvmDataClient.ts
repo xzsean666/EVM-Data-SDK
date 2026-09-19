@@ -22,6 +22,7 @@ import { normalizeBinanceFiveMinuteKlineRequest, type BinanceFiveMinuteKlineRequ
 import { CoinbaseAdapter } from "../providers/price/coinbase/CoinbaseAdapter";
 import { GeckoTerminalAdapter } from "../providers/price/geckoterminal/GeckoTerminalAdapter";
 import { OkxAdapter } from "../providers/price/okx/OkxAdapter";
+import { GateAdapter } from "../providers/price/gate/GateAdapter";
 import { PriceProviderRouter } from "../price/PriceProviderRouter";
 import { PriceRequestExecutor } from "../price/PriceRequestExecutor";
 import { TokenPriceAggregator } from "../price/TokenPriceAggregator";
@@ -56,7 +57,7 @@ import { ChainRegistry as PublicChainRegistry } from "../chains/ChainRegistry";
 export interface EvmDataClientOptions {
   readonly transport?: HttpTransport;
   readonly adapters?: Partial<Record<"etherscan" | "blockscout" | "alchemy" | "moralis", DataProviderAdapter>>;
-  readonly priceAdapters?: Partial<Record<"binance" | "okx" | "coinbase" | "geckoterminal", TokenPriceProviderAdapter>>;
+  readonly priceAdapters?: Partial<Record<"binance" | "okx" | "coinbase" | "geckoterminal" | "gate", TokenPriceProviderAdapter>>;
   /** Test seam for deterministic Archive RPC endpoint selection; defaults to `systemRandom`. */
   readonly archiveRpcRandomSource?: RandomSource;
   /** Test seam for the Archive RPC pool used by `chainlink`/`rpc`. */
@@ -570,7 +571,7 @@ function mergeArchiveRpcEndpoints(endpoints: readonly EthereumArchiveRpcEndpoint
 }
 
 function createPriceAdapter(
-  kind: "binance" | "okx" | "coinbase" | "geckoterminal",
+  kind: "binance" | "okx" | "coinbase" | "geckoterminal" | "gate",
   baseUrl: string | undefined,
   allowInsecureHttp: boolean,
   geckoNetworks: readonly string[],
@@ -584,6 +585,7 @@ function createPriceAdapter(
   if (kind === "binance") return new BinanceAdapter(options);
   if (kind === "okx") return new OkxAdapter(options);
   if (kind === "coinbase") return new CoinbaseAdapter(options);
+  if (kind === "gate") return new GateAdapter(options);
   return new GeckoTerminalAdapter({ ...options, networks: geckoNetworks });
 }
 

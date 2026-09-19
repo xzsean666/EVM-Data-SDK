@@ -164,6 +164,7 @@ export { SqliteStorageAdapter, PostgresStorageAdapter } from "./storage/StorageA
 export type { EvmDataClientOptions } from "./client/EvmDataClient";
 export type { DataProviderAdapter, ProviderAdapterFailure } from "./providers/DataProviderAdapter";
 export { BlockscoutAdapter } from "./providers/blockscout/BlockscoutAdapter";
+export { GateAdapter } from "./providers/price/gate/GateAdapter";
 export type {
   PriceProviderAttemptContext,
   PriceProxyLease,

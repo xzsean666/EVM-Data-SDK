@@ -57,6 +57,17 @@ SDK endpoint base: https://api.geckoterminal.com/api/v2.
 
 Important notes: Name-only input is resolved from search-pool relationships within configured networks. The resolver prefers exact symbol, then exact name, then a unique prefix; equal-rank different network/contract identities produce TOKEN_AMBIGUOUS. It picks a pool for one resolved token deterministically by liquidity, 24-hour volume, then address, but exposes network, token contract, pool, and selected token side instead of asserting exchange/on-chain asset equivalence. The OHLCV request explicitly uses currency=usd and token=base|quote, so a matched quote-side token does not accidentally return the base token's price.
 
+### Gate.io Spot API
+
+Official documentation:
+
+- Currency pairs: https://www.gate.io/docs/developers/apiv4/en/#get-details-of-a-specifc-currency-pair
+- Candlesticks: https://www.gate.io/docs/developers/apiv4/en/#market-candlesticks
+
+SDK endpoints: `https://api.gateio.ws/api/v4/spot/currency_pairs/{pair}` and `/api/v4/spot/candlesticks`.
+
+Important notes: The adapter selects only a live `trade_status="tradable"` `BASE_USDT` spot market. It requests `interval=1d` with `from` and `to` timestamps in Unix seconds. Gate candlestick rows follow `[timestamp_sec, quote_volume, close, high, low, open, base_volume, is_final]`; price maps to `close`. The adapter chunks queries into 180-day intervals to avoid provider truncation. Missing calendar days are surfaced in `missingDates`. HTTP 429 is parsed with `retry-after` header and classified as `RATE_LIMITED`.
+
 ## 1. Etherscan
 
 **External project:** Etherscan API

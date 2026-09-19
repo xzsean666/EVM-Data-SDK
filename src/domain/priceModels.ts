@@ -5,6 +5,7 @@ export const TOKEN_PRICE_PROVIDER_NAMES = [
   "okx",
   "coinbase",
   "geckoterminal",
+  "gate",
 ] as const;
 
 export type TokenPriceProviderName = (typeof TOKEN_PRICE_PROVIDER_NAMES)[number];

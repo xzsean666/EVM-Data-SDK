@@ -57,3 +57,15 @@ export const geckoEthSearchPools = {
 export const geckoEthUsdDailyOhlcv = {
   data: { attributes: { ohlcv_list: [[daySeconds, "1", "2", "0.5", "1.5", "100"]] } },
 };
+
+export const gateEthUsdtCurrencyPair = {
+  id: "ETH_USDT",
+  base: "ETH",
+  quote: "USDT",
+  trade_status: "tradable",
+};
+
+export const gateEthUsdtDailyCandles = [
+  [String(daySeconds), "100", "1.5", "2", "0.5", "1", "66.6", "true"],
+];
+

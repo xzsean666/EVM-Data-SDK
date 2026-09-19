@@ -289,7 +289,7 @@ interface TokenPricePoint {
 }
 
 interface TokenPriceProviderResult {
-  provider: "binance" | "okx" | "coinbase" | "geckoterminal";
+  provider: "binance" | "okx" | "coinbase" | "geckoterminal" | "gate";
   status: "success";
   token: { input: string; normalized: string; symbol: string; name: string | null };
   market: {
@@ -320,7 +320,7 @@ interface TokenPriceAggregationResult {
 
 All public prices and volumes are decimal strings; JavaScript `number` is never used for a returned price or volume. Results are sorted by UTC date ascending. `missingDates` lists every requested date absent from an otherwise successful provider response, and the SDK never fabricates a zero, previous close, or other replacement value. The current UTC bucket is not final.
 
-Exchange adapters independently select only the specified active Spot market: Binance `BASEUSDT`, OKX `BASE-USDT`, and Coinbase `BASE-USD`. USDT is never silently converted to USD. GeckoTerminal resolves an on-chain network, token contract, pool, and token side before requesting the selected token's USD OHLCV; equal-strength identities that cannot be safely distinguished fail with `TOKEN_AMBIGUOUS`. An exchange symbol and an on-chain contract sharing a symbol are not asserted to be the same asset.
+Exchange adapters independently select only the specified active Spot market: Binance `BASEUSDT`, OKX `BASE-USDT`, Gate `BASE_USDT`, and Coinbase `BASE-USD`. USDT is never silently converted to USD. GeckoTerminal resolves an on-chain network, token contract, pool, and token side before requesting the selected token's USD OHLCV; equal-strength identities that cannot be safely distinguished fail with `TOKEN_AMBIGUOUS`. An exchange symbol and an on-chain contract sharing a symbol are not asserted to be the same asset.
 
 ## 4. Functional Requirements
 

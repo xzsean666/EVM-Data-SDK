@@ -81,7 +81,7 @@ export class BinanceAdapter implements TokenPriceProviderAdapter {
         if (failure !== null) throw failure;
         return response.body;
       } catch (error) {
-        if (error instanceof EvmDataError && !error.retryable) throw error;
+        if (error instanceof EvmDataError && (!error.retryable || error.code === "RATE_LIMITED")) throw error;
         lastError = error;
       }
     }

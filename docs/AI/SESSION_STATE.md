@@ -2,9 +2,9 @@
 
 ## 1. 当前基本信息
 
-- **当前 Goal**: 彻底移除 sing-box 与 VLESS 依赖，统一全局 HTTP Proxy-Only 方案。
-- **当前 Task**: [TASK-001](tasks/TASK-001.md)（彻底移除 sing-box 与 VLESS 依赖，统一全局 HTTP Proxy-Only 方案）。
-- **当前状态**: `DONE`（代码与测试清理完成，全局 HTTP Proxy-Only 方案重构交付，全量检查验证通过）。
+- **当前 Goal**: 模块化 examples 示例目录，并在多源现货代币价格聚合器中集成 Gate.io (GateAdapter)。
+- **当前 Task**: 集成 Gate.io 现货价格提供商至 `client.token.getPriceHistory`，完善单元测试与示例。
+- **当前状态**: `DONE`（GateAdapter 接入完成，全量测试 48 个文件 471 个用例通过，examples 运行验证通过）。
 
 ---
 
@@ -24,12 +24,15 @@
    - 支持以太坊和 Base 链主流 DeFi 协议（LST、Aave V2/V3 aTokens、Compound V2 cTokens、ERC-4626 借贷池、LP 池）的精确区块兑换率计算。
 4. **历史价格服务与聚合器**
    - 支持 Uniswap V3 与 Uniswap V4 精确区块价格读取。
-   - 支持 Binance, OKX, Coinbase, GeckoTerminal 日线历史价格聚合与降级。
+   - 支持 Binance, OKX, Gate, Coinbase, GeckoTerminal 日线历史价格聚合与降级。
+   - 新增 `GateAdapter` (`src/providers/price/gate/`)，提供现货交易对 tradable 探测、日线 180 天分片采集与异常归一化。
 5. **数据同步与统一全局 HTTP Proxy-Only 方案**
    - 彻底移除 sing-box 本地子进程运行时与 VLESS/VMESS/SS 协议解析。
    - 统一采用纯轻量级的 `ProxyPool` 调度标准 HTTP/HTTPS 代理。
    - 确立全局 Proxy-Only 规范：代理模式下严格禁止 direct 直连（`allowDirect: false`），无代理可用时快速失败返回脱敏 `PROXY_ERROR`。
    - 支持自适应区块区间的 ERC-20 与交易流式分片读取 (`BlockRangeScanner`)。
+6. **模块化 Examples 示例体系**
+   - `examples/` 目录下提供 11 个独立模块文件（`01_env_and_client_init.ts` 至 `11_alerts_and_cooldowns.ts`）与 `common.ts`、`README.md`。
 
 ---
 
