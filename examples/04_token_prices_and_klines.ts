@@ -36,12 +36,16 @@ async function main() {
       range: { kind: "latest", days: 1 },
     });
 
-    const latestPoint = ethPrice.points[ethPrice.points.length - 1];
+    const firstResult = ethPrice.results[0];
+    const latestPoint = firstResult?.points[firstResult.points.length - 1];
     console.log("✅ ETH 聚合价格获取成功:");
-    console.log(`   - 聚合模式:   ${ethPrice.aggregationMode}`);
-    console.log(`   - 最终中位数: $${latestPoint?.close ?? "N/A"}`);
-    console.log(`   - 时间戳:     ${latestPoint?.timestamp ? new Date(latestPoint.timestamp).toISOString() : "N/A"}`);
-    console.log(`   - 采集点数:   ${ethPrice.points.length}`);
+    console.log(`   - 成功服务商数: ${ethPrice.summary.succeededProviders} / ${ethPrice.summary.requestedProviders}`);
+    if (firstResult && latestPoint) {
+      console.log(`   - 来源服务商:   ${firstResult.provider}`);
+      console.log(`   - 最新收盘价:   $${latestPoint.close}`);
+      console.log(`   - 价格时间:     ${latestPoint.date}`);
+      console.log(`   - 采集点数:     ${firstResult.points.length}`);
+    }
 
     // 查看 BTC 价格
     console.log("\n正在聚合 BTC 价格...");
@@ -49,8 +53,9 @@ async function main() {
       token: "BTC",
       range: { kind: "latest", days: 1 },
     });
-    const btcLatest = btcPrice.points[btcPrice.points.length - 1];
-    console.log(`✅ BTC 最新聚合价格: $${btcLatest?.close ?? "N/A"}`);
+    const btcResult = btcPrice.results[0];
+    const btcLatest = btcResult?.points[btcResult.points.length - 1];
+    console.log(`✅ BTC 最新价格: $${btcLatest?.close ?? "N/A"} (来源: ${btcResult?.provider ?? "N/A"})`);
   } catch (err: any) {
     console.warn("⚠️ 价格聚合查询提示:", err.message);
     console.log("   (提示: 若遇到网络超时或连接重置，请在 .env.key 中配置 HTTP_PROXY 代理)");

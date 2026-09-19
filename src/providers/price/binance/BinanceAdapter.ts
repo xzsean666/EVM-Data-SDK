@@ -66,7 +66,32 @@ export class BinanceAdapter implements TokenPriceProviderAdapter {
     try { return binanceResult(request, mapBinanceKlines(rows, request, context.nowMs)); } catch (error) { throw new EvmDataError({ code: "INVALID_PROVIDER_RESPONSE", message: "Binance returned invalid daily candle data.", retryable: false, provider: this.name, cause: error }); }
   }
   private async call(path: string, params: Record<string, string | number>, context: PriceProviderAttemptContext): Promise<unknown> {
-    try { const response = await this.transport.request({ method: "GET", url: this.baseUrls[0]! + path, params, timeoutMs: context.timeoutMs, ...(context.signal === undefined ? {} : { signal: context.signal }), proxy: context.proxy === null ? null : parseHttpProxyUrl(context.proxy.url) }); const failure = classifyBinanceResponse(response); if (failure !== null) throw failure; return response.body; } catch (error) { if (error instanceof EvmDataError) throw error; throw normalizeBinanceTransportError(error) ?? new EvmDataError({ code: "PROVIDER_UNAVAILABLE", message: "Binance request failed.", retryable: true, provider: this.name }); }
+    let lastError: unknown;
+    for (const endpoint of this.orderedEndpoints()) {
+      try {
+        const response = await this.transport.request({
+          method: "GET",
+          url: endpoint + path,
+          params,
+          timeoutMs: context.timeoutMs,
+          ...(context.signal === undefined ? {} : { signal: context.signal }),
+          proxy: context.proxy === null ? null : parseHttpProxyUrl(context.proxy.url),
+        });
+        const failure = classifyBinanceResponse(response);
+        if (failure !== null) throw failure;
+        return response.body;
+      } catch (error) {
+        if (error instanceof EvmDataError && !error.retryable) throw error;
+        lastError = error;
+      }
+    }
+    if (lastError instanceof EvmDataError) throw lastError;
+    throw normalizeBinanceTransportError(lastError) ?? new EvmDataError({
+      code: "PROVIDER_UNAVAILABLE",
+      message: "Binance request failed.",
+      retryable: true,
+      provider: this.name,
+    });
   }
 }
 function chunks(startDate: string, endDate: string, length: number): readonly (readonly [string, string])[] { const result: [string, string][] = []; for (let start = startDate; start <= endDate; start = addUtcDays(start, length)) { const end = addUtcDays(start, length - 1); result.push([start, end < endDate ? end : endDate]); } return result; }

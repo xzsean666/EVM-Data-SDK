@@ -49,9 +49,9 @@ export function createExampleClient(overrides: Partial<ConstructorParameters<typ
     price: {
       providers: [
         { kind: "binance" },
-        { kind: "okx" },
-        { kind: "coinbase" },
-        { kind: "geckoterminal" },
+        // { kind: "okx" },
+        // { kind: "coinbase" },
+        // { kind: "geckoterminal" },
       ],
     },
     logger: (event) => {
