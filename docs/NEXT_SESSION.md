@@ -1,32 +1,36 @@
 # Next Session Handoff (任务交接文档)
 
 ## 1. 当前基本信息
-- **任务编号**: TASK-002 (已完成归档)
-- **任务目标**: 优化价格体系：Token 支持度检测、Kline 优先级聚合（Binance 优先，Gate 备选）与统一定长二进制历史归档缓存系统。
+- **任务编号**: TASK-003 (已完成归档)
+- **任务目标**: 引入 `/ssd0/git/evm-call` 作为 EVM RPC 交互基座，生成高可用架构与 Context 规范文档，固化 Git Commit Hash 升级 SOP。
 - **当前状态**: `DONE` (Standby 待命)
 
 ## 2. 本次已交付功能与架构细节
-1. **Token 支持度检测与确定性 SQLite 缓存 (`TokenSupportService`)**:
-   - `client.token.isTokenSupported(token, provider)` 与 `client.token.getTokenSupport(token)`。
-   - 三级探测与防护：内存缓存 -> SQLite 持久化表 `sdk_token_support` -> 上游实时探活（严格 1s 超时）。
-   - 确定性响应（Binance `TRADING` / Invalid symbol，Gate `tradable` / 404）写入 SQLite；超时/网络波动/5xx 绝不写库。
-   - `client.token.preloadSupportedTokens()` 支持一键将 Binance（~2500）与 Gate（~3000）现货交易对加载至内存。
-2. **统一定长二进制历史归档缓存 (`KlineBinaryCodec` / `KlineArchiveManager`)**:
-   - 拒绝大体积 JSON 方案，采用 ADR-037 规范的 16 字节紧凑定长二进制 (`.bin`) 存储（UInt64LE 毫秒时间戳 + DoubleLE 价格）。
-   - 单月 5m K 线仅 ~138 KB（小于 Binance 原始 zip），二分查找截取耗时 $<1\text{ms}$，零解压、零小对象 GC。
-   - 纯 Node.js 内置 `zlib` 解压 Binance `.zip` 与 Gate `.csv.gz`，无需额外 npm 依赖。
-   - 单并发下载锁（`AsyncLock`），避免同时下载多个归档包压垮带宽。
-   - 1 天磁盘缓存 TTL，访问时自动清理过期文件。
-3. **统一 Kline 聚合与价格查询 (`UnifiedKlineService`)**:
-   - 暴露 `client.token.getKlines(request)` 与 `client.token.getKlinesPrices(request)`。
-   - 严格优先级：Binance 优先，Gate 备选；两者皆不支持抛出 `TOKEN_NOT_FOUND`。
-   - 智能时间分流：早于当前自然月月初的数据拉取归档包并二进制缓存，当月数据走 REST API，无缝拼接去重并截取 `[startMs, endMs)`。
+1. **`evm-call` 依赖集成与 Hash 锁定**:
+   - 依赖配置: `"evm-call": "github:xzsean666/evm-call#d7a5c16d2bcbda6255d05f1f5b745eac88f699c0"`。
+   - `node_modules/evm-call/dist` 类型与 CJS/ESM bundle 完好，TypeScript 编译完美兼容。
+2. **Context 规范文档沉淀 (`docs/EVM_CALL_CONTEXT.md`)**:
+   - 记录上游元数据、仓库坐标与当前 Git Commit Hash (`d7a5c16d2bcbda6255d05f1f5b745eac88f699c0`)。
+   - 详尽拆解 `evm-call` 七大核心特性：
+     - RPC 节点池随机洗牌与阶梯式退避冷却 (`1m -> 5m -> ... -> 24h`)。
+     - 原生 SQLite (`node:sqlite`) L1/L2 缓存（最新态 10s、历史态 30 天）。
+     - JSON-RPC Batch 缓存优先调度与自动切片保序还原。
+     - Multicall3 确定性聚合与区块重组防分叉断言。
+     - 原生 Buffer/BigInt ERC-20 只读极速解码。
+     - 事件日志大跨度切片、自适应对半拆分与异步生成器流式迭代。
+     - 基于数学收敛的内插时间戳二分查块 ($O(\log\log N)$)。
+   - 梳理完整的 API 清单、模型定义、错误体系。
+   - 规划 `EVM-Data-SDK` 内部 `src/rpc/` 及上层服务向 `evm-call` 的平滑委托映射路线。
+   - 固化升级 `evm-call` 并更新 Hash 的 6 步标准操作规程 (SOP)。
+3. **架构与外部依赖文档同步**:
+   - `docs/INTEGRATIONS.md`: 补充 Section 21: `evm-call`。
+   - `docs/AI/DECISIONS.md`: 记录 ADR-038。
+   - `docs/AI/TASK_INDEX.md` & `docs/AI/tasks/TASK-003.md`: 登记并归档 TASK-003。
 
 ## 3. 验证结果
-- 全套静态检查：`pnpm typecheck`（0 错误），`pnpm lint`（0 警告）。
-- 自动化测试：52 个测试文件，488 个测试用例全部通过（涵盖编解码、Token 探活、归档解压与切分、服务编排）。
-- 构建与打包：`pnpm build`（ESM, CJS, d.ts 打包成功），`pnpm test:package`（tarball 导入与运行成功）。
+- 静态检查: `pnpm typecheck`（0 错误），`pnpm lint`（0 警告）。
+- 自动化测试: 52 个测试套件，488 个测试用例全部通过。
+- 构建打包: `pnpm build`（ESM, CJS, d.ts 打包成功）。
 
-## 4. 待办与后续建议
-- 当前处于待命状态，等待开发者下发下一步需求（例如更多交易所归档支持、WebSocket 实时流或更多 API 链扩展）。
-
+## 4. 下一步任务建议 (Next Actions)
+- 当准备开始源码实现时，下发任务将 `src/rpc/` 内部组件逐步适配/委托至 `evm-call`，并保证现有所有公开 API 接口契约向下兼容。

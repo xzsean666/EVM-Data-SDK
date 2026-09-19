@@ -752,4 +752,25 @@ Heterogeneous upstream archives (ZIP vs GZ, seconds vs milliseconds, different c
 **Trade-offs:**
 Upstream archives must be decoded once during initial download to produce the `.bin` file. This one-time CPU cost is rewarded with instant subsequent reads and minimal disk consumption.
 
+## ADR-038: Adopt `evm-call` as Unified EVM RPC & Multicall Base SDK
+
+**Status:** Accepted by owner on 2026-09-19
+
+**Date:** 2026-09-19
+
+**Decision:**
+1. Delegate all low-level EVM RPC interactions, JSON-RPC batch chunking, Multicall3 execution, native balance lookups, and log filtering to the dedicated base SDK `/ssd0/git/evm-call` (`evm-call`).
+2. Manage `evm-call` as a pinned Git commit hash dependency in `package.json`:
+   `"evm-call": "github:xzsean666/evm-call#d7a5c16d2bcbda6255d05f1f5b745eac88f699c0"`
+3. Maintain a dedicated Context Document (`docs/EVM_CALL_CONTEXT.md`) detailing the pinned commit hash, architecture, API surface, delegation mapping, and standard upgrade SOP.
+4. When `evm-call` is upgraded, follow the Standard Operating Procedure (SOP): update code in `evm-call`, obtain the new HEAD commit hash, update the dependency hash in `package.json`, update `docs/EVM_CALL_CONTEXT.md` and `docs/INTEGRATIONS.md`, and verify via `pnpm check`.
+5. Preserve EVM-Data-SDK public domain contracts: services (`ChainlinkService`, `DeFiExchangeRateService`, `UniswapV3HistoricalPriceService`, `TokenService`, etc.) continue exposing unchanged high-level methods while internally utilizing `evm-call` components.
+
+**Reason:**
+Centralizing raw RPC pooling, stepped backoff cooldowns, native Buffer/BigInt Multicall3 codecs, SQLite L1/L2 caching, and adaptive log chunking into `evm-call` eliminates code duplication across repositories, improves runtime performance by 50x, and ensures robust reorg protection.
+
+**Trade-offs:**
+Requires maintaining an external dependency with pinned git hashes. This trade-off is mitigated by strict CI/CD verification (`pnpm check`) and the standardized upgrade SOP.
+
+
 

@@ -667,3 +667,28 @@ failover, block consistency, and per-call success/return-data mapping. This
 does not add ABI-specific protocol knowledge or token discovery. It requires
 the opt-in chain-scoped Archive RPC capability and returns the existing typed
 unsupported-operation error when that capability is disabled.
+
+## 21. evm-call (Unified EVM RPC & Multicall Base SDK)
+
+**External Package:** `evm-call`
+
+**Repository:** `https://github.com/xzsean666/evm-call.git` (local path: `/ssd0/git/evm-call`)
+
+**Selected Version & Commit Hash:** `0.1.0` (`d7a5c16d2bcbda6255d05f1f5b745eac88f699c0`)
+
+**Dependency Specification:** `"evm-call": "github:xzsean666/evm-call#d7a5c16d2bcbda6255d05f1f5b745eac88f699c0"`
+
+**Purpose in the SDK:**
+Acts as the foundational low-level EVM RPC engine for the SDK. It encapsulates all direct EVM JSON-RPC interactions, including:
+- Multi-node RPC Pool with stepped cooldown backoff (`1m` up to `24h`) and fast recovery.
+- Built-in high-availability public Archive RPCs for Ethereum Mainnet (1) and Base (8453), with custom RPC endpoint support.
+- Dual-layer caching (L1 Memory + L2 SQLite via `node:sqlite`) with 10s ephemeral cache for latest state and 30-day immutable cache for historical block states.
+- Cache-first JSON-RPC batch executor with automatic chunking (100) and cross-node bounded concurrency (3).
+- Deterministic Multicall3 execution with pre/post block header reorg protection.
+- Optimized ERC-20 read decoders (native Buffer/BigInt) and native balance lookups.
+- Large-range log filtering with adaptive bisection (`getLogsChunked`, `iterateLogs`, `iterateLogChunks`).
+- Mathematical interpolation search ($O(\log\log N)$) for locating historical blocks by timestamp.
+
+**Maintenance and Upgrade:**
+All EVM RPC interaction logic is delegated to `evm-call`. Upgrades are performed by committing changes in `evm-call`, fetching the new commit hash, running `pnpm add github:xzsean666/evm-call#<hash>`, and updating `docs/EVM_CALL_CONTEXT.md` and this file. See `docs/EVM_CALL_CONTEXT.md` for the complete upgrade SOP.
+

@@ -1,6 +1,6 @@
 # AI Tasks Index (任务索引)
 
-> 当前状态：**待命 (Standby)**。TASK-002 已交付并归档。
+> 当前状态：**待命 (Standby)**。TASK-003 已交付并归档。
 
 ---
 
@@ -24,7 +24,7 @@ TODO -> IN_PROGRESS -> REVIEW -> DONE
 
 | Task ID | 目标说明 | 关联模块 | 状态 | 依赖 | 创建时间 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| - | 暂无进行中任务 | - | - | - | - |
+| - | 暂无进行中任务（等待下发 EVM-Data-SDK 源码委托至 evm-call 的执行任务） | - | - | - | - |
 
 
 ---
@@ -33,5 +33,6 @@ TODO -> IN_PROGRESS -> REVIEW -> DONE
 
 | Task ID | 目标说明 | 完成时间 | 验证结果 |
 | :--- | :--- | :--- | :--- |
+| [TASK-003](tasks/TASK-003.md) | 引入 evm-call 基座依赖、生成 Context 规范文档与升级 SOP | 2026-09-19 | 依赖锁定 d7a5c16，52 测试套件（488 用例）全绿，类型检查与 Lint 0 错误 |
 | [TASK-002](tasks/TASK-002.md) | Token 支持度检测、Kline 优先级聚合与统一归档缓存系统 | 2026-09-19 | 52 测试文件（488 用例）全绿，构建及打包验证成功 |
 | [TASK-001](tasks/TASK-001.md) | 彻底移除 sing-box 与 VLESS 依赖，统一全局 HTTP Proxy-Only 方案 | 2026-09-19 | 47 测试文件（463 用例）全绿，构建及打包验证成功 |
