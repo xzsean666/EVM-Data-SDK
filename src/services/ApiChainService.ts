@@ -326,6 +326,7 @@ export class ApiChainService {
     let lastError: unknown
     for (const configuredProvider of this.providers) {
       if (!(configuredProvider.adapter instanceof EtherscanAdapter)) continue
+      if (!configuredProvider.adapter.hasRouteFor(chain)) continue
       for (const apiKey of configuredProvider.apiKeys) {
         const candidate = { adapter: configuredProvider.adapter, apiKey }
         try {
@@ -334,7 +335,8 @@ export class ApiChainService {
           )
         } catch (error) {
           lastError = error
-          if (!canTryAnotherEtherscanCredential(error)) throw error
+          if (signal?.aborted) throw error
+          if (!canTryAnotherEtherscanCredential(error)) break
         }
       }
     }
@@ -351,12 +353,15 @@ export class ApiChainService {
     for (const configuredProvider of this.providers) {
       const adapter = configuredProvider.adapter
       if (!(adapter instanceof EtherscanAdapter) && !(adapter instanceof AlchemyAdapter)) continue
+      if (adapter instanceof AlchemyAdapter && (chain.routes.alchemy === undefined || chain.chainId === 4663)) continue
+      if (adapter instanceof EtherscanAdapter && !adapter.hasRouteFor(chain)) continue
       for (const apiKey of configuredProvider.apiKeys) {
         try {
           return await this.withCandidateContext(chain, { adapter, apiKey }, signal, (context) => work(adapter, context))
         } catch (error) {
           lastError = error
-          if (!canTryAnotherApiCredential(error)) throw error
+          if (signal?.aborted) throw error
+          if (!canTryAnotherApiCredential(error)) break
         }
       }
     }
@@ -394,6 +399,9 @@ export class ApiChainService {
       if (!(adapter instanceof EtherscanAdapter) &&
           !(adapter instanceof MoralisAdapter) &&
           !(options.includeAlchemy === true && adapter instanceof AlchemyAdapter)) continue
+      if (adapter instanceof EtherscanAdapter && !adapter.hasRouteFor(chain)) continue
+      if (adapter instanceof MoralisAdapter && chain.routes.moralis === undefined) continue
+      if (adapter instanceof AlchemyAdapter && chain.routes.alchemy === undefined) continue
       for (const apiKey of configuredProvider.apiKeys) {
         try {
           return await this.withCandidateContext(chain, { adapter, apiKey }, signal, (context) =>
@@ -401,7 +409,8 @@ export class ApiChainService {
           )
         } catch (error) {
           lastError = error
-          if (!canTryAnotherApiCredential(error)) throw error
+          if (signal?.aborted) throw error
+          if (!canTryAnotherApiCredential(error)) break
         }
       }
     }
@@ -418,6 +427,7 @@ export class ApiChainService {
     for (const configuredProvider of this.providers) {
       const adapter = configuredProvider.adapter
       if (!(adapter instanceof MoralisAdapter)) continue
+      if (chain.routes.moralis === undefined) continue
       for (const apiKey of configuredProvider.apiKeys) {
         try {
           return await this.withCandidateContext(chain, { adapter, apiKey }, signal, (context) =>
@@ -425,7 +435,8 @@ export class ApiChainService {
           )
         } catch (error) {
           lastError = error
-          if (!canTryAnotherApiCredential(error)) throw error
+          if (signal?.aborted) throw error
+          if (!canTryAnotherApiCredential(error)) break
         }
       }
     }
@@ -442,6 +453,7 @@ export class ApiChainService {
     for (const configuredProvider of this.providers) {
       const adapter = configuredProvider.adapter
       if (!(adapter instanceof MoralisAdapter)) continue
+      if (chain.routes.moralis === undefined) continue
       for (const apiKey of configuredProvider.apiKeys) {
         try {
           return await this.withCandidateContext(chain, { adapter, apiKey }, signal, (context) =>
@@ -449,7 +461,8 @@ export class ApiChainService {
           )
         } catch (error) {
           lastError = error
-          if (!canTryAnotherApiCredential(error)) throw error
+          if (signal?.aborted) throw error
+          if (!canTryAnotherApiCredential(error)) break
         }
       }
     }

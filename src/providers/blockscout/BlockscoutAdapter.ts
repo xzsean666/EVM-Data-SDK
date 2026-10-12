@@ -21,8 +21,8 @@ export class BlockscoutAdapter extends EtherscanAdapter {
       result: envelope.result.map((item) => {
         if (item === null || typeof item !== "object") return item;
         const row = item as { hash?: unknown; transactionHash?: unknown; traceId?: unknown; index?: unknown };
-        const hash = row.hash !== undefined ? row.hash : (typeof row.transactionHash === "string" ? row.transactionHash : undefined);
-        const traceId = row.traceId !== undefined ? row.traceId : (typeof row.index === "string" ? row.index : undefined);
+        const hash = row.hash !== undefined ? row.hash : (row.transactionHash !== undefined && row.transactionHash !== null ? String(row.transactionHash) : undefined);
+        const traceId = row.traceId !== undefined ? row.traceId : (row.index !== undefined && row.index !== null ? String(row.index) : undefined);
         return {
           ...row,
           ...(hash !== undefined ? { hash } : {}),

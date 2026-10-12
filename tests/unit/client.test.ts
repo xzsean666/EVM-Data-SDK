@@ -599,4 +599,83 @@ describe("EvmDataClient DeFi composition (v0.5)", () => {
       proxy: null,
     }));
   });
+
+  it("routes internal-native transfers on Robinhood to Blockscout when Alchemy is configured first", async () => {
+    const robinhoodChain = {
+      chainId: 4663,
+      name: "Robinhood Chain",
+      alias: "robinhood",
+      aliases: [],
+      nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+      routes: {
+        alchemy: { httpUrlPrefix: "https://robinhood-mainnet.g.alchemy.com/v2" },
+        blockscout: { apiUrl: "https://api.blockscout.com/v2/api", chainId: "4663" },
+      },
+    };
+    const transport = {
+      requests: [] as HttpRequest[],
+      request: vi.fn(async (request: HttpRequest) => {
+        transport.requests.push(request);
+        if (request.url.includes("alchemy")) {
+          throw new Error("Alchemy should not be called for Robinhood internal transfers");
+        }
+        return {
+          status: 200,
+          headers: {},
+          body: {
+            status: "1",
+            message: "OK",
+            result: [{
+              blockNumber: "42664464",
+              callType: "call",
+              from: "0xd29c85f15df544ba632c9e25829fd29d767d7978",
+              to: address,
+              transactionHash: "0x45ec08c8e1b36468d395fc816a34049b4ac0228b810eae38597d5cb2b87494ae",
+              index: "8",
+              value: "24992303330995274",
+              isError: "0",
+              timeStamp: "1787353691",
+            }],
+          },
+        };
+      }),
+    };
+
+    const client = new EvmDataClient({
+      chains: [robinhoodChain],
+      providers: [
+        { kind: "alchemy", apiKeys: ["alchemy-key"] },
+        { kind: "blockscout", apiKeys: ["blockscout-key"] },
+      ],
+      requestPolicy: { maxTotalAttempts: 1, allowDirect: true },
+    }, {
+      transport: transport as never,
+    });
+
+    const result = await client.chain.getInternalNativeTransfersByBlockRange({
+      chain: "robinhood",
+      address,
+      startBlock: "42660000",
+      endBlock: "42670000",
+    });
+
+    expect(result.items).toHaveLength(1);
+    expect(result.provider).toBe("blockscout");
+    expect(result.items[0]).toMatchObject({
+      chainId: 4663,
+      transactionHash: "0x45ec08c8e1b36468d395fc816a34049b4ac0228b810eae38597d5cb2b87494ae",
+      traceId: "8",
+      from: "0xd29c85f15df544ba632c9e25829fd29d767d7978",
+      to: address,
+      value: "24992303330995274",
+    });
+    expect(transport.requests).toHaveLength(1);
+    expect(transport.requests[0]?.url).toBe("https://api.blockscout.com/v2/api");
+    expect(transport.requests[0]?.params).toMatchObject({
+      chainid: "4663",
+      module: "account",
+      action: "txlistinternal",
+      address,
+    });
+  });
 });

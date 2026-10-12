@@ -88,9 +88,14 @@ export class EtherscanAdapter implements DataProviderAdapter {
     if (this.routeFor(request.chain) === undefined) return false;
     if (request.operation === "getNativeBalance") return true;
     if (request.operation === "getErc20TransfersByBlockRange") return true;
+    if (request.operation === "getInternalNativeTransfersByBlockRange") return true;
     // The adapter can satisfy the SDK's public 10,000-record logical page
     // through Etherscan's 1,000-record physical pages and provider cursors.
     return "pageSize" in request.request && request.request.pageSize <= MAX_PAGE_SIZE;
+  }
+
+  hasRouteFor(chain: ProviderAttemptContext["chain"]): boolean {
+    return this.routeFor(chain) !== undefined;
   }
 
   private routeFor(chain: ProviderAttemptContext["chain"]): { readonly chainId?: string; readonly apiUrl: string } | undefined {

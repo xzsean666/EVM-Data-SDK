@@ -157,6 +157,15 @@ export class AlchemyAdapter implements DataProviderAdapter {
   }
 
   async getInternalNativeTransfersByBlockRange(request: { readonly address: string; readonly startBlock: string; readonly endBlock: string }, context: ProviderAttemptContext): Promise<import("../../domain/models").InternalNativeTransferBlockRange> {
+    if (context.chain.chainId === 4663) {
+      throw new EvmDataError({
+        code: "UNSUPPORTED_CHAIN",
+        message: "Alchemy does not support internal native transfers on Robinhood chain.",
+        retryable: false,
+        provider: this.name,
+        chainId: context.chain.chainId,
+      });
+    }
     // Query both directions. Alchemy's `fromAddress` filter misses native
     // deposits whose value reaches the wallet through an internal CALL (for
     // example Base/OP Stack type-0x7e deposits).
