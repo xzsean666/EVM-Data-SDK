@@ -819,6 +819,6 @@ function invalidResponse(context: ProviderAttemptContext, cause?: unknown, provi
 function isEmptyMessage(message: string, result: unknown, kind: "transactions" | "transfers" | "internal transfers" | "beacon withdrawals"): boolean {
   const normalized = `${message} ${typeof result === "string" ? result : ""}`.toLowerCase();
   return kind === "transactions"
-    ? /no transactions found|no transaction found/.test(normalized)
-    : /no transactions found|no token transfers found|no transfers found|no records found/.test(normalized);
+    ? /no (?:transactions|transaction) found/.test(normalized)
+    : /no (?:(?:internal|token)\s+)?(?:transactions|transfers|records|beacon withdrawals) found|no (?:internal\s+)?(?:transaction|transfer) found/.test(normalized);
 }

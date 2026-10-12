@@ -276,4 +276,32 @@ describe("BlockscoutAdapter", () => {
       provider: "blockscout",
     });
   });
+
+  it("handles empty internal transactions response without error", async () => {
+    const robinhoodChain = {
+      chainId: 4663,
+      name: "Robinhood Chain",
+      alias: "robinhood",
+      aliases: [],
+      nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+      routes: {
+        blockscout: { apiUrl: "https://api.blockscout.com/v2/api" },
+      },
+    };
+    const transport = new FixtureTransport([{
+      status: "0",
+      message: "No internal transactions found",
+      result: [],
+    }]);
+
+    const res = await new BlockscoutAdapter({ transport }).getInternalNativeTransfersPage({
+      address,
+      startBlock: "1026096",
+      endBlock: "2026096",
+      page: 1,
+    }, context({ chain: robinhoodChain }));
+
+    expect(res.items).toHaveLength(0);
+    expect(res.hasNext).toBe(false);
+  });
 });
