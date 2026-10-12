@@ -476,4 +476,46 @@ describe("RequestExecutor", () => {
     expect(result).toMatchObject({ code: "PROVIDER_UNAVAILABLE" });
     expect(JSON.stringify(result)).not.toContain("provider-page-secret");
   });
+
+  it("leases credentials whose cooldown expired in absolute time even when deadline remaining is small", async () => {
+    const clock = new FakeClock();
+    // Simulate real-world timestamps: current time is 1_700_000_000, cooldown expired at 1_699_000_000
+    clock.advance(1_700_000_000);
+    const pool = new CredentialPool(["test-key-1"], {
+      providerConfigurationId: "provider-1",
+      clock,
+    });
+    pool.restoreCooldownState("provider-1-key-1", {
+      consecutiveFailures: 1,
+      currentCooldownMs: 60_000,
+      cooldownUntil: 1_699_000_000,
+      firstFailureAt: 1_698_940_000,
+    });
+
+    const seenKeys: string[] = [];
+    const adapter = nativeAdapter("etherscan", async (_req, context) => {
+      seenKeys.push(context.credential?.value ?? "");
+      return balance("etherscan");
+    });
+
+    const router = new ProviderRouter(new ChainRegistry(), [{ configurationId: "provider-1", adapter }]);
+    // Fallback provider configuration exists, so waitForCooldown will be false for provider-1
+    const dummyAdapter = nativeAdapter("blockscout", async () => balance("blockscout"));
+    const routerWithFallback = new ProviderRouter(new ChainRegistry(), [
+      { configurationId: "provider-1", adapter },
+      { configurationId: "provider-2", adapter: dummyAdapter },
+    ]);
+
+    const credentialPools = new Map([["provider-1", pool]]);
+    const exec = executor(routerWithFallback, {
+      clock,
+      credentialPools,
+      requestPolicy: policy({ totalTimeoutMs: 45_000 }),
+    });
+
+    const request = normalizeNativeBalanceRequest({ chain: 1, address });
+    const res = await exec.execute(request);
+    expect(res).toMatchObject({ provider: "etherscan" });
+    expect(seenKeys).toEqual(["test-key-1"]);
+  });
 });

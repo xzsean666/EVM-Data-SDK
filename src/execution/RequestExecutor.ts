@@ -363,7 +363,8 @@ export class RequestExecutor {
       return null;
     }
     while (true) {
-      const now = this.ensureSignalAndDeadline(deadline, signal);
+      this.ensureSignalAndDeadline(deadline, signal);
+      const now = this.clock.now();
       const lease = pool.acquire(now);
       if (lease !== null) {
         return lease;
@@ -387,7 +388,8 @@ export class RequestExecutor {
     signal: AbortSignal | undefined,
   ): Promise<ProxyLease | null | undefined> {
     while (true) {
-      const now = this.ensureSignalAndDeadline(deadline, signal);
+      this.ensureSignalAndDeadline(deadline, signal);
+      const now = this.clock.now();
       const preferManaged = this.advancedProxyRoute !== undefined && this.nextAdvancedProxy();
       if (preferManaged) {
         return this.acquireManagedProxy(deadline, signal);
