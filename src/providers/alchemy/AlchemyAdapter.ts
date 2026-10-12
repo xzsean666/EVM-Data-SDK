@@ -88,7 +88,9 @@ export class AlchemyAdapter implements DataProviderAdapter {
     }
     if (request.operation === "getErc20TransfersByBlockRange") return true;
     if (request.operation === "getTransactions") return true;
-    if (request.operation === "getInternalNativeTransfersByBlockRange") return true;
+    if (request.operation === "getInternalNativeTransfersByBlockRange") {
+      return request.chain.chainId !== 4663;
+    }
     return false;
   }
 
