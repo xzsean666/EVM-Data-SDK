@@ -96,7 +96,12 @@ export class EtherscanAdapter implements DataProviderAdapter {
   private routeFor(chain: ProviderAttemptContext["chain"]): { readonly chainId?: string; readonly apiUrl: string } | undefined {
     if (this.routeName === "blockscout") {
       const route = chain.routes.blockscout;
-      return route;
+      if (route === undefined) return undefined;
+      const chainId = route.chainId ?? (isBlockscoutGateway(route.apiUrl) ? String(chain.chainId) : undefined);
+      return {
+        apiUrl: route.apiUrl,
+        ...(chainId === undefined ? {} : { chainId }),
+      };
     }
     const route = chain.routes.etherscan;
     return route === undefined ? undefined : { ...route, apiUrl: this.baseUrl };
@@ -717,6 +722,14 @@ function normalizeBaseUrl(value: string, allowInsecureHttp: boolean, provider: P
     throw new Error(`${provider} base URL must use HTTPS unless insecure HTTP is explicitly enabled.`);
   }
   return value.replace(/\/$/, "");
+}
+
+function isBlockscoutGateway(url: string): boolean {
+  try {
+    return new URL(url).hostname.toLowerCase() === "api.blockscout.com";
+  } catch {
+    return false;
+  }
 }
 
 function isLoopbackHost(hostname: string): boolean {

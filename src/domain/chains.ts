@@ -26,6 +26,7 @@ export interface MoralisRoute {
 /** Etherscan-compatible Blockscout API endpoint for one chain. */
 export interface BlockscoutRoute {
   readonly apiUrl: string;
+  readonly chainId?: string | undefined;
 }
 
 export interface ChainRoutes {
@@ -59,6 +60,7 @@ const routeSchema = z.object({
   blockscout: z
     .object({
       apiUrl: z.string().url(),
+      chainId: z.string().regex(decimalStringPattern).optional(),
     })
     .strict()
     .optional(),
@@ -129,9 +131,25 @@ export function parseChainDefinition(input: unknown): ChainDefinition {
     throw invalidConfiguration(`Chain ${chain.alias} has an inconsistent Etherscan chain ID.`);
   }
 
+  if (
+    chain.routes.blockscout?.chainId !== undefined &&
+    BigInt(chain.routes.blockscout.chainId) !== BigInt(chain.chainId)
+  ) {
+    throw invalidConfiguration(`Chain ${chain.alias} has an inconsistent Blockscout chain ID.`);
+  }
+
   const routes = {
     ...(chain.routes.etherscan === undefined ? {} : { etherscan: chain.routes.etherscan }),
-    ...(chain.routes.blockscout === undefined ? {} : { blockscout: chain.routes.blockscout }),
+    ...(chain.routes.blockscout === undefined
+      ? {}
+      : {
+          blockscout: {
+            apiUrl: chain.routes.blockscout.apiUrl,
+            ...(chain.routes.blockscout.chainId === undefined
+              ? {}
+              : { chainId: chain.routes.blockscout.chainId }),
+          },
+        }),
     ...(chain.routes.alchemy === undefined ? {} : { alchemy: chain.routes.alchemy }),
     ...(chain.routes.moralis === undefined ? {} : { moralis: chain.routes.moralis }),
   };

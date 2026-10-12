@@ -222,4 +222,58 @@ describe("BlockscoutAdapter", () => {
     expect(error).toMatchObject({ code: "AUTHENTICATION_FAILED", provider: "blockscout" });
     expect(String(error)).not.toContain("blockscout-secret");
   });
+
+  it("automatically attaches chainid when querying the Blockscout Pro gateway", async () => {
+    const transport = new FixtureTransport([{
+      status: "2",
+      message: "Some internal transactions within this block range have not yet been processed",
+      result: [{
+        blockNumber: "42703026",
+        callType: "call",
+        from: recipient,
+        to: address,
+        transactionHash: "0xf69203549842d92635ff657b49cf97d74a225604a0dcd5c12e614b658d79d3d4",
+        index: "2",
+        value: "1000",
+        isError: "0",
+        timeStamp: "1787357558",
+      }],
+    }]);
+    const adapter = new BlockscoutAdapter({ transport });
+    const robinhoodChain = {
+      chainId: 4663,
+      name: "Robinhood Chain",
+      alias: "robinhood",
+      aliases: [],
+      nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+      routes: {
+        blockscout: { apiUrl: "https://api.blockscout.com/v2/api" },
+      },
+    };
+
+    const res = await adapter.getInternalNativeTransfersPage({
+      address,
+      startBlock: "0",
+      endBlock: "99999999",
+      page: 1,
+    }, context({ chain: robinhoodChain }));
+
+    expect(transport.requests[0]).toMatchObject({
+      url: "https://api.blockscout.com/v2/api",
+      params: {
+        module: "account",
+        action: "txlistinternal",
+        chainid: "4663",
+        address,
+      },
+    });
+    expect(res.items).toHaveLength(1);
+    expect(res.items[0]).toMatchObject({
+      chainId: 4663,
+      transactionHash: "0xf69203549842d92635ff657b49cf97d74a225604a0dcd5c12e614b658d79d3d4",
+      traceId: "2",
+      status: "success",
+      provider: "blockscout",
+    });
+  });
 });
