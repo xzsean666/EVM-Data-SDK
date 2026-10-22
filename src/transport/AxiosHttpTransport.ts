@@ -340,14 +340,14 @@ export class TunnelingHttpProxyAgent extends http.Agent {
     this.proxy = proxy;
   }
 
-  createConnection(
-    _options: http.RequestOptions,
-    callback: (err: Error | null, socket?: net.Socket) => void,
+  override createConnection(
+    _options: http.ClientRequestArgs,
+    callback?: (err: Error | null, stream: any) => void,
   ): net.Socket {
     const socket = net.connect({ host: this.proxy.host, port: this.proxy.port }, () => {
-      callback(null, socket);
+      callback?.(null, socket);
     });
-    socket.on("error", (err) => callback(err));
+    socket.on("error", (err) => callback?.(err, socket));
     return socket;
   }
 }

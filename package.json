@@ -46,7 +46,7 @@
   },
   "devDependencies": {
     "@changesets/cli": "2.31.1",
-    "@types/node": "24.0.0",
+    "@types/node": "26.6.5",
     "@types/pg": "8.15.5",
     "eslint": "10.8.0",
     "tsup": "8.5.1",
